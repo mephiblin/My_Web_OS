@@ -1,17 +1,45 @@
 <script>
   import { onMount } from 'svelte';
-  import { Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, Plus, Trash2 } from 'lucide-svelte';
+  import { Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, Plus, Trash2, LayoutGrid, List } from 'lucide-svelte';
   import { openWindow } from '../windowStore.js';
+  import ContextMenu from '../components/ContextMenu.svelte';
 
-  let currentPath = $state('/home/inri');
+  let currentPath = $state('/');
   let items = $state([]);
   let loading = $state(false);
   let selectedItem = $state(null);
+  let viewMode = $state('grid');
+  let contextMenuConfig = $state(null);
+
+  function handleContextMenu(e, item) {
+    e.preventDefault();
+    e.stopPropagation();
+    selectedItem = item;
+    
+    let itemsInfo = [];
+    if (item) {
+      itemsInfo = [
+        { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
+        { label: 'Delete', icon: Trash2, action: deleteItem, danger: true }
+      ];
+    } else {
+      itemsInfo = [
+        { label: 'New File', icon: FileText, action: createFile },
+        { label: 'New Folder', icon: Plus, action: createFolder },
+        { label: 'Refresh', icon: RotateCcw, action: () => fetchItems(currentPath) }
+      ];
+    }
+
+    contextMenuConfig = { x: e.clientX, y: e.clientY, items: itemsInfo };
+  }
 
   async function fetchItems(path) {
     loading = true;
     try {
-      const res = await fetch(`http://localhost:3000/api/fs/list?path=${encodeURIComponent(path)}`);
+      const token = localStorage.getItem('web_os_token');
+      const res = await fetch(`http://localhost:3000/api/fs/list?path=${encodeURIComponent(path)}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       const data = await res.json();
       if (!data.error) {
         items = data.items;
@@ -43,9 +71,10 @@
     const name = prompt('Enter file name:');
     if (!name) return;
     try {
+      const token = localStorage.getItem('web_os_token');
       await fetch('http://localhost:3000/api/fs/write', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ path: `${currentPath}/${name}`, content: '' })
       });
       fetchItems(currentPath);
@@ -58,9 +87,10 @@
     const name = prompt('Enter folder name:');
     if (!name) return;
     try {
+      const token = localStorage.getItem('web_os_token');
       await fetch('http://localhost:3000/api/fs/create-dir', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ path: `${currentPath}/${name}` })
       });
       fetchItems(currentPath);
@@ -73,9 +103,10 @@
     if (!selectedItem) return;
     if (!confirm(`Delete ${selectedItem.name}?`)) return;
     try {
+      const token = localStorage.getItem('web_os_token');
       await fetch('http://localhost:3000/api/fs/delete', {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ path: selectedItem.path })
       });
       selectedItem = null;
@@ -89,12 +120,24 @@
     if (e.key === 'Enter') fetchItems(currentPath);
   }
 
-  onMount(() => {
+  onMount(async () => {
+    try {
+      const token = localStorage.getItem('web_os_token');
+      const res = await fetch('http://localhost:3000/api/fs/config', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.initialPath) {
+        currentPath = data.initialPath;
+      }
+    } catch (e) {
+      console.error(e);
+    }
     fetchItems(currentPath);
   });
 </script>
 
-<div class="file-explorer">
+<div class="file-explorer" oncontextmenu={(e) => handleContextMenu(e, null)} onclick={() => selectedItem = null}>
   <div class="toolbar">
     <div class="nav-controls">
       <button onclick={goBack}><ChevronLeft size={16} /></button>
@@ -105,6 +148,9 @@
       <input type="text" bind:value={currentPath} onkeydown={handlePathKeydown} />
     </div>
     <div class="actions">
+      <button class={viewMode === 'grid' ? 'active' : ''} onclick={() => viewMode = 'grid'}><LayoutGrid size={16} /></button>
+      <button class={viewMode === 'list' ? 'active' : ''} onclick={() => viewMode = 'list'}><List size={16} /></button>
+      <div class="separator"></div>
       <button title="New File" onclick={createFile}><FileText size={16} /></button>
       <button title="New Folder" onclick={createFolder}><Plus size={16} /></button>
       <button title="Delete" class="delete" onclick={deleteItem} disabled={!selectedItem}><Trash2 size={16} /></button>
@@ -115,12 +161,13 @@
     {#if loading}
       <div class="loading">Loading...</div>
     {:else}
-      <div class="grid">
+      <div class="view-container {viewMode}">
         {#each items as item}
           <div
             class="item {selectedItem?.path === item.path ? 'selected' : ''}"
-            onclick={() => selectedItem = item}
+            onclick={(e) => { e.stopPropagation(); selectedItem = item; }}
             ondblclick={() => handleDblClick(item)}
+            oncontextmenu={(e) => handleContextMenu(e, item)}
           >
             <div class="icon">
               {#if item.isDirectory}
@@ -135,6 +182,15 @@
       </div>
     {/if}
   </div>
+
+  {#if contextMenuConfig}
+    <ContextMenu 
+      x={contextMenuConfig.x} 
+      y={contextMenuConfig.y} 
+      items={contextMenuConfig.items} 
+      close={() => contextMenuConfig = null} 
+    />
+  {/if}
 </div>
 
 <style>
@@ -178,9 +234,22 @@
     color: white;
   }
 
+  .toolbar button.active {
+    background: rgba(255,255,255,0.15);
+    color: var(--accent-blue);
+  }
+
   .toolbar button:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+  }
+
+  .separator {
+    width: 1px;
+    background: var(--glass-border);
+    margin: 0 4px;
+    height: 24px;
+    align-self: center;
   }
 
   .path-bar {
@@ -203,22 +272,48 @@
     padding: 20px;
   }
 
-  .grid {
+  .view-container.grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
     gap: 20px;
   }
 
-  .item {
+  .view-container.list {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding: 10px;
+    gap: 4px;
+  }
+
+  .item {
+    display: flex;
     border-radius: 8px;
     cursor: pointer;
     transition: background 0.2s;
     border: 1px solid transparent;
+  }
+
+  .view-container.grid .item {
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .view-container.list .item {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+  }
+
+  .view-container.list .icon {
+    transform: scale(0.6);
+    transform-origin: center;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .item:hover {

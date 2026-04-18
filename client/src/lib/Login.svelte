@@ -34,7 +34,7 @@
 </script>
 
 <div class="login-screen">
-  <div class="login-card glass-effect">
+  <div class="login-card glass-effect window-shadow">
     <div class="logo">
       <Shield size={48} color="var(--accent-blue)" />
       <h1>Web OS</h1>

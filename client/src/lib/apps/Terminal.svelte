@@ -11,7 +11,10 @@
   let fitAddon;
 
   onMount(() => {
-    socket = io('http://localhost:3000');
+    const token = localStorage.getItem('web_os_token');
+    socket = io('http://localhost:3000', {
+      auth: { token }
+    });
 
     term = new Terminal({
       cursorBlink: true,

@@ -3,11 +3,10 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
-// For this local Web OS, we'll use a hardcoded admin credential or first-run setup.
-// Here we'll just use 'admin' / 'admin123' for demonstration.
+// Fetch from environment variables. Fallbacks shouldn't be hardcoded passwords.
 const ADMIN_USER = {
-  username: 'admin',
-  passwordHash: bcrypt.hashSync('admin123', 8)
+  username: process.env.ADMIN_USERNAME,
+  passwordHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || '', 8)
 };
 
 /**

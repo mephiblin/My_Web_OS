@@ -5,9 +5,19 @@ const path = require('path');
 const pathGuard = require('../middleware/pathGuard');
 const auth = require('../middleware/auth');
 
-// Note: In a real-world scenario, you'd add auth middleware here:
-// router.use(auth);
+// Enable auth middleware for all fs routes
+router.use(auth);
 router.use(pathGuard);
+
+/**
+ * GET /api/fs/config
+ * Return public fs configuration like initial path
+ */
+router.get('/config', (req, res) => {
+  res.json({
+    initialPath: process.env.INITIAL_PATH || '/'
+  });
+});
 
 /**
  * GET /api/fs/list

@@ -5,6 +5,7 @@
   let { window: win, active = false, children } = $props();
 
   let dragging = $state(false);
+  let resizing = $state(false);
   let startX = $state(0);
   let startY = $state(0);
 
@@ -17,15 +18,37 @@
     }
   }
 
+  function handleResizeStart(e) {
+    focusWindow(win.id);
+    e.stopPropagation();
+    resizing = true;
+    startX = e.clientX;
+    startY = e.clientY;
+  }
+
   function handleMouseMove(e) {
     if (dragging && !win.maximized) {
-      win.x = e.clientX - startX;
-      win.y = e.clientY - startY;
+      let newX = e.clientX - startX;
+      let newY = e.clientY - startY;
+
+      const maxX = window.innerWidth - 50;
+      const maxY = window.innerHeight - 50;
+      
+      win.x = Math.max(-win.width + 50, Math.min(newX, maxX));
+      win.y = Math.max(0, Math.min(newY, maxY));
+    } else if (resizing && !win.maximized) {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      win.width = Math.max(300, Math.min(win.width + dx, window.innerWidth - win.x));
+      win.height = Math.max(200, Math.min(win.height + dy, window.innerHeight - win.y - 48)); // 48 is taskbar height
+      startX = e.clientX;
+      startY = e.clientY;
     }
   }
 
   function handleMouseUp() {
     dragging = false;
+    resizing = false;
   }
 </script>
 
@@ -51,6 +74,7 @@
   <div class="content">
     {@render children()}
   </div>
+  <div class="resize-handle" onmousedown={handleResizeStart}></div>
 </div>
 
 <style>
@@ -60,15 +84,20 @@
     flex-direction: column;
     border-radius: 8px;
     overflow: hidden;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    transform: scale(1);
+    opacity: 1;
   }
 
   .window.minimized {
-    display: none;
+    opacity: 0;
+    transform: scale(0.9);
+    pointer-events: none;
   }
 
   .window.active {
     border-color: var(--accent-blue);
+    box-shadow: 0 12px 48px 0 rgba(0, 0, 0, 0.9);
   }
 
   .title-bar {
@@ -120,5 +149,15 @@
     flex: 1;
     overflow: auto;
     background: rgba(0,0,0,0.2);
+  }
+
+  .resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 15px;
+    height: 15px;
+    cursor: nwse-resize;
+    z-index: 10;
   }
 </style>

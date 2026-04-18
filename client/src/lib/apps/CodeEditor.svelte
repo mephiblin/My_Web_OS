@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import * as monaco from 'monaco-editor';
   import { Save } from 'lucide-svelte';
+  import { addToast } from '../toastStore.js';
 
   let { data = { path: '', content: '' } } = $props();
 
@@ -11,7 +12,10 @@
   async function loadFile() {
     if (!data?.path || !editor) return;
     try {
-      const res = await fetch(`http://localhost:3000/api/fs/read?path=${encodeURIComponent(data.path)}`);
+      const token = localStorage.getItem('web_os_token');
+      const res = await fetch(`http://localhost:3000/api/fs/read?path=${encodeURIComponent(data.path)}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       const result = await res.json();
       if (result.content !== undefined) {
         editor.setValue(result.content);
@@ -27,16 +31,20 @@
   async function saveFile() {
     if (!data?.path || !editor) return;
     try {
+      const token = localStorage.getItem('web_os_token');
       const res = await fetch('http://localhost:3000/api/fs/write', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ path: data.path, content: editor.getValue() })
       });
       const result = await res.json();
-      if (result.success) {
-        alert('File saved successfully!');
+      if (result.success || !result.error) {
+        addToast('File saved successfully!', 'success');
+      } else {
+        addToast(result.message || 'Error saving file', 'error');
       }
     } catch (err) {
+      addToast('Server connection failed', 'error');
       console.error(err);
     }
   }
@@ -49,6 +57,11 @@
       automaticLayout: true,
       fontSize: 14,
     });
+
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      saveFile();
+    });
+
     loadFile();
   });
 

@@ -36,7 +36,15 @@
     const timer = setInterval(updateTime, 1000);
     return () => clearInterval(timer);
   });
+
+  function handleKeydown(e) {
+    if (e.key === 'Escape' && $activeWindowId) {
+      closeWindow($activeWindowId);
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="desktop">
   <div class="wallpaper"></div>

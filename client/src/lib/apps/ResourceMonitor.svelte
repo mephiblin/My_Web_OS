@@ -37,7 +37,10 @@
 
   async function fetchStats() {
     try {
-      const res = await fetch('http://localhost:3000/api/system/overview');
+      const token = localStorage.getItem('web_os_token');
+      const res = await fetch('http://localhost:3000/api/system/overview', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       const data = await res.json();
       if (!data.error) {
         status = data;
@@ -51,7 +54,7 @@
 
   onMount(() => {
     fetchStats();
-    interval = setInterval(fetchStats, 2000);
+    interval = setInterval(fetchStats, 1000);
   });
 
   onDestroy(() => {
@@ -183,6 +186,7 @@
   .value {
     font-size: 32px;
     font-weight: 700;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
   }
 
   .chart-container {
@@ -200,6 +204,7 @@
     height: 100%;
     background: var(--accent-blue);
     transition: width 0.5s ease;
+    box-shadow: 0 0 10px var(--accent-blue);
   }
 
   .stats, .extra {

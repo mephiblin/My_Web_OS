@@ -3,6 +3,7 @@
   import './app.css';
   import Desktop from './lib/Desktop.svelte';
   import Login from './lib/Login.svelte';
+  import Toast from './lib/components/Toast.svelte';
 
   let authenticated = $state(false);
 
@@ -28,6 +29,7 @@
 </script>
 
 <main>
+  <Toast />
   {#if authenticated}
     <Desktop />
   {:else}
