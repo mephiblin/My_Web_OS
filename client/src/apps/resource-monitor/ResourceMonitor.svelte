@@ -320,9 +320,9 @@
   .storage-group { grid-column: 1 / -1; }
 
   .ip-info { display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; }
-  .ip-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .ip-row { display: flex; align-items: center; gap: 8px; font-size: 11px; }
   .ip-row .label { color: var(--text-dim); }
-  .ip-row .value { color: var(--text-main); font-family: monospace; font-weight: 600; }
+  .ip-row .value { color: var(--text-main); font-family: monospace; font-weight: 500; }
   .refresh-mini { background: transparent; border: none; color: var(--accent-blue); cursor: pointer; display: flex; align-items: center; padding: 2px; border-radius: 4px; }
   .refresh-mini:hover { background: rgba(255,255,255,0.1); }
   .refresh-mini:disabled { opacity: 0.5; cursor: not-allowed; }
