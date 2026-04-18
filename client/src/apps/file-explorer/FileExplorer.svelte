@@ -5,7 +5,7 @@
     Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package 
   } from 'lucide-svelte';
   import { openWindow } from '../../core/stores/windowStore.js';
-  import ContextMenu from '../../core/components/ContextMenu.svelte';
+  import { openContextMenu } from '../../core/stores/contextMenuStore.js';
   import * as fsApi from './api.js';
 
   let currentPath = $state('/');
@@ -14,7 +14,6 @@
   let loading = $state(false);
   let selectedItem = $state(null);
   let viewMode = $state('grid');
-  let contextMenuConfig = $state(null);
   let inventoryPath = $state('');
 
   let sidebarLinks = $state([
@@ -60,7 +59,7 @@
       ];
     }
 
-    contextMenuConfig = { x: e.clientX, y: e.clientY, items: itemsInfo };
+    openContextMenu(e.clientX, e.clientY, itemsInfo);
   }
 
   async function fetchItems(path) {
@@ -231,15 +230,6 @@
       {/if}
     </div>
   </div>
-
-  {#if contextMenuConfig}
-    <ContextMenu 
-      x={contextMenuConfig.x} 
-      y={contextMenuConfig.y} 
-      items={contextMenuConfig.items} 
-      close={() => contextMenuConfig = null} 
-    />
-  {/if}
 </div>
 
 <style>

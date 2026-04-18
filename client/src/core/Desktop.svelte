@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container } from 'lucide-svelte';
   import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize } from './stores/windowStore.js';
+  import { contextMenu, closeContextMenu } from './stores/contextMenuStore.js';
   import Window from './Window.svelte';
+  import ContextMenu from './components/ContextMenu.svelte';
 
   import FileExplorer from '../apps/file-explorer/FileExplorer.svelte';
   import TerminalApp from '../apps/terminal/Terminal.svelte';
@@ -80,6 +82,15 @@
       {/if}
     </Window>
   {/each}
+
+  {#if $contextMenu.visible}
+    <ContextMenu 
+      x={$contextMenu.x} 
+      y={$contextMenu.y} 
+      items={$contextMenu.items} 
+      close={closeContextMenu} 
+    />
+  {/if}
 
   <div class="taskbar glass-effect">
     <div class="start-menu icon-box">

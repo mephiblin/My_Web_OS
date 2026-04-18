@@ -2,17 +2,31 @@
   import { onMount } from 'svelte';
 
   let { x = 0, y = 0, items = [], close = () => {} } = $props();
-
   let menuEl;
+
+  let adjustedX = $state(x);
+  let adjustedY = $state(y);
 
   onMount(() => {
     const handleClick = () => close();
     document.addEventListener('click', handleClick);
+
+    // Adjust position to stay within viewport
+    if (menuEl) {
+      const rect = menuEl.getBoundingClientRect();
+      if (x + rect.width > window.innerWidth) {
+        adjustedX = x - rect.width;
+      }
+      if (y + rect.height > window.innerHeight) {
+        adjustedY = y - rect.height;
+      }
+    }
+
     return () => document.removeEventListener('click', handleClick);
   });
 </script>
 
-<div class="context-menu glass-effect" style="left: {x}px; top: {y}px" bind:this={menuEl}>
+<div class="context-menu glass-effect" style="left: {adjustedX}px; top: {adjustedY}px" bind:this={menuEl}>
   {#each items as item}
     <button class={item.danger ? 'danger' : ''} onclick={() => { item.action(); close(); }}>
       {#if item.icon}
