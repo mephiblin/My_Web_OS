@@ -7,7 +7,11 @@
   import { API_BASE } from '../../utils/constants.js';
 
   let { data = {} } = $props();
-  let mediaPath = $derived(data.path || '');
+  
+  // Use local state for the path to ensure reactivity during navigation
+  let currentPath = $state(data.path || '');
+  let mediaPath = $derived(currentPath);
+  
   let isVideo = $derived(mediaPath.match(/\.(mp4|webm|mkv|mov|avi)$/i));
   let isAudio = $derived(mediaPath.match(/\.(mp3|wav|ogg|flac|m4a)$/i));
   let isImage = $derived(mediaPath.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i));
@@ -24,6 +28,13 @@
   let neighbors = $state({ prev: null, next: null });
   let zoomed = $state(false);
   let lastFetchedPath = $state('');
+
+  // Sync prop path to local state if it changes from outside (e.g. double click new file)
+  $effect(() => {
+    if (data.path && data.path !== currentPath) {
+      currentPath = data.path;
+    }
+  });
 
   // Use relative URLs (proxied via Vite) with token auth
   let mediaUrl = $derived(mediaPath ? `/api/fs/raw?path=${encodeURIComponent(mediaPath)}&token=${localStorage.getItem('web_os_token')}` : '');
@@ -87,9 +98,8 @@
   }
 
   function navigate(path) {
-    data.path = path;
+    currentPath = path;
     zoomed = false;
-    fetchMetadata();
   }
 
   function togglePlay() {
