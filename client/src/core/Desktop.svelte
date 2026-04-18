@@ -234,8 +234,9 @@
   }
   .desktop-btn:hover { background: rgba(255,255,255,0.4); }
   .desktop-btn.active { 
-    width: 18px; 
-    border_radius: 10px; 
+    width: 20px; 
+    height: 8px;
+    border-radius: 10px; 
     background: white; 
     box-shadow: 0 0 10px rgba(255, 255, 255, 0.5); 
   }
