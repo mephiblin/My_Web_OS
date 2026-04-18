@@ -11,7 +11,8 @@
     NODE_ENV: '',
     ADMIN_USERNAME: '',
     ADMIN_PASSWORD: '',
-    INITIAL_PATH: ''
+    INITIAL_PATH: '',
+    SUDO_MACRO: ''
   });
   let activeTab = $state('general');
   let loading = $state(true);
@@ -110,9 +111,17 @@
                 <label for="adminPass">Password</label>
                 <input id="adminPass" type="password" bind:value={settings.ADMIN_PASSWORD} />
               </div>
+              
+              <div class="input-row" style="margin-top: 10px;">
+                <label for="sudoMacro">Terminal Sudo Macro (Auto-inject)</label>
+                <input id="sudoMacro" type="password" bind:value={settings.SUDO_MACRO} placeholder="Sudo password for terminal" />
+              </div>
+
               <div class="warning-box">
                 <AlertCircle size={14} />
-                <span>If you change the password, you must use it on the next login.</span>
+                <span>
+                  <strong>Warning:</strong> Sudo Macro will be auto-injected in terminal when prompted. This is saved in plaintext inside .env. Use with caution.
+                </span>
               </div>
             </div>
           {:else if activeTab === 'files'}
