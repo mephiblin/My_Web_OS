@@ -122,4 +122,23 @@ router.post('/create-dir', async (req, res) => {
   }
 });
 
+/**
+ * PUT /api/fs/rename
+ * Rename a file or directory
+ */
+router.put('/rename', async (req, res) => {
+  try {
+    const { oldPath, newName } = req.body;
+    if (!oldPath || !newName) {
+      return res.status(400).json({ error: true, message: 'oldPath and newName are required.' });
+    }
+    const resolvedOld = path.resolve(oldPath);
+    const newPath = path.join(path.dirname(resolvedOld), newName);
+    await fs.rename(resolvedOld, newPath);
+    res.json({ success: true, message: 'Renamed successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
 module.exports = router;

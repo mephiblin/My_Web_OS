@@ -11,12 +11,26 @@
   let rafId = null;
   let winEl;
 
+  let localX = $state(win.x);
+  let localY = $state(win.y);
+  let localWidth = $state(win.width);
+  let localHeight = $state(win.height);
+
+  $effect(() => {
+    if (!dragging && !resizing) {
+      localX = win.x;
+      localY = win.y;
+      localWidth = win.width;
+      localHeight = win.height;
+    }
+  });
+
   function handleMouseDown(e) {
     focusWindow(win.id);
     if (e.target.closest('.title-bar') && !e.target.closest('.controls')) {
       dragging = true;
-      startX = e.clientX - win.x;
-      startY = e.clientY - win.y;
+      startX = e.clientX - localX;
+      startY = e.clientY - localY;
       e.preventDefault();
     }
   }
@@ -43,13 +57,17 @@
       if (dragging && !win.maximized) {
         const maxX = globalThis.innerWidth - 50;
         const maxY = globalThis.innerHeight - 50;
-        win.x = Math.max(-win.width + 50, Math.min(cx - startX, maxX));
-        win.y = Math.max(0, Math.min(cy - startY, maxY));
+        localX = Math.max(-localWidth + 50, Math.min(cx - startX, maxX));
+        localY = Math.max(0, Math.min(cy - startY, maxY));
+        win.x = localX; // Sync back implicitly
+        win.y = localY;
       } else if (resizing && !win.maximized) {
         const dx = cx - startX;
         const dy = cy - startY;
-        win.width = Math.max(300, win.width + dx);
-        win.height = Math.max(200, win.height + dy);
+        localWidth = Math.max(300, localWidth + dx);
+        localHeight = Math.max(200, localHeight + dy);
+        win.width = localWidth;
+        win.height = localHeight;
         startX = cx;
         startY = cy;
       }
@@ -72,7 +90,7 @@
 <div
   bind:this={winEl}
   class="window glass-effect window-shadow {active ? 'active' : ''} {win.minimized ? 'minimized' : ''} {dragging || resizing ? 'interacting' : ''}"
-  style="transform: translate3d({win.x}px, {win.y}px, 0); width: {win.width}px; height: {win.height}px; z-index: {win.zIndex}"
+  style="transform: translate3d({localX}px, {localY}px, 0); width: {localWidth}px; height: {localHeight}px; z-index: {win.zIndex}"
   onmousedown={handleMouseDown}
 >
   <div class="title-bar">
@@ -118,6 +136,7 @@
 
   .window.interacting .content {
     pointer-events: none;
+    visibility: hidden;
   }
 
   .window.minimized {

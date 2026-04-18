@@ -1,15 +1,25 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { Line } from 'svelte-chartjs';
-  import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale } from 'chart.js';
+  import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler } from 'chart.js';
   import { fetchSystemOverview } from './api.js';
 
-  ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale);
+  ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler);
 
-  let status = $state({ cpu: 0, memory: { total: 0, used: 0, percentage: 0 }, storage: [], os: {}, gpu: [], network: [] });
-  let cpuHistory = $state(Array(20).fill(0));
-  let labels = $state(Array(20).fill(''));
+  let status = $state({ cpu: 0, cpuTemp: { main: null, max: null }, memory: { total: 0, used: 0, percentage: 0 }, storage: [], os: {}, gpu: [], network: [] });
+  let cpuHistory = $state(Array(30).fill(0));
+  let labels = $state(Array(30).fill(''));
+  let activeTab = $state('overview');
   let interval;
+
+  const tabs = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'cpu', label: 'CPU' },
+    { id: 'memory', label: 'Memory' },
+    { id: 'storage', label: 'Storage' },
+    { id: 'network', label: 'Network' },
+    { id: 'gpu', label: 'GPU' },
+  ];
 
   async function fetchStats() {
     try {
@@ -39,86 +49,152 @@
       pointRadius: 0, pointHitRadius: 10, data: cpuHistory,
     }],
   });
+
+  let chartOptions = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { display: false },
+      y: { min: 0, max: 100, ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,0.05)' } }
+    }
+  };
 </script>
 
 <div class="monitor">
-  <div class="summary-grid">
-    <div class="card glass-effect">
-      <h3>CPU</h3>
-      <div class="value">{status.cpu}%</div>
-      <div class="chart-container">
-        <Line data={chartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { min: 0, max: 100 } } }} />
-      </div>
-    </div>
-    <div class="card glass-effect">
-      <h3>Memory</h3>
-      <div class="value">{status.memory.percentage}%</div>
-      <div class="progress-bar"><div class="fill" style="width: {status.memory.percentage}%"></div></div>
-      <div class="stats">{(status.memory.used / (1024 ** 3)).toFixed(2)} GB / {(status.memory.total / (1024 ** 3)).toFixed(2)} GB</div>
-    </div>
+  <div class="sidebar">
+    {#each tabs as tab}
+      <button class="tab {activeTab === tab.id ? 'active' : ''}" onclick={() => activeTab = tab.id}>
+        {tab.label}
+      </button>
+    {/each}
   </div>
 
-  <div class="summary-grid">
-    <div class="card glass-effect">
-      <h3>GPU</h3>
-      {#each status.gpu as g}
-        <div class="gpu-item"><div class="model">{g.model}</div><div class="extra">{g.vram}MB VRAM</div></div>
-      {:else}
-        <div class="extra">No GPU detected</div>
+  <div class="main-content">
+    {#if activeTab === 'overview'}
+      <div class="section-title">System Overview</div>
+      <div class="overview-grid">
+        <div class="card glass-effect">
+          <h3>CPU</h3>
+          <div class="value">{status.cpu}%</div>
+          {#if status.cpuTemp?.main != null}
+            <div class="temp">🌡 {status.cpuTemp.main}°C</div>
+          {/if}
+        </div>
+        <div class="card glass-effect">
+          <h3>Memory</h3>
+          <div class="value">{status.memory.percentage}%</div>
+          <div class="stats">{(status.memory.used / (1024 ** 3)).toFixed(1)}GB / {(status.memory.total / (1024 ** 3)).toFixed(1)}GB</div>
+        </div>
+        <div class="card glass-effect">
+          <h3>GPU</h3>
+          {#each status.gpu as g}
+            <div class="value-sm">{g.model}</div>
+            {#if g.temperatureGpu != null}
+              <div class="temp">🌡 {g.temperatureGpu}°C</div>
+            {/if}
+          {:else}
+            <div class="stats">No GPU detected</div>
+          {/each}
+        </div>
+        <div class="card glass-effect">
+          <h3>OS</h3>
+          <div class="value-sm">{status.os.distro || ''}</div>
+          <div class="stats">{status.os.platform || ''} {status.os.release || ''}</div>
+        </div>
+      </div>
+
+    {:else if activeTab === 'cpu'}
+      <div class="section-title">CPU Usage</div>
+      <div class="card glass-effect">
+        <div class="big-value">{status.cpu}%</div>
+        {#if status.cpuTemp?.main != null}
+          <div class="temp-line">Temperature: <strong>{status.cpuTemp.main}°C</strong> (Max: {status.cpuTemp.max ?? '-'}°C)</div>
+        {/if}
+        <div class="chart-area">
+          <Line data={chartData} options={chartOptions} />
+        </div>
+      </div>
+
+    {:else if activeTab === 'memory'}
+      <div class="section-title">Memory Usage</div>
+      <div class="card glass-effect">
+        <div class="big-value">{status.memory.percentage}%</div>
+        <div class="progress-bar"><div class="fill" style="width: {status.memory.percentage}%"></div></div>
+        <div class="detail-row"><span>Used</span><span>{(status.memory.used / (1024 ** 3)).toFixed(2)} GB</span></div>
+        <div class="detail-row"><span>Total</span><span>{(status.memory.total / (1024 ** 3)).toFixed(2)} GB</span></div>
+        <div class="detail-row"><span>Free</span><span>{((status.memory.total - status.memory.used) / (1024 ** 3)).toFixed(2)} GB</span></div>
+      </div>
+
+    {:else if activeTab === 'storage'}
+      <div class="section-title">Storage</div>
+      {#each status.storage as drive}
+        <div class="card glass-effect drive-card">
+          <div class="detail-row"><span class="drive-name">{drive.fs}</span><span>{drive.use}%</span></div>
+          <div class="progress-bar"><div class="fill" style="width: {drive.use}%"></div></div>
+          <div class="detail-row stats"><span>Used: {(drive.used / (1024 ** 3)).toFixed(1)} GB</span><span>Total: {(drive.size / (1024 ** 3)).toFixed(1)} GB</span></div>
+        </div>
       {/each}
-    </div>
-    <div class="card glass-effect">
-      <h3>Network</h3>
+
+    {:else if activeTab === 'network'}
+      <div class="section-title">Network Traffic</div>
       {#each status.network as n}
         {#if n.rx_sec > 0 || n.tx_sec > 0}
-          <div class="net-item">
-            <span>{n.iface}</span>
-            <div class="speeds">
-              <span class="down">↓ {(n.rx_sec / 1024 / 1024).toFixed(2)} MB/s</span>
-              <span class="up">↑ {(n.tx_sec / 1024 / 1024).toFixed(2)} MB/s</span>
+          <div class="card glass-effect">
+            <div class="detail-row"><span class="drive-name">{n.iface}</span></div>
+            <div class="net-speeds">
+              <div class="speed-item down">↓ {(n.rx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
+              <div class="speed-item up">↑ {(n.tx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
             </div>
           </div>
         {/if}
       {:else}
-        <div class="extra">No active traffic</div>
+        <div class="card glass-effect"><div class="stats">No active traffic</div></div>
       {/each}
-    </div>
-  </div>
 
-  <div class="storage-section card glass-effect">
-    <h3>Storage</h3>
-    {#each status.storage as drive}
-      <div class="drive">
-        <div class="drive-info"><span>{drive.fs}</span><span>{drive.use}%</span></div>
-        <div class="progress-bar"><div class="fill" style="width: {drive.use}%"></div></div>
-      </div>
-    {/each}
-  </div>
-
-  <div class="os-info card glass-effect">
-    <h3>Information</h3>
-    <p><strong>OS:</strong> {status.os.distro} {status.os.release}</p>
-    <p><strong>Platform:</strong> {status.os.platform}</p>
+    {:else if activeTab === 'gpu'}
+      <div class="section-title">GPU</div>
+      {#each status.gpu as g}
+        <div class="card glass-effect">
+          <div class="value-sm">{g.model}</div>
+          <div class="detail-row"><span>VRAM</span><span>{g.vram} MB</span></div>
+          <div class="detail-row"><span>Bus</span><span>{g.bus}</span></div>
+          {#if g.temperatureGpu != null}
+            <div class="detail-row"><span>Temperature</span><span class="temp-val">{g.temperatureGpu}°C</span></div>
+          {/if}
+        </div>
+      {:else}
+        <div class="card glass-effect"><div class="stats">No GPU detected</div></div>
+      {/each}
+    {/if}
   </div>
 </div>
 
 <style>
-  .monitor { padding: 20px; display: flex; flex-direction: column; gap: 20px; color: var(--text-main); }
-  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-  .card { padding: 16px; border-radius: 12px; display: flex; flex-direction: column; gap: 12px; }
-  h3 { font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
-  .value { font-size: 32px; font-weight: 700; text-shadow: 0 0 10px rgba(255, 255, 255, 0.2); }
-  .chart-container { height: 60px; }
+  .monitor { display: flex; height: 100%; color: var(--text-main); }
+  .sidebar { width: 140px; background: rgba(0,0,0,0.3); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; padding: 8px; gap: 4px; flex-shrink: 0; }
+  .tab { background: transparent; border: none; color: var(--text-dim); padding: 10px 12px; border-radius: 6px; text-align: left; cursor: pointer; font-size: 13px; }
+  .tab:hover { background: rgba(255,255,255,0.05); color: white; }
+  .tab.active { background: rgba(88,166,255,0.15); color: var(--accent-blue); font-weight: 600; }
+  .main-content { flex: 1; padding: 20px; overflow: auto; display: flex; flex-direction: column; gap: 16px; }
+  .section-title { font-size: 15px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+  .overview-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .card { padding: 16px; border-radius: 10px; display: flex; flex-direction: column; gap: 8px; }
+  h3 { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin: 0; }
+  .value { font-size: 28px; font-weight: 700; }
+  .value-sm { font-size: 14px; font-weight: 600; }
+  .big-value { font-size: 48px; font-weight: 700; text-align: center; }
+  .temp { font-size: 13px; color: #f0883e; }
+  .temp-line { font-size: 13px; color: #f0883e; text-align: center; }
+  .temp-val { color: #f0883e; font-weight: 600; }
+  .stats { font-size: 12px; color: var(--text-dim); }
+  .chart-area { height: 160px; margin-top: 12px; }
   .progress-bar { height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; }
-  .fill { height: 100%; background: var(--accent-blue); transition: width 0.5s ease; box-shadow: 0 0 10px var(--accent-blue); }
-  .stats, .extra { font-size: 12px; color: var(--text-dim); }
-  .gpu-item, .net-item { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
-  .gpu-item .model { font-size: 13px; font-weight: 500; }
-  .net-item { display: flex; justify-content: space-between; align-items: center; }
-  .speeds { display: flex; gap: 10px; font-size: 11px; color: var(--text-dim); }
+  .fill { height: 100%; background: var(--accent-blue); transition: width 0.5s ease; box-shadow: 0 0 8px var(--accent-blue); }
+  .detail-row { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; }
+  .drive-name { font-weight: 600; }
+  .drive-card { margin-bottom: 4px; }
+  .net-speeds { display: flex; gap: 20px; margin-top: 4px; }
+  .speed-item { font-size: 14px; font-weight: 500; }
   .down { color: var(--accent-blue); }
   .up { color: var(--accent-green); }
-  .drive { margin-bottom: 12px; }
-  .drive-info { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
-  .os-info p { font-size: 13px; margin: 4px 0; }
 </style>

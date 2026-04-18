@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, Plus, Trash2, LayoutGrid, List } from 'lucide-svelte';
+  import { Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, Plus, Trash2, LayoutGrid, List, Pencil } from 'lucide-svelte';
   import { openWindow } from '../../core/stores/windowStore.js';
   import ContextMenu from '../../core/components/ContextMenu.svelte';
   import * as fsApi from './api.js';
@@ -21,6 +21,7 @@
     if (item) {
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
+        { label: 'Rename', icon: Pencil, action: () => handleRename(item) },
         { label: 'Delete', icon: Trash2, action: handleDelete, danger: true }
       ];
     } else {
@@ -91,6 +92,20 @@
     if (!confirm(`Delete ${selectedItem.name}?`)) return;
     try {
       await fsApi.deleteItem(selectedItem.path);
+      selectedItem = null;
+      fetchItems(currentPath);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function handleRename(item) {
+    const target = item || selectedItem;
+    if (!target) return;
+    const newName = prompt('Enter new name:', target.name);
+    if (!newName || newName === target.name) return;
+    try {
+      await fsApi.renameItem(target.path, newName);
       selectedItem = null;
       fetchItems(currentPath);
     } catch (err) {

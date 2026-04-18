@@ -1,19 +1,21 @@
 <script>
   import { onMount } from 'svelte';
-  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings } from 'lucide-svelte';
-  import { windows, activeWindowId, openWindow, closeWindow } from './stores/windowStore.js';
+  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container } from 'lucide-svelte';
+  import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize } from './stores/windowStore.js';
   import Window from './Window.svelte';
 
   import FileExplorer from '../apps/file-explorer/FileExplorer.svelte';
   import TerminalApp from '../apps/terminal/Terminal.svelte';
   import ResourceMonitor from '../apps/resource-monitor/ResourceMonitor.svelte';
   import CodeEditor from '../apps/code-editor/CodeEditor.svelte';
+  import DockerManager from '../apps/docker-manager/DockerManager.svelte';
 
   const components = {
     files: FileExplorer,
     terminal: TerminalApp,
     monitor: ResourceMonitor,
     editor: CodeEditor,
+    docker: DockerManager,
     settings: null
   };
 
@@ -21,6 +23,7 @@
     { id: 'files', title: 'File Station', icon: Files },
     { id: 'terminal', title: 'Terminal', icon: TerminalIcon },
     { id: 'monitor', title: 'Resource Monitor', icon: Monitor },
+    { id: 'docker', title: 'Docker', icon: Container },
     { id: 'settings', title: 'Settings', icon: Settings }
   ];
 
@@ -37,7 +40,12 @@
   });
 
   function handleKeydown(e) {
+    // ESC: close active window
     if (e.key === 'Escape' && $activeWindowId) {
+      closeWindow($activeWindowId);
+    }
+    // Delete: close active window
+    if (e.key === 'Delete' && $activeWindowId) {
       closeWindow($activeWindowId);
     }
   }

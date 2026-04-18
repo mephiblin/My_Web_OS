@@ -26,6 +26,7 @@ initTerminalService(io);
 const fsRouter = require('./routes/fs');
 const sysRouter = require('./routes/system');
 const authRouter = require('./routes/auth');
+const dockerRouter = require('./routes/docker');
 
 // Middleware
 app.use(helmet());
@@ -36,6 +37,7 @@ app.use(express.json());
 app.use('/api/fs', fsRouter);
 app.use('/api/system', sysRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/docker', dockerRouter);
 
 
 

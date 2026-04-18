@@ -32,3 +32,10 @@ export async function deleteItem(path) {
     body: JSON.stringify({ path })
   });
 }
+
+export async function renameItem(oldPath, newName) {
+  return apiFetch('/api/fs/rename', {
+    method: 'PUT',
+    body: JSON.stringify({ oldPath, newName })
+  });
+}
