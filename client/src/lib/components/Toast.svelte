@@ -53,7 +53,7 @@
     margin-right: 15px;
   }
 
-  . близ-btn {
+  .close-btn {
     background: transparent;
     border: none;
     color: var(--text-dim);
