@@ -17,12 +17,12 @@
   let contextMenuConfig = $state(null);
 
   const sidebarLinks = $derived([
-    { id: 'recent', label: 'Recent', icon: Clock, path: initialPath }, // Placeholder for now
+    { id: 'recent', label: 'Recent', icon: Clock, path: initialPath }, 
     { id: 'home', label: 'Home', icon: Home, path: initialPath },
-    { id: 'documents', label: 'Documents', icon: FileText, path: `${initialPath}/Documents` },
-    { id: 'downloads', label: 'Downloads', icon: Download, path: `${initialPath}/Downloads` },
-    { id: 'pictures', label: 'Pictures', icon: Image, path: `${initialPath}/Pictures` },
-    { id: 'videos', label: 'Videos', icon: Video, path: `${initialPath}/Videos` },
+    { id: 'documents', label: 'Documents', icon: FileText, path: `${initialPath}/문서` },
+    { id: 'downloads', label: 'Downloads', icon: Download, path: `${initialPath}/다운로드` },
+    { id: 'pictures', label: 'Pictures', icon: Image, path: `${initialPath}/사진` },
+    { id: 'videos', label: 'Videos', icon: Video, path: `${initialPath}/비디오` },
     { id: 'inventory', label: 'Inventory', icon: Package, path: '/home/inri/문서/web_os/server/storage/inventory' },
   ]);
 
