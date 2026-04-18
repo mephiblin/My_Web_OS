@@ -77,6 +77,9 @@
     }
   }
 
+  function handleDblClick(item) {
+    if (item.isDirectory) {
+      fetchItems(item.path);
     } else {
       const ext = item.name.split('.').pop()?.toLowerCase();
       const isMedia = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext);
@@ -88,6 +91,7 @@
         openWindow({ id: 'editor', title: `Editor - ${item.name}`, icon: FileText }, { path: item.path });
       }
     }
+  }
 
   function goBack() {
     const parts = currentPath.split('/');
