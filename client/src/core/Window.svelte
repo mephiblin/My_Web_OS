@@ -89,26 +89,28 @@
 
 <div
   bind:this={winEl}
-  class="window glass-effect window-shadow {active ? 'active' : ''} {win.minimized ? 'minimized' : ''} {dragging || resizing ? 'interacting' : ''}"
-  style="transform: translate3d({localX}px, {localY}px, 0); width: {localWidth}px; height: {localHeight}px; z-index: {win.zIndex}"
+  class="window glass-effect window-shadow {active ? 'active' : ''} {win.minimized ? 'minimized' : ''} {win.maximized ? 'maximized' : ''} {dragging || resizing ? 'interacting' : ''}"
+  style="transform: {win.maximized ? 'none' : `translate3d(${localX}px, ${localY}px, 0)`}; width: {win.maximized ? '100%' : localWidth + 'px'}; height: {win.maximized ? 'calc(100% - 48px)' : localHeight + 'px'}; z-index: {win.zIndex}"
   onmousedown={handleMouseDown}
 >
-  <div class="title-bar">
+  <div class="title-bar" ondblclick={() => toggleMaximize(win.id)}>
     <div class="title">
       <svelte:component this={win.icon} size={16} />
       <span>{win.title}</span>
     </div>
     <div class="controls">
-      <button onclick={() => toggleMinimize(win.id)}><Minus size={14} /></button>
-      <button><Square size={14} /></button>
-      <button class="close" onclick={() => closeWindow(win.id)}><X size={14} /></button>
+      <button onclick={(e) => { e.stopPropagation(); toggleMinimize(win.id); }}><Minus size={14} /></button>
+      <button onclick={(e) => { e.stopPropagation(); toggleMaximize(win.id); }}><Square size={14} /></button>
+      <button class="close" onclick={(e) => { e.stopPropagation(); closeWindow(win.id); }}><X size={14} /></button>
     </div>
   </div>
 
   <div class="content">
     {@render children()}
   </div>
-  <div class="resize-handle" onmousedown={handleResizeStart}></div>
+  {#if !win.maximized}
+    <div class="resize-handle" onmousedown={handleResizeStart}></div>
+  {/if}
 </div>
 
 <style>
@@ -141,8 +143,16 @@
 
   .window.minimized {
     opacity: 0;
-    transform: scale(0.9) !important;
+    transform: scale(0.9) translateY(40px) !important;
     pointer-events: none;
+  }
+
+  .window.maximized {
+    border-radius: 0;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    box-shadow: none;
   }
 
   .window.active {

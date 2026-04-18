@@ -88,8 +88,14 @@
     <div class="active-apps">
       {#each $windows as win}
         <button
-          class="task-item {$activeWindowId === win.id ? 'active' : ''}"
-          onclick={() => openWindow(win)}
+          class="task-item {$activeWindowId === win.id && !win.minimized ? 'active' : ''}"
+          onclick={() => {
+            if ($activeWindowId === win.id && !win.minimized) {
+              toggleMinimize(win.id);
+            } else {
+              focusWindow(win.id);
+            }
+          }}
         >
           <svelte:component this={win.icon} size={18} />
         </button>
