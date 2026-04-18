@@ -1,0 +1,33 @@
+{
+  "name": "web_os",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "canvas-confetti": "^1.9.4",
+    "chart.js": "^4.5.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.2",
+    "fs-extra": "^11.3.4",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "lucide-svelte": "^1.0.1",
+    "multer": "^2.1.1",
+    "node-pty": "^1.1.0",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "svelte-chartjs": "^4.0.1",
+    "systeminformation": "^5.31.5",
+    "xterm": "^5.3.0",
+    "xterm-addon-fit": "^0.8.0"
+  }
+}
