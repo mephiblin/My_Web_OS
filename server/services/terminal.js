@@ -25,17 +25,6 @@ function initTerminalService(io) {
 
       ptyProcess.onData((data) => {
         socket.emit('terminal:output', data);
-
-        if (process.env.SUDO_MACRO) {
-          const lowerData = data.toLowerCase();
-          // Detect common sudo/su password prompts
-          if (lowerData.includes('[sudo] password for') || lowerData.includes('password:') || lowerData.includes('암호:')) {
-            // Add a small delay so the pty is fully ready to consume stdin
-            setTimeout(() => {
-              ptyProcess.write(process.env.SUDO_MACRO + '\r');
-            }, 100);
-          }
-        }
       });
 
       ptyProcess.onExit(({ exitCode, signal }) => {
