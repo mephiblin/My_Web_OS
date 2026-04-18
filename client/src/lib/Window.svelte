@@ -6,57 +6,73 @@
 
   let dragging = $state(false);
   let resizing = $state(false);
-  let startX = $state(0);
-  let startY = $state(0);
+  let startX = 0;
+  let startY = 0;
+  let rafId = null;
+  let winEl;
 
   function handleMouseDown(e) {
     focusWindow(win.id);
-    if (e.target.closest('.title-bar')) {
+    if (e.target.closest('.title-bar') && !e.target.closest('.controls')) {
       dragging = true;
       startX = e.clientX - win.x;
       startY = e.clientY - win.y;
+      e.preventDefault();
     }
   }
 
   function handleResizeStart(e) {
     focusWindow(win.id);
     e.stopPropagation();
+    e.preventDefault();
     resizing = true;
     startX = e.clientX;
     startY = e.clientY;
   }
 
   function handleMouseMove(e) {
-    if (dragging && !win.maximized) {
-      let newX = e.clientX - startX;
-      let newY = e.clientY - startY;
+    if (!dragging && !resizing) return;
+    e.preventDefault();
 
-      const maxX = window.innerWidth - 50;
-      const maxY = window.innerHeight - 50;
-      
-      win.x = Math.max(-win.width + 50, Math.min(newX, maxX));
-      win.y = Math.max(0, Math.min(newY, maxY));
-    } else if (resizing && !win.maximized) {
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      win.width = Math.max(300, Math.min(win.width + dx, window.innerWidth - win.x));
-      win.height = Math.max(200, Math.min(win.height + dy, window.innerHeight - win.y - 48)); // 48 is taskbar height
-      startX = e.clientX;
-      startY = e.clientY;
-    }
+    if (rafId) return;
+
+    const cx = e.clientX;
+    const cy = e.clientY;
+
+    rafId = requestAnimationFrame(() => {
+      if (dragging && !win.maximized) {
+        const maxX = globalThis.innerWidth - 50;
+        const maxY = globalThis.innerHeight - 50;
+        win.x = Math.max(-win.width + 50, Math.min(cx - startX, maxX));
+        win.y = Math.max(0, Math.min(cy - startY, maxY));
+      } else if (resizing && !win.maximized) {
+        const dx = cx - startX;
+        const dy = cy - startY;
+        win.width = Math.max(300, win.width + dx);
+        win.height = Math.max(200, win.height + dy);
+        startX = cx;
+        startY = cy;
+      }
+      rafId = null;
+    });
   }
 
   function handleMouseUp() {
     dragging = false;
     resizing = false;
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
   }
 </script>
 
 <svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} />
 
 <div
-  class="window glass-effect window-shadow {active ? 'active' : ''} {win.minimized ? 'minimized' : ''}"
-  style="left: {win.x}px; top: {win.y}px; width: {win.width}px; height: {win.height}px; z-index: {win.zIndex}"
+  bind:this={winEl}
+  class="window glass-effect window-shadow {active ? 'active' : ''} {win.minimized ? 'minimized' : ''} {dragging || resizing ? 'interacting' : ''}"
+  style="transform: translate3d({win.x}px, {win.y}px, 0); width: {win.width}px; height: {win.height}px; z-index: {win.zIndex}"
   onmousedown={handleMouseDown}
 >
   <div class="title-bar">
@@ -80,18 +96,33 @@
 <style>
   .window {
     position: absolute;
+    left: 0;
+    top: 0;
     display: flex;
     flex-direction: column;
     border-radius: 8px;
     overflow: hidden;
+    will-change: transform;
+    contain: layout style;
+    backface-visibility: hidden;
+  }
+
+  .window:not(.interacting) {
     transition: opacity 0.2s ease, transform 0.2s ease;
-    transform: scale(1);
-    opacity: 1;
+  }
+
+  .window.interacting {
+    user-select: none;
+    cursor: grabbing;
+  }
+
+  .window.interacting .content {
+    pointer-events: none;
   }
 
   .window.minimized {
     opacity: 0;
-    transform: scale(0.9);
+    transform: scale(0.9) !important;
     pointer-events: none;
   }
 
