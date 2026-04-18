@@ -1,4 +1,5 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
+import { currentDesktopId } from './desktopStore.js';
 
 export const windows = writable([]);
 export const activeWindowId = writable(null);
@@ -28,7 +29,8 @@ export function openWindow(app, data = null) {
       height: 600,
       minimized: false,
       maximized: false,
-      zIndex: items.length + 50 // Start higher to be above everything
+      zIndex: items.length + 50, // Start higher to be above everything
+      desktopId: get(currentDesktopId)
     };
     
     activeWindowId.set(app.id);
@@ -54,4 +56,8 @@ export function toggleMinimize(id) {
 
 export function toggleMaximize(id) {
   windows.update(items => items.map(w => w.id === id ? { ...w, maximized: !w.maximized } : w));
+}
+
+export function moveWindowToDesktop(windowId, desktopId) {
+  windows.update(items => items.map(w => w.id === windowId ? { ...w, desktopId } : w));
 }

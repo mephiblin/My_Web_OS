@@ -1,8 +1,9 @@
 <script>
   import { onMount } from 'svelte';
-  import { Save, AlertCircle, Settings as SettingsIcon, User, Folder } from 'lucide-svelte';
+  import { Save, AlertCircle, Settings as SettingsIcon, User, Folder, Cloud } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
   import * as settingsApi from './api.js';
+  import CloudManager from './CloudManager.svelte';
 
   let settings = $state({
     PORT: '',
@@ -76,6 +77,9 @@
       <button class="tab-btn {activeTab === 'files' ? 'active' : ''}" onclick={() => activeTab = 'files'}>
         <Folder size={18} /> <span>File System</span>
       </button>
+      <button class="tab-btn {activeTab === 'cloud' ? 'active' : ''}" onclick={() => activeTab = 'cloud'}>
+        <Cloud size={18} /> <span>Cloud Storage</span>
+      </button>
     </aside>
 
     <main class="content-area">
@@ -127,6 +131,8 @@
                 <input id="roots" type="text" bind:value={settings.ALLOWED_ROOTS} placeholder='["/home/user"]' />
               </div>
             </div>
+          {:else if activeTab === 'cloud'}
+            <CloudManager />
           {/if}
         </div>
       {/if}

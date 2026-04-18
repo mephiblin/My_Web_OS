@@ -1,6 +1,7 @@
 <script>
   import { X, Minus, Square } from 'lucide-svelte';
-  import { closeWindow, focusWindow, toggleMinimize } from './stores/windowStore.js';
+  import { closeWindow, focusWindow, toggleMinimize, toggleMaximize } from './stores/windowStore.js';
+  import { setSnapGhost, hideSnapGhost } from './stores/snapStore.js';
 
   let { window: win, active = false, children } = $props();
 
@@ -15,6 +16,8 @@
   let localY = $state(win.y);
   let localWidth = $state(win.width);
   let localHeight = $state(win.height);
+
+  let snapZone = $state(null); // 'left', 'right', 'top', null
 
   $effect(() => {
     if (!dragging && !resizing) {
@@ -59,7 +62,27 @@
         const maxY = globalThis.innerHeight - 50;
         localX = Math.max(-localWidth + 50, Math.min(cx - startX, maxX));
         localY = Math.max(0, Math.min(cy - startY, maxY));
-        win.x = localX; // Sync back implicitly
+        
+        // Snap detection
+        const edgeThreshold = 20;
+        const taskbarHeight = 48;
+        const availableHeight = globalThis.innerHeight - taskbarHeight;
+
+        if (cx < edgeThreshold) {
+          snapZone = 'left';
+          setSnapGhost({ visible: true, x: 0, y: 0, width: globalThis.innerWidth / 2, height: availableHeight });
+        } else if (cx > globalThis.innerWidth - edgeThreshold) {
+          snapZone = 'right';
+          setSnapGhost({ visible: true, x: globalThis.innerWidth / 2, y: 0, width: globalThis.innerWidth / 2, height: availableHeight });
+        } else if (cy < edgeThreshold) {
+          snapZone = 'top';
+          setSnapGhost({ visible: true, x: 0, y: 0, width: globalThis.innerWidth, height: availableHeight });
+        } else {
+          snapZone = null;
+          hideSnapGhost();
+        }
+
+        win.x = localX;
         win.y = localY;
       } else if (resizing && !win.maximized) {
         const dx = cx - startX;
@@ -76,8 +99,30 @@
   }
 
   function handleMouseUp() {
+    if (dragging && snapZone) {
+      const taskbarHeight = 48;
+      const availableHeight = globalThis.innerHeight - taskbarHeight;
+
+      if (snapZone === 'left') {
+        win.x = localX = 0;
+        win.y = localY = 0;
+        win.width = localWidth = globalThis.innerWidth / 2;
+        win.height = localHeight = availableHeight;
+      } else if (snapZone === 'right') {
+        win.x = localX = globalThis.innerWidth / 2;
+        win.y = localY = 0;
+        win.width = localWidth = globalThis.innerWidth / 2;
+        win.height = localHeight = availableHeight;
+      } else if (snapZone === 'top') {
+        toggleMaximize(win.id);
+      }
+    }
+
     dragging = false;
     resizing = false;
+    snapZone = null;
+    hideSnapGhost();
+
     if (rafId) {
       cancelAnimationFrame(rafId);
       rafId = null;

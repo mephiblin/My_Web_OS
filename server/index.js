@@ -30,6 +30,8 @@ const sysRouter = require('./routes/system');
 const authRouter = require('./routes/auth');
 const dockerRouter = require('./routes/docker');
 const settingsRouter = require('./routes/settings');
+const cloudRouter = require('./routes/cloud');
+const mediaRouter = require('./routes/media');
 
 // Middleware
 app.use(helmet());
@@ -42,6 +44,8 @@ app.use('/api/system', sysRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/docker', dockerRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/cloud', cloudRouter);
+app.use('/api/media', mediaRouter);
 
 // Static files for Inventory
 app.use('/api/inventory-files', express.static(path.join(__dirname, 'storage/inventory')));

@@ -77,13 +77,17 @@
     }
   }
 
-  function handleDblClick(item) {
-    if (item.isDirectory) {
-      fetchItems(item.path);
     } else {
-      openWindow({ id: 'editor', title: `Editor - ${item.name}`, icon: FileText }, { path: item.path });
+      const ext = item.name.split('.').pop()?.toLowerCase();
+      const isMedia = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext);
+      const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+      
+      if (isMedia || isImage) {
+        openWindow({ id: 'player', title: `Viewer - ${item.name}`, icon: isImage ? Image : Video }, { path: item.path });
+      } else {
+        openWindow({ id: 'editor', title: `Editor - ${item.name}`, icon: FileText }, { path: item.path });
+      }
     }
-  }
 
   function goBack() {
     const parts = currentPath.split('/');
