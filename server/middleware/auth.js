@@ -4,16 +4,21 @@ const authMiddleware = (req, res, next) => {
   // For initial development/local use, we might want to skip this or simplify it.
   // But for the blueprint, we need it.
   const authHeader = req.headers.authorization;
+  let token = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (req.query.token) {
+    token = req.query.token;
+  }
   
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!token) {
     return res.status(401).json({
       error: true,
       code: 'AUTH_REQUIRED',
       message: 'Authentication required.'
     });
   }
-
-  const token = authHeader.split(' ')[1];
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);

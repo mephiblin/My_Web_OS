@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import { Play, Pause, Volume2, Maximize, Music, Video, Info, RefreshCw } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
+  import { apiFetch } from '../../utils/api.js';
+  import { API_BASE } from '../../utils/constants.js';
 
   let { data = {} } = $props();
   let mediaPath = $derived(data.path || '');
@@ -21,25 +23,26 @@
   let neighbors = $state({ prev: null, next: null });
   let zoomed = $state(false);
 
-  // Use current port for media streaming
-  let mediaUrl = $derived(mediaPath ? `/api/fs/read?path=${encodeURIComponent(mediaPath)}` : '');
+  // Use relative URLs (proxied via Vite) with token auth
+  let mediaUrl = $derived(mediaPath ? `/api/fs/raw?path=${encodeURIComponent(mediaPath)}&token=${localStorage.getItem('web_os_token')}` : '');
 
   async function fetchMetadata() {
     if (!mediaPath) return;
     try {
       loadingMeta = true;
-      const [resInfo, resSubs, resNeighbors] = await Promise.all([
-        fetch(`/api/media/info?path=${encodeURIComponent(mediaPath)}`),
-        isVideo ? fetch(`/api/media/subtitles?path=${encodeURIComponent(mediaPath)}`) : Promise.resolve(null),
-        fetch(`/api/media/neighbors?path=${encodeURIComponent(mediaPath)}&type=${isImage ? 'image' : 'media'}`)
+      const [info, subs, neighborData] = await Promise.all([
+        apiFetch(`/api/media/info?path=${encodeURIComponent(mediaPath)}`),
+        isVideo ? apiFetch(`/api/media/subtitles?path=${encodeURIComponent(mediaPath)}`) : Promise.resolve(null),
+        apiFetch(`/api/media/neighbors?path=${encodeURIComponent(mediaPath)}&type=${isImage ? 'image' : 'media'}`)
       ]);
       
-      metadata = await resInfo.json();
-      if (resSubs) {
-        const subData = await resSubs.json();
-        subtitleUrl = subData.path ? `/api/fs/read?path=${encodeURIComponent(subData.path)}` : null;
+      metadata = info;
+      if (subs && subs.path) {
+        subtitleUrl = `/api/fs/raw?path=${encodeURIComponent(subs.path)}&token=${localStorage.getItem('web_os_token')}`;
+      } else {
+        subtitleUrl = null;
       }
-      neighbors = await resNeighbors.json();
+      neighbors = neighborData;
     } catch (err) {
       console.error('Failed to load metadata', err);
     } finally {
@@ -115,9 +118,14 @@
   }
 
   onMount(() => {
-    fetchMetadata();
     window.addEventListener('keydown', handleKeydown);
     return () => window.removeEventListener('keydown', handleKeydown);
+  });
+
+  $effect(() => {
+    if (mediaPath) {
+      fetchMetadata();
+    }
   });
 </script>
 

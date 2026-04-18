@@ -223,22 +223,28 @@
   .desktop-switcher { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-right: 1px solid rgba(255,255,255,0.1); }
   .desktop-num { font-size: 11px; font-weight: 600; color: white; opacity: 0.6; margin-right: 2px; }
   .desktop-btn { 
-    background: rgba(255,255,255,0.2); 
-    border: none; 
     width: 6px; 
     height: 6px; 
     border-radius: 50%; 
+    background: rgba(255, 255, 255, 0.2); 
+    border: none; 
     cursor: pointer; 
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
-    padding: 0;
   }
-  .desktop-btn:hover { background: rgba(255,255,255,0.4); }
+  .desktop-btn:hover { 
+    background: rgba(255,255,255,0.5); 
+    transform: scale(1.6);
+  }
   .desktop-btn.active { 
     width: 20px; 
     height: 8px;
     border-radius: 10px; 
     background: white; 
     box-shadow: 0 0 10px rgba(255, 255, 255, 0.5); 
+    transform: scale(1.1);
+  }
+  .desktop-btn.active:hover {
+    transform: scale(1.2);
   }
 
   .taskbar-search {

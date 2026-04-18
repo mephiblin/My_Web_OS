@@ -101,6 +101,25 @@ router.get('/read', async (req, res) => {
 });
 
 /**
+ * GET /api/fs/raw
+ * Serve raw file for streaming/viewing
+ */
+router.get('/raw', async (req, res) => {
+  try {
+    const targetPath = req.safePath;
+    const stats = await fs.stat(targetPath);
+
+    if (stats.isDirectory()) {
+      return res.status(400).json({ error: true, message: 'Cannot stream a directory.' });
+    }
+
+    res.sendFile(targetPath);
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
  * POST /api/fs/write
  * Create or update file content
  */

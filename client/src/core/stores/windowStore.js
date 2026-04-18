@@ -6,17 +6,16 @@ export const activeWindowId = writable(null);
 
 export function openWindow(app, data = null) {
   windows.update(items => {
-    // If window already open, focus and unminimize it
     const existing = items.find(w => w.id === app.id);
-    if (existing && !data) {
-      activeWindowId.set(app.id);
-      return items.map(w => w.id === app.id ? { ...w, minimized: false } : w);
-    }
+    const maxZ = items.length > 0 ? Math.max(...items.map(w => w.zIndex)) : 50;
 
-    // Special case for editor: multiple windows or updating existing one
-    if (app.id === 'editor' && existing) {
-      activeWindowId.set('editor');
-      return items.map(w => w.id === 'editor' ? { ...w, data, minimized: false } : w);
+    if (existing) {
+      activeWindowId.set(app.id);
+      return items.map(w => 
+        w.id === app.id 
+          ? { ...w, data: data || w.data, minimized: false, zIndex: maxZ + 1 } 
+          : w
+      );
     }
 
     // Otherwise, create new window
@@ -29,7 +28,7 @@ export function openWindow(app, data = null) {
       height: 600,
       minimized: false,
       maximized: false,
-      zIndex: items.length + 50, // Start higher to be above everything
+      zIndex: maxZ + 1,
       desktopId: get(currentDesktopId)
     };
     
