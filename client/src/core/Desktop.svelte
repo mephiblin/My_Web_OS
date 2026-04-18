@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid } from 'lucide-svelte';
+  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Image } from 'lucide-svelte';
   import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize } from './stores/windowStore.js';
   import { contextMenu, closeContextMenu } from './stores/contextMenuStore.js';
   import { desktops, currentDesktopId, switchDesktop } from './stores/desktopStore.js';
