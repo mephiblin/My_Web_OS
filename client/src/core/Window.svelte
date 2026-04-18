@@ -1,6 +1,6 @@
 <script>
   import { X, Minus, Square } from 'lucide-svelte';
-  import { closeWindow, focusWindow, toggleMinimize } from './windowStore.js';
+  import { closeWindow, focusWindow, toggleMinimize } from './stores/windowStore.js';
 
   let { window: win, active = false, children } = $props();
 

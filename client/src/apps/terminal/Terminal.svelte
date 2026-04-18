@@ -4,6 +4,7 @@
   import { FitAddon } from 'xterm-addon-fit';
   import 'xterm/css/xterm.css';
   import { io } from 'socket.io-client';
+  import { API_BASE } from '../../utils/constants.js';
 
   let terminalElement;
   let term;
@@ -12,7 +13,7 @@
 
   onMount(() => {
     const token = localStorage.getItem('web_os_token');
-    socket = io('http://localhost:3000', {
+    socket = io(API_BASE, {
       auth: { token }
     });
 
@@ -60,14 +61,6 @@
 <div class="terminal-container" bind:this={terminalElement}></div>
 
 <style>
-  .terminal-container {
-    width: 100%;
-    height: 100%;
-    background: #161b22;
-    padding: 10px;
-  }
-
-  :global(.xterm) {
-    height: 100%;
-  }
+  .terminal-container { width: 100%; height: 100%; background: #161b22; padding: 10px; }
+  :global(.xterm) { height: 100%; }
 </style>

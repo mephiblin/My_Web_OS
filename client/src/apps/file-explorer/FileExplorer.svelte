@@ -1,8 +1,9 @@
 <script>
   import { onMount } from 'svelte';
   import { Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, Plus, Trash2, LayoutGrid, List } from 'lucide-svelte';
-  import { openWindow } from '../windowStore.js';
-  import ContextMenu from '../components/ContextMenu.svelte';
+  import { openWindow } from '../../core/stores/windowStore.js';
+  import ContextMenu from '../../core/components/ContextMenu.svelte';
+  import * as fsApi from './api.js';
 
   let currentPath = $state('/');
   let items = $state([]);
@@ -20,7 +21,7 @@
     if (item) {
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
-        { label: 'Delete', icon: Trash2, action: deleteItem, danger: true }
+        { label: 'Delete', icon: Trash2, action: handleDelete, danger: true }
       ];
     } else {
       itemsInfo = [
@@ -36,11 +37,7 @@
   async function fetchItems(path) {
     loading = true;
     try {
-      const token = localStorage.getItem('web_os_token');
-      const res = await fetch(`http://localhost:3000/api/fs/list?path=${encodeURIComponent(path)}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
+      const data = await fsApi.listDir(path);
       if (!data.error) {
         items = data.items;
         currentPath = data.path;
@@ -71,12 +68,7 @@
     const name = prompt('Enter file name:');
     if (!name) return;
     try {
-      const token = localStorage.getItem('web_os_token');
-      await fetch('http://localhost:3000/api/fs/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ path: `${currentPath}/${name}`, content: '' })
-      });
+      await fsApi.writeFile(`${currentPath}/${name}`, '');
       fetchItems(currentPath);
     } catch (err) {
       console.error(err);
@@ -87,28 +79,18 @@
     const name = prompt('Enter folder name:');
     if (!name) return;
     try {
-      const token = localStorage.getItem('web_os_token');
-      await fetch('http://localhost:3000/api/fs/create-dir', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ path: `${currentPath}/${name}` })
-      });
+      await fsApi.createDir(`${currentPath}/${name}`);
       fetchItems(currentPath);
     } catch (err) {
       console.error(err);
     }
   }
 
-  async function deleteItem() {
+  async function handleDelete() {
     if (!selectedItem) return;
     if (!confirm(`Delete ${selectedItem.name}?`)) return;
     try {
-      const token = localStorage.getItem('web_os_token');
-      await fetch('http://localhost:3000/api/fs/delete', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ path: selectedItem.path })
-      });
+      await fsApi.deleteItem(selectedItem.path);
       selectedItem = null;
       fetchItems(currentPath);
     } catch (err) {
@@ -122,11 +104,7 @@
 
   onMount(async () => {
     try {
-      const token = localStorage.getItem('web_os_token');
-      const res = await fetch('http://localhost:3000/api/fs/config', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
+      const data = await fsApi.fetchConfig();
       if (data.initialPath) {
         currentPath = data.initialPath;
       }
@@ -153,7 +131,7 @@
       <div class="separator"></div>
       <button title="New File" onclick={createFile}><FileText size={16} /></button>
       <button title="New Folder" onclick={createFolder}><Plus size={16} /></button>
-      <button title="Delete" class="delete" onclick={deleteItem} disabled={!selectedItem}><Trash2 size={16} /></button>
+      <button title="Delete" class="delete" onclick={handleDelete} disabled={!selectedItem}><Trash2 size={16} /></button>
     </div>
   </div>
 
@@ -194,155 +172,26 @@
 </div>
 
 <style>
-  .file-explorer {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    color: var(--text-main);
-  }
-
-  .toolbar {
-    height: 48px;
-    background: rgba(0,0,0,0.2);
-    display: flex;
-    align-items: center;
-    padding: 0 12px;
-    gap: 12px;
-    border-bottom: 1px solid var(--glass-border);
-  }
-
-  .nav-controls, .actions {
-    display: flex;
-    gap: 4px;
-  }
-
-  .toolbar button {
-    background: transparent;
-    border: none;
-    color: var(--text-dim);
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-
-  .toolbar button:hover {
-    background: rgba(255,255,255,0.1);
-    color: white;
-  }
-
-  .toolbar button.active {
-    background: rgba(255,255,255,0.15);
-    color: var(--accent-blue);
-  }
-
-  .toolbar button:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-
-  .separator {
-    width: 1px;
-    background: var(--glass-border);
-    margin: 0 4px;
-    height: 24px;
-    align-self: center;
-  }
-
-  .path-bar {
-    flex: 1;
-  }
-
-  .path-bar input {
-    width: 100%;
-    background: rgba(0,0,0,0.3);
-    border: 1px solid var(--glass-border);
-    border-radius: 4px;
-    color: white;
-    padding: 4px 12px;
-    font-size: 13px;
-  }
-
-  .content-area {
-    flex: 1;
-    overflow: auto;
-    padding: 20px;
-  }
-
-  .view-container.grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-    gap: 20px;
-  }
-
-  .view-container.list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .item {
-    display: flex;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background 0.2s;
-    border: 1px solid transparent;
-  }
-
-  .view-container.grid .item {
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding: 10px;
-  }
-
-  .view-container.list .item {
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
-    padding: 6px 12px;
-  }
-
-  .view-container.list .icon {
-    transform: scale(0.6);
-    transform-origin: center;
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .item:hover {
-    background: rgba(255,255,255,0.05);
-  }
-
-  .item.selected {
-    background: rgba(88, 166, 255, 0.2);
-    border: 1px solid var(--accent-blue);
-  }
-
-  .icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .name {
-    font-size: 12px;
-    text-align: center;
-    word-break: break-all;
-    max-width: 100%;
-  }
-
-  .loading {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100%;
-    color: var(--text-dim);
-  }
+  .file-explorer { display: flex; flex-direction: column; height: 100%; color: var(--text-main); }
+  .toolbar { height: 48px; background: rgba(0,0,0,0.2); display: flex; align-items: center; padding: 0 12px; gap: 12px; border-bottom: 1px solid var(--glass-border); }
+  .nav-controls, .actions { display: flex; gap: 4px; }
+  .toolbar button { background: transparent; border: none; color: var(--text-dim); width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px; cursor: pointer; }
+  .toolbar button:hover { background: rgba(255,255,255,0.1); color: white; }
+  .toolbar button.active { background: rgba(255,255,255,0.15); color: var(--accent-blue); }
+  .toolbar button:disabled { opacity: 0.3; cursor: not-allowed; }
+  .separator { width: 1px; background: var(--glass-border); margin: 0 4px; height: 24px; align-self: center; }
+  .path-bar { flex: 1; }
+  .path-bar input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); border-radius: 4px; color: white; padding: 4px 12px; font-size: 13px; }
+  .content-area { flex: 1; overflow: auto; padding: 20px; }
+  .view-container.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 20px; }
+  .view-container.list { display: flex; flex-direction: column; gap: 4px; }
+  .item { display: flex; border-radius: 8px; cursor: pointer; transition: background 0.2s; border: 1px solid transparent; }
+  .view-container.grid .item { flex-direction: column; align-items: center; gap: 8px; padding: 10px; }
+  .view-container.list .item { flex-direction: row; align-items: center; gap: 12px; padding: 6px 12px; }
+  .view-container.list .icon { transform: scale(0.6); transform-origin: center; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; }
+  .item:hover { background: rgba(255,255,255,0.05); }
+  .item.selected { background: rgba(88, 166, 255, 0.2); border: 1px solid var(--accent-blue); }
+  .icon { display: flex; align-items: center; justify-content: center; }
+  .name { font-size: 12px; text-align: center; word-break: break-all; max-width: 100%; }
+  .loading { display: flex; justify-content: center; align-items: center; height: 100%; color: var(--text-dim); }
 </style>

@@ -1,38 +1,16 @@
 <script>
-  import { onMount } from 'svelte';
   import './app.css';
-  import Desktop from './lib/Desktop.svelte';
-  import Login from './lib/Login.svelte';
-  import Toast from './lib/components/Toast.svelte';
+  import Login from './core/Login.svelte';
+  import Desktop from './core/Desktop.svelte';
+  import Toast from './core/components/Toast.svelte';
 
-  let authenticated = $state(false);
-
-  async function checkAuth() {
-    const token = localStorage.getItem('web_os_token');
-    if (!token) return;
-
-    try {
-      const res = await fetch('http://localhost:3000/api/auth/verify', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) authenticated = true;
-    } catch (err) {
-      console.error(err);
-    }
-  }
-
-  function handleLoginSuccess() {
-    authenticated = true;
-  }
-
-  onMount(checkAuth);
+  let loggedIn = $state(!!localStorage.getItem('web_os_token'));
 </script>
 
-<main>
-  <Toast />
-  {#if authenticated}
-    <Desktop />
-  {:else}
-    <Login onLoginSuccess={handleLoginSuccess} />
-  {/if}
-</main>
+{#if loggedIn}
+  <Desktop />
+{:else}
+  <Login onLoginSuccess={() => loggedIn = true} />
+{/if}
+
+<Toast />
