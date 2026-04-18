@@ -1,3 +1,4 @@
+<script>
   import { onMount } from 'svelte';
   import { Save, AlertCircle, Settings as SettingsIcon, User, Folder } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
