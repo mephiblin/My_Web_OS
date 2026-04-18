@@ -117,7 +117,7 @@
   <Spotlight />
 
   <div class="taskbar glass-effect svelte-fo09mr">
-    <div class="start-menu icon-box">
+    <div class="start-menu-btn">
       <Shield size={20} />
     </div>
 
@@ -277,7 +277,20 @@
     color: white;
   }
 
-  .active-apps { flex: 1; display: flex; justify-content: center; gap: 8px; }
+  .start-menu-btn { 
+    display: flex; 
+    align-items: center; 
+    justify-content: center; 
+    width: 36px; 
+    height: 36px; 
+    border-radius: 8px; 
+    cursor: pointer; 
+    transition: background 0.2s; 
+    color: white;
+  }
+  .start-menu-btn:hover { background: rgba(255,255,255,0.1); }
+
+  .active-apps { flex: 1; display: flex; justify-content: flex-start; gap: 8px; padding-left: 10px; }
   .task-item { background: transparent; border: none; color: var(--text-dim); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 8px; cursor: pointer; position: relative; }
   .task-item:hover { background: rgba(255,255,255,0.1); }
   .task-item.active { background: rgba(255,255,255,0.1); color: var(--accent-blue); }
