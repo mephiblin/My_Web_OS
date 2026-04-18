@@ -5,6 +5,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const dotenv = require('dotenv');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
+
 
 const { initTerminalService } = require('./services/terminal');
 
@@ -40,6 +42,9 @@ app.use('/api/system', sysRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/docker', dockerRouter);
 app.use('/api/settings', settingsRouter);
+
+// Static files for Inventory
+app.use('/api/inventory-files', express.static(path.join(__dirname, 'storage/inventory')));
 
 
 

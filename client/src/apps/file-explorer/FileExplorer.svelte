@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { 
     Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
-    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock 
+    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package 
   } from 'lucide-svelte';
   import { openWindow } from '../../core/stores/windowStore.js';
   import ContextMenu from '../../core/components/ContextMenu.svelte';
@@ -23,6 +23,7 @@
     { id: 'downloads', label: 'Downloads', icon: Download, path: `${initialPath}/Downloads` },
     { id: 'pictures', label: 'Pictures', icon: Image, path: `${initialPath}/Pictures` },
     { id: 'videos', label: 'Videos', icon: Video, path: `${initialPath}/Videos` },
+    { id: 'inventory', label: 'Inventory', icon: Package, path: '/home/inri/문서/web_os/server/storage/inventory' },
   ]);
 
   function handleContextMenu(e, item) {
