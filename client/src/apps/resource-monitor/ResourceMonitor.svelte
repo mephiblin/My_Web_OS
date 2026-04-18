@@ -72,61 +72,71 @@
 
   <div class="main-content">
     {#if activeTab === 'all'}
-      <div class="all-view">
-        <div class="section-group">
-          <div class="section-title">CPU Usage</div>
-          <div class="card glass-effect">
-            <div class="big-value">{status.cpu}%</div>
-            {#if status.cpuTemp?.main != null}
-              <div class="temp-line" style="text-align: center; color: #f0883e; margin-bottom: 8px;">🌡 {status.cpuTemp.main}°C</div>
-            {/if}
-            <div class="chart-area" style="height: 120px;"><Line data={chartData} options={chartOptions} /></div>
-          </div>
+      <div class="grid-layout">
+        <!-- CPU Card -->
+        <div class="card glass-effect">
+          <div class="section-title">CPU</div>
+          <div class="big-value">{status.cpu}%</div>
+          {#if status.cpuTemp?.main != null}
+            <div class="temp-line">🌡 {status.cpuTemp.main}°C</div>
+          {/if}
+          <div class="chart-area" style="height: 100px;"><Line data={chartData} options={chartOptions} /></div>
         </div>
 
-        <div class="section-group" style="margin-top: 20px;">
-          <div class="section-title">Memory Usage</div>
-          <div class="card glass-effect">
-            <div class="detail-row"><span>Used</span><span>{(status.memory.used / (1024 ** 3)).toFixed(2)} GB</span></div>
-            <div class="progress-bar"><div class="fill" style="width: {status.memory.percentage}%"></div></div>
-          </div>
+        <!-- Memory Card -->
+        <div class="card glass-effect">
+          <div class="section-title">Memory</div>
+          <div class="big-value">{status.memory.percentage}%</div>
+          <div class="progress-bar"><div class="fill" style="width: {status.memory.percentage}%"></div></div>
+          <div class="detail-row" style="margin-top: 12px;"><span>Used</span><span>{(status.memory.used / (1024 ** 3)).toFixed(2)} GB</span></div>
+          <div class="detail-row"><span>Total</span><span>{(status.memory.total / (1024 ** 3)).toFixed(2)} GB</span></div>
         </div>
 
-        <div class="section-group" style="margin-top: 20px;">
-          <div class="section-title">Storage</div>
-          {#each status.storage as drive}
-            <div class="card glass-effect drive-card" style="margin-bottom: 8px;">
-              <div class="detail-row"><span class="drive-name">{drive.fs}</span><span>{drive.use}%</span></div>
-              <div class="progress-bar"><div class="fill" style="width: {drive.use}%"></div></div>
-            </div>
-          {/each}
-        </div>
-        <div class="section-group" style="margin-top: 20px;">
-          <div class="section-title">Network</div>
-          {#each status.network as n}
-            {#if n.rx_sec > 0 || n.tx_sec > 0}
-              <div class="card glass-effect" style="margin-bottom: 8px;">
-                <div class="detail-row"><span class="drive-name">{n.iface}</span></div>
-                <div class="net-speeds">
-                  <div class="speed-item down">↓ {(n.rx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
-                  <div class="speed-item up">↑ {(n.tx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
-                </div>
-              </div>
-            {/if}
-          {/each}
-        </div>
-
-        <div class="section-group" style="margin-top: 20px;">
+        <!-- GPU Card -->
+        <div class="card glass-effect">
           <div class="section-title">GPU</div>
-          {#each status.gpu as g}
-            <div class="card glass-effect" style="margin-bottom: 8px;">
-              <div class="value-sm">{g.model}</div>
-              <div class="detail-row"><span>VRAM</span><span>{g.vram} MB</span></div>
-              {#if g.temperatureGpu != null}
-                <div class="detail-row"><span>Temp</span><span class="temp-val">{g.temperatureGpu}°C</span></div>
+          <div class="gpu-list">
+            {#each status.gpu as g}
+              <div class="gpu-item">
+                <div class="value-sm">{g.model}</div>
+                <div class="detail-row"><span>VRAM</span><span>{g.vram} MB</span></div>
+                {#if g.temperatureGpu != null}
+                  <div class="detail-row"><span class="temp">🌡 {g.temperatureGpu}°C</span></div>
+                {/if}
+              </div>
+            {:else}
+              <div class="stats">No GPU detected</div>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Network Card -->
+        <div class="card glass-effect">
+          <div class="section-title">Network</div>
+          <div class="net-list">
+            {#each status.network as n}
+              {#if n.rx_sec > 0 || n.tx_sec > 0}
+                <div class="net-item">
+                  <div class="drive-name">{n.iface}</div>
+                  <div class="detail-row down">↓ {(n.rx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
+                  <div class="detail-row up">↑ {(n.tx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
+                </div>
               {/if}
-            </div>
-          {/each}
+            {/each}
+          </div>
+        </div>
+        
+        <!-- Storage Card -->
+        <div class="card glass-effect storage-group">
+          <div class="section-title">Storage</div>
+          <div class="storage-list">
+            {#each status.storage as drive}
+              <div class="drive-item">
+                <div class="detail-row"><span class="drive-name">{drive.fs}</span><span>{drive.use}%</span></div>
+                <div class="progress-bar"><div class="fill" style="width: {drive.use}%"></div></div>
+              </div>
+            {/each}
+          </div>
         </div>
       </div>
 
@@ -257,4 +267,10 @@
   .speed-item { font-size: 14px; font-weight: 500; }
   .down { color: var(--accent-blue); }
   .up { color: var(--accent-green); }
+  
+  /* Grid Layout for All tab */
+  .grid-layout { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; align-items: start; }
+  .gpu-list, .net-list, .storage-list { display: flex; flex-direction: column; gap: 12px; }
+  .gpu-item, .net-item, .drive-item { background: rgba(0,0,0,0.15); padding: 8px; border-radius: 6px; }
+  .storage-group { grid-column: 1 / -1; }
 </style>

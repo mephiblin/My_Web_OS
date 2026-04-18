@@ -27,6 +27,7 @@ const fsRouter = require('./routes/fs');
 const sysRouter = require('./routes/system');
 const authRouter = require('./routes/auth');
 const dockerRouter = require('./routes/docker');
+const settingsRouter = require('./routes/settings');
 
 // Middleware
 app.use(helmet());
@@ -38,6 +39,7 @@ app.use('/api/fs', fsRouter);
 app.use('/api/system', sysRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/docker', dockerRouter);
+app.use('/api/settings', settingsRouter);
 
 
 
