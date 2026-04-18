@@ -71,7 +71,66 @@
   </div>
 
   <div class="main-content">
-    {#if activeTab === 'overview'}
+    {#if activeTab === 'all'}
+      <div class="all-view">
+        <div class="section-group">
+          <div class="section-title">CPU Usage</div>
+          <div class="card glass-effect">
+            <div class="big-value">{status.cpu}%</div>
+            {#if status.cpuTemp?.main != null}
+              <div class="temp-line" style="text-align: center; color: #f0883e; margin-bottom: 8px;">🌡 {status.cpuTemp.main}°C</div>
+            {/if}
+            <div class="chart-area" style="height: 120px;"><Line data={chartData} options={chartOptions} /></div>
+          </div>
+        </div>
+
+        <div class="section-group" style="margin-top: 20px;">
+          <div class="section-title">Memory Usage</div>
+          <div class="card glass-effect">
+            <div class="detail-row"><span>Used</span><span>{(status.memory.used / (1024 ** 3)).toFixed(2)} GB</span></div>
+            <div class="progress-bar"><div class="fill" style="width: {status.memory.percentage}%"></div></div>
+          </div>
+        </div>
+
+        <div class="section-group" style="margin-top: 20px;">
+          <div class="section-title">Storage</div>
+          {#each status.storage as drive}
+            <div class="card glass-effect drive-card" style="margin-bottom: 8px;">
+              <div class="detail-row"><span class="drive-name">{drive.fs}</span><span>{drive.use}%</span></div>
+              <div class="progress-bar"><div class="fill" style="width: {drive.use}%"></div></div>
+            </div>
+          {/each}
+        </div>
+        <div class="section-group" style="margin-top: 20px;">
+          <div class="section-title">Network</div>
+          {#each status.network as n}
+            {#if n.rx_sec > 0 || n.tx_sec > 0}
+              <div class="card glass-effect" style="margin-bottom: 8px;">
+                <div class="detail-row"><span class="drive-name">{n.iface}</span></div>
+                <div class="net-speeds">
+                  <div class="speed-item down">↓ {(n.rx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
+                  <div class="speed-item up">↑ {(n.tx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
+                </div>
+              </div>
+            {/if}
+          {/each}
+        </div>
+
+        <div class="section-group" style="margin-top: 20px;">
+          <div class="section-title">GPU</div>
+          {#each status.gpu as g}
+            <div class="card glass-effect" style="margin-bottom: 8px;">
+              <div class="value-sm">{g.model}</div>
+              <div class="detail-row"><span>VRAM</span><span>{g.vram} MB</span></div>
+              {#if g.temperatureGpu != null}
+                <div class="detail-row"><span>Temp</span><span class="temp-val">{g.temperatureGpu}°C</span></div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </div>
+
+    {:else if activeTab === 'overview'}
       <div class="section-title">System Overview</div>
       <div class="overview-grid">
         <div class="card glass-effect">
