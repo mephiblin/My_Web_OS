@@ -13,6 +13,7 @@
   let interval;
 
   const tabs = [
+    { id: 'all', label: 'All' },
     { id: 'overview', label: 'Overview' },
     { id: 'cpu', label: 'CPU' },
     { id: 'memory', label: 'Memory' },
