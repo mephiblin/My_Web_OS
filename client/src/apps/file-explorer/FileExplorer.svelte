@@ -1,16 +1,29 @@
 <script>
   import { onMount } from 'svelte';
-  import { Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, Plus, Trash2, LayoutGrid, List, Pencil } from 'lucide-svelte';
+  import { 
+    Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
+    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock 
+  } from 'lucide-svelte';
   import { openWindow } from '../../core/stores/windowStore.js';
   import ContextMenu from '../../core/components/ContextMenu.svelte';
   import * as fsApi from './api.js';
 
   let currentPath = $state('/');
+  let initialPath = $state('/');
   let items = $state([]);
   let loading = $state(false);
   let selectedItem = $state(null);
   let viewMode = $state('grid');
   let contextMenuConfig = $state(null);
+
+  const sidebarLinks = $derived([
+    { id: 'recent', label: 'Recent', icon: Clock, path: initialPath }, // Placeholder for now
+    { id: 'home', label: 'Home', icon: Home, path: initialPath },
+    { id: 'documents', label: 'Documents', icon: FileText, path: `${initialPath}/Documents` },
+    { id: 'downloads', label: 'Downloads', icon: Download, path: `${initialPath}/Downloads` },
+    { id: 'pictures', label: 'Pictures', icon: Image, path: `${initialPath}/Pictures` },
+    { id: 'videos', label: 'Videos', icon: Video, path: `${initialPath}/Videos` },
+  ]);
 
   function handleContextMenu(e, item) {
     e.preventDefault();
@@ -121,7 +134,8 @@
     try {
       const data = await fsApi.fetchConfig();
       if (data.initialPath) {
-        currentPath = data.initialPath;
+        initialPath = data.initialPath;
+        currentPath = initialPath;
       }
     } catch (e) {
       console.error(e);
@@ -133,8 +147,8 @@
 <div class="file-explorer" oncontextmenu={(e) => handleContextMenu(e, null)} onclick={() => selectedItem = null}>
   <div class="toolbar">
     <div class="nav-controls">
-      <button onclick={goBack}><ChevronLeft size={16} /></button>
-      <button><ChevronRight size={16} /></button>
+      <button onclick={goBack} disabled={currentPath === '/'}><ChevronLeft size={16} /></button>
+      <button disabled><ChevronRight size={16} /></button>
       <button onclick={() => fetchItems(currentPath)}><RotateCcw size={16} /></button>
     </div>
     <div class="path-bar">
@@ -150,30 +164,47 @@
     </div>
   </div>
 
-  <div class="content-area">
-    {#if loading}
-      <div class="loading">Loading...</div>
-    {:else}
-      <div class="view-container {viewMode}">
-        {#each items as item}
-          <div
-            class="item {selectedItem?.path === item.path ? 'selected' : ''}"
-            onclick={(e) => { e.stopPropagation(); selectedItem = item; }}
-            ondblclick={() => handleDblClick(item)}
-            oncontextmenu={(e) => handleContextMenu(e, item)}
+  <div class="layout-body">
+    <aside class="sidebar glass-effect">
+      <div class="sidebar-section">
+        <h3>Places</h3>
+        {#each sidebarLinks as link}
+          <button 
+            class="sidebar-item {currentPath === link.path ? 'active' : ''}" 
+            onclick={() => fetchItems(link.path)}
           >
-            <div class="icon">
-              {#if item.isDirectory}
-                <Folder size={48} color="var(--accent-blue)" fill="var(--accent-blue)" fill-opacity="0.2" />
-              {:else}
-                <File size={48} color="var(--text-dim)" />
-              {/if}
-            </div>
-            <span class="name">{item.name}</span>
-          </div>
+            <svelte:component this={link.icon} size={16} />
+            <span>{link.label}</span>
+          </button>
         {/each}
       </div>
-    {/if}
+    </aside>
+
+    <div class="content-area">
+      {#if loading}
+        <div class="loading">Loading...</div>
+      {:else}
+        <div class="view-container {viewMode}">
+          {#each items as item}
+            <div
+              class="item {selectedItem?.path === item.path ? 'selected' : ''}"
+              onclick={(e) => { e.stopPropagation(); selectedItem = item; }}
+              ondblclick={() => handleDblClick(item)}
+              oncontextmenu={(e) => handleContextMenu(e, item)}
+            >
+              <div class="icon">
+                {#if item.isDirectory}
+                  <Folder size={48} color="var(--accent-blue)" fill="var(--accent-blue)" fill-opacity="0.2" />
+                {:else}
+                  <File size={48} color="var(--text-dim)" />
+                {/if}
+              </div>
+              <span class="name">{item.name}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
 
   {#if contextMenuConfig}
@@ -197,6 +228,14 @@
   .separator { width: 1px; background: var(--glass-border); margin: 0 4px; height: 24px; align-self: center; }
   .path-bar { flex: 1; }
   .path-bar input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); border-radius: 4px; color: white; padding: 4px 12px; font-size: 13px; }
+  
+  .layout-body { flex: 1; display: flex; overflow: hidden; }
+  .sidebar { width: 180px; background: rgba(0,0,0,0.15); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; padding: 12px 8px; flex-shrink: 0; }
+  .sidebar-section h3 { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin: 0 0 8px 8px; letter-spacing: 0.5px; }
+  .sidebar-item { background: transparent; border: none; color: var(--text-main); display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; cursor: pointer; width: 100%; text-align: left; font-size: 13px; transition: all 0.2s; }
+  .sidebar-item:hover { background: rgba(255,255,255,0.08); }
+  .sidebar-item.active { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); font-weight: 500; }
+
   .content-area { flex: 1; overflow: auto; padding: 20px; }
   .view-container.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 20px; }
   .view-container.list { display: flex; flex-direction: column; gap: 4px; }
@@ -207,6 +246,6 @@
   .item:hover { background: rgba(255,255,255,0.05); }
   .item.selected { background: rgba(88, 166, 255, 0.2); border: 1px solid var(--accent-blue); }
   .icon { display: flex; align-items: center; justify-content: center; }
-  .name { font-size: 12px; text-align: center; word-break: break-all; max-width: 100%; }
+  .name { font-size: 12px; text-align: center; word-break: break-all; max-width: 100%; border: none; background: transparent; color: inherit; outline: none; }
   .loading { display: flex; justify-content: center; align-items: center; height: 100%; color: var(--text-dim); }
 </style>

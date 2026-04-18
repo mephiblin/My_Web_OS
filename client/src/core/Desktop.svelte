@@ -7,6 +7,7 @@
   import FileExplorer from '../apps/file-explorer/FileExplorer.svelte';
   import TerminalApp from '../apps/terminal/Terminal.svelte';
   import ResourceMonitor from '../apps/resource-monitor/ResourceMonitor.svelte';
+  import CodeEditor from '../apps/code-editor/CodeEditor.svelte';
   import DockerManager from '../apps/docker-manager/DockerManager.svelte';
   import SettingsApp from '../apps/settings/Settings.svelte';
 

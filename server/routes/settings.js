@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const fs = require('fs').promises;
 const path = require('path');
-const { verifyToken } = require('./auth');
+const auth = require('../middleware/auth');
 
 const ENV_PATH = path.join(__dirname, '../../.env');
 
@@ -35,7 +35,7 @@ async function writeEnv(envObj) {
   await fs.writeFile(ENV_PATH, lines.join('\n'));
 }
 
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', auth, async (req, res) => {
   try {
     const env = await readEnv();
     // In a real prod setup we'd maybe strip JWT_SECRET, but OS admin has full rights.
@@ -45,7 +45,7 @@ router.get('/', verifyToken, async (req, res) => {
   }
 });
 
-router.put('/', verifyToken, async (req, res) => {
+router.put('/', auth, async (req, res) => {
   try {
     const updates = req.body; // e.g. { ADMIN_USERNAME: 'newadmin', PORT: 3000 }
     const current = await readEnv();
