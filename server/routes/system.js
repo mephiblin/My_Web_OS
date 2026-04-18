@@ -76,4 +76,32 @@ router.get('/cpu', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/system/network-ips
+ * Get local and external IP addresses
+ */
+router.get('/network-ips', async (req, res) => {
+  try {
+    const netInterfaces = await si.networkInterfaces();
+    // Filter for common ipv4 addresses, excluding internal loopback
+    const local = netInterfaces.find(i => !i.internal && i.ip4 && i.operstate === 'up') || netInterfaces[0];
+    
+    let external = 'Unknown';
+    try {
+      const response = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
+      const data = await response.json();
+      external = data.ip;
+    } catch (e) {
+      external = 'Unavailable';
+    }
+
+    res.json({
+      local: local ? local.ip4 : 'Unknown',
+      external
+    });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
 module.exports = router;

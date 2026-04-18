@@ -10,6 +10,8 @@
   let cpuHistory = $state(Array(30).fill(0));
   let labels = $state(Array(30).fill(''));
   let activeTab = $state('overview');
+  let ips = $state({ local: '...', external: '...' });
+  let refreshingIps = $state(false);
   let interval;
 
   const tabs = [
@@ -35,8 +37,21 @@
     }
   }
 
+  async function fetchIps() {
+    refreshingIps = true;
+    try {
+      const data = await apiFetch('/api/system/network-ips');
+      ips = data;
+    } catch (err) {
+      console.error(err);
+    } finally {
+      refreshingIps = false;
+    }
+  }
+
   onMount(() => {
     fetchStats();
+    fetchIps();
     interval = setInterval(fetchStats, 1000);
   });
 
@@ -113,7 +128,20 @@
         <!-- Network Card -->
         <div class="card glass-effect">
           <div class="section-title">Network</div>
-          <div class="net-list">
+          <div class="ip-info">
+            <div class="ip-row">
+              <span class="label">Local IP:</span>
+              <span class="value">{ips.local}</span>
+            </div>
+            <div class="ip-row">
+              <span class="label">External IP:</span>
+              <span class="value">{ips.external}</span>
+              <button class="refresh-mini" onclick={fetchIps} title="Refresh IPs" disabled={refreshingIps}>
+                <RotateCcw size={12} class={refreshingIps ? 'spin' : ''} />
+              </button>
+            </div>
+          </div>
+          <div class="net-list" style="margin-top: 12px;">
             {#each status.network as n}
               {#if n.rx_sec > 0 || n.tx_sec > 0}
                 <div class="net-item">
@@ -273,4 +301,15 @@
   .gpu-list, .net-list, .storage-list { display: flex; flex-direction: column; gap: 12px; }
   .gpu-item, .net-item, .drive-item { background: rgba(0,0,0,0.15); padding: 8px; border-radius: 6px; }
   .storage-group { grid-column: 1 / -1; }
+
+  .ip-info { display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px; }
+  .ip-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .ip-row .label { color: var(--text-dim); }
+  .ip-row .value { color: var(--text-main); font-family: monospace; font-weight: 600; }
+  .refresh-mini { background: transparent; border: none; color: var(--accent-blue); cursor: pointer; display: flex; align-items: center; padding: 2px; border-radius: 4px; }
+  .refresh-mini:hover { background: rgba(255,255,255,0.1); }
+  .refresh-mini:disabled { opacity: 0.5; cursor: not-allowed; }
+  
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  :global(.spin) { animation: spin 1s linear infinite; }
 </style>
