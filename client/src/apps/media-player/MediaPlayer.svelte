@@ -176,33 +176,35 @@
       </div>
     {/if}
 
-    <div class="controls-overlay">
-      <div class="progress-bar">
-        <input type="range" min="0" max="100" step="0.1" value={progress} oninput={handleSeek} />
-      </div>
-      
-      <div class="control-bottom">
-        <div class="left">
-          <button class="icon-btn" onclick={togglePlay}>
-            {#if playing} <Pause size={20} /> {:else} <Play size={20} /> {/if}
-          </button>
-          <div class="time-info">
-            {Math.floor(progress * duration / 100 / 60)}:{Math.floor((progress * duration / 100) % 60).toString().padStart(2, '0')} / 
-            {Math.floor(duration / 60)}:{Math.floor(duration % 60).toString().padStart(2, '0')}
-          </div>
+    {#if !isImage}
+      <div class="controls-overlay">
+        <div class="progress-bar">
+          <input type="range" min="0" max="100" step="0.1" value={progress} oninput={handleSeek} />
         </div>
+        
+        <div class="control-bottom">
+          <div class="left">
+            <button class="icon-btn" onclick={togglePlay}>
+              {#if playing} <Pause size={20} /> {:else} <Play size={20} /> {/if}
+            </button>
+            <div class="time-info">
+              {Math.floor((progress * (duration || 0)) / 100 / 60)}:{Math.floor(((progress * (duration || 0)) / 100) % 60).toString().padStart(2, '0')} / 
+              {Math.floor((duration || 0) / 60)}:{Math.floor((duration || 0) % 60).toString().padStart(2, '0')}
+            </div>
+          </div>
 
-        <div class="right">
-          <div class="volume-control">
-            <Volume2 size={18} />
-            <input type="range" min="0" max="1" step="0.1" bind:value={volume} oninput={() => { if (videoEl) videoEl.volume = volume; if (audioEl) audioEl.volume = volume; }} />
+          <div class="right">
+            <div class="volume-control">
+              <Volume2 size={18} />
+              <input type="range" min="0" max="1" step="0.1" bind:value={volume} oninput={() => { if (videoEl) videoEl.volume = volume; if (audioEl) audioEl.volume = volume; }} />
+            </div>
+            {#if isVideo}
+              <button class="icon-btn" onclick={toggleFullscreen}><Maximize size={18} /></button>
+            {/if}
           </div>
-          {#if isVideo}
-            <button class="icon-btn" onclick={toggleFullscreen}><Maximize size={18} /></button>
-          {/if}
         </div>
       </div>
-    </div>
+    {/if}
   </div>
 
   <div class="metadata-panel glass-effect">

@@ -169,9 +169,9 @@
     top: 30px; 
     left: 20px; 
     display: grid; 
-    grid-template-rows: repeat(auto-fill, 110px); 
+    grid-template-rows: repeat(auto-fill, 96px); 
     grid-auto-flow: column;
-    gap: 16px;
+    gap: 8px;
     height: calc(100% - 100px);
     pointer-events: none;
   }
@@ -182,20 +182,20 @@
     display: flex; 
     flex-direction: column; 
     align-items: center; 
-    gap: 10px; 
-    width: 100px; 
-    height: 100px;
+    gap: 6px; 
+    width: 90px; 
+    height: 90px;
     cursor: pointer; 
     pointer-events: auto;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .icon-box { 
-    width: 64px; 
-    height: 64px; 
+    width: 56px; 
+    height: 56px; 
     display: flex; 
     align-items: center; 
     justify-content: center; 
-    border-radius: 16px; 
+    border-radius: 14px; 
     transition: all 0.2s; 
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);

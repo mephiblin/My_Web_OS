@@ -13,6 +13,18 @@ router.get('/info', async (req, res) => {
   if (!filePath) return res.status(400).json({ error: 'Path is required' });
 
   try {
+    const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(filePath);
+    
+    if (isImage) {
+      const stats = fs.statSync(filePath);
+      return res.json({
+        filename: path.basename(filePath),
+        size: stats.size,
+        format: path.extname(filePath).slice(1),
+        isImage: true
+      });
+    }
+
     const info = await mediaService.getMetadata(filePath);
     res.json(info);
   } catch (err) {
