@@ -2,7 +2,9 @@
   import { onMount, onDestroy } from 'svelte';
   import { Line } from 'svelte-chartjs';
   import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler } from 'chart.js';
+  import { RotateCcw } from 'lucide-svelte';
   import { fetchSystemOverview } from './api.js';
+  import { apiFetch } from '../../utils/api.js';
 
   ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler);
 
