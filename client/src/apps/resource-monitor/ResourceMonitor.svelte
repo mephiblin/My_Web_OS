@@ -235,6 +235,21 @@
 
     {:else if activeTab === 'network'}
       <div class="section-title">Network Traffic</div>
+      <div class="card glass-effect" style="margin-bottom: 16px;">
+        <div class="ip-info" style="border: none; padding: 0;">
+          <div class="ip-row">
+            <span class="label">Local IP:</span>
+            <span class="value">{ips.local}</span>
+          </div>
+          <div class="ip-row">
+            <span class="label">External IP:</span>
+            <span class="value">{ips.external}</span>
+            <button class="refresh-mini" onclick={fetchIps} title="Refresh IPs" disabled={refreshingIps}>
+              <RotateCcw size={12} class={refreshingIps ? 'spin' : ''} />
+            </button>
+          </div>
+        </div>
+      </div>
       {#each status.network as n}
         {#if n.rx_sec > 0 || n.tx_sec > 0}
           <div class="card glass-effect">
