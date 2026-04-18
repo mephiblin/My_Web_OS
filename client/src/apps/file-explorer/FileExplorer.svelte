@@ -87,6 +87,8 @@
       
       if (isMedia || isImage) {
         openWindow({ id: 'player', title: `Viewer - ${item.name}`, icon: isImage ? Image : Video }, { path: item.path });
+      } else if (ext === 'pdf') {
+        openWindow({ id: 'doc-viewer', title: `PDF Reader - ${item.name}`, icon: FileText }, { path: item.path });
       } else {
         openWindow({ id: 'editor', title: `Editor - ${item.name}`, icon: FileText }, { path: item.path });
       }

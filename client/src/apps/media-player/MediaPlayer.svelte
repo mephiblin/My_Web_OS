@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Play, Pause, Volume2, Maximize, Music, Video, Info, RefreshCw } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
+  import { activeWindowId } from '../../core/stores/windowStore.js';
   import { apiFetch } from '../../utils/api.js';
   import { API_BASE } from '../../utils/constants.js';
 
@@ -22,6 +23,7 @@
   let subtitleUrl = $state(null);
   let neighbors = $state({ prev: null, next: null });
   let zoomed = $state(false);
+  let lastFetchedPath = $state('');
 
   // Use relative URLs (proxied via Vite) with token auth
   let mediaUrl = $derived(mediaPath ? `/api/fs/raw?path=${encodeURIComponent(mediaPath)}&token=${localStorage.getItem('web_os_token')}` : '');
@@ -51,6 +53,8 @@
   }
 
   function handleKeydown(e) {
+    if ($activeWindowId !== 'player') return;
+
     if (isVideo || isAudio) {
       const el = isVideo ? videoEl : audioEl;
       if (!el) return;
@@ -123,7 +127,8 @@
   });
 
   $effect(() => {
-    if (mediaPath) {
+    if (mediaPath && mediaPath !== lastFetchedPath) {
+      lastFetchedPath = mediaPath;
       fetchMetadata();
     }
   });
