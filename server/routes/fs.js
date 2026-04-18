@@ -5,9 +5,12 @@ const path = require('path');
 const pathGuard = require('../middleware/pathGuard');
 const auth = require('../middleware/auth');
 
-// Enable auth middleware for all fs routes
+// Auth required for all fs routes
 router.use(auth);
-router.use(pathGuard);
+
+/**
+ * Routes that do NOT require pathGuard (no user-supplied path)
+ */
 
 /**
  * GET /api/fs/config
@@ -18,6 +21,25 @@ router.get('/config', (req, res) => {
     initialPath: process.env.INITIAL_PATH || '/'
   });
 });
+
+/**
+ * GET /api/fs/user-dirs
+ * Auto-detect user directories (cross-platform)
+ */
+router.get('/user-dirs', (req, res) => {
+  try {
+    const { detectUserDirs } = require('../services/userDirs');
+    const dirs = detectUserDirs();
+    res.json(dirs);
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * Routes below require pathGuard (user-supplied path)
+ */
+router.use(pathGuard);
 
 /**
  * GET /api/fs/list

@@ -15,16 +15,30 @@
   let selectedItem = $state(null);
   let viewMode = $state('grid');
   let contextMenuConfig = $state(null);
+  let inventoryPath = $state('');
 
-  const sidebarLinks = $derived([
-    { id: 'recent', label: 'Recent', icon: Clock, path: initialPath }, 
-    { id: 'home', label: 'Home', icon: Home, path: initialPath },
-    { id: 'documents', label: 'Documents', icon: FileText, path: `${initialPath}/문서` },
-    { id: 'downloads', label: 'Downloads', icon: Download, path: `${initialPath}/다운로드` },
-    { id: 'pictures', label: 'Pictures', icon: Image, path: `${initialPath}/사진` },
-    { id: 'videos', label: 'Videos', icon: Video, path: `${initialPath}/비디오` },
-    { id: 'inventory', label: 'Inventory', icon: Package, path: '/home/inri/문서/web_os/server/storage/inventory' },
+  let sidebarLinks = $state([
+    { id: 'home', label: 'Home', icon: Home, path: '/' },
   ]);
+
+  function buildSidebarLinks(homePath, dirs) {
+    const links = [
+      { id: 'home', label: 'Home', icon: Home, path: homePath },
+    ];
+
+    if (dirs.documents?.path) links.push({ id: 'documents', label: 'Documents', icon: FileText, path: dirs.documents.path });
+    if (dirs.downloads?.path) links.push({ id: 'downloads', label: 'Downloads', icon: Download, path: dirs.downloads.path });
+    if (dirs.pictures?.path) links.push({ id: 'pictures', label: 'Pictures', icon: Image, path: dirs.pictures.path });
+    if (dirs.videos?.path) links.push({ id: 'videos', label: 'Videos', icon: Video, path: dirs.videos.path });
+    if (dirs.music?.path) links.push({ id: 'music', label: 'Music', icon: Clock, path: dirs.music.path });
+
+    // Always add Inventory at the end
+    if (inventoryPath) {
+      links.push({ id: 'inventory', label: 'Inventory', icon: Package, path: inventoryPath });
+    }
+
+    return links;
+  }
 
   function handleContextMenu(e, item) {
     e.preventDefault();
@@ -133,13 +147,23 @@
 
   onMount(async () => {
     try {
-      const data = await fsApi.fetchConfig();
-      if (data.initialPath) {
-        initialPath = data.initialPath;
+      const [config, userDirs] = await Promise.all([
+        fsApi.fetchConfig(),
+        fsApi.fetchUserDirs(),
+      ]);
+
+      if (config.initialPath) {
+        initialPath = config.initialPath;
         currentPath = initialPath;
       }
+
+      // Compute inventory path relative to server
+      inventoryPath = userDirs._inventoryPath || '';
+
+      // Build sidebar from detected directories
+      sidebarLinks = buildSidebarLinks(userDirs.home || initialPath, userDirs);
     } catch (e) {
-      console.error(e);
+      console.error('Failed to load dirs:', e);
     }
     fetchItems(currentPath);
   });

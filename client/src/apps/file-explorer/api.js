@@ -4,6 +4,10 @@ export async function fetchConfig() {
   return apiFetch('/api/fs/config');
 }
 
+export async function fetchUserDirs() {
+  return apiFetch('/api/fs/user-dirs');
+}
+
 export async function listDir(path) {
   return apiFetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
 }
