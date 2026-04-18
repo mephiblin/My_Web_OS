@@ -53,13 +53,13 @@
 
 ### 1. 백엔드 서버 실행
 ```bash
-cd /home/inri/문서/web_os
+cd ~/web_os
 node server/index.js
 ```
 
 ### 2. 프론트엔드 클라이언트 실행
 ```bash
-cd /home/inri/문서/web_os/client
+cd ~/web_os/client
 npm run dev
 ```
 
