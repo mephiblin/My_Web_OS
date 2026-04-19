@@ -28,6 +28,7 @@
   import ControlPanel from '../apps/control-panel/ControlPanel.svelte';
   import TransferUI from '../apps/transfer/TransferUI.svelte';
   import LogViewer from '../apps/log-viewer/LogViewer.svelte';
+  import WidgetStore from '../apps/widget-store/WidgetStore.svelte';
   import { systemSettings } from './stores/systemStore.js';
   import { apiFetch } from '../utils/api.js';
 
@@ -47,7 +48,8 @@
     player: MediaPlayer,
     'doc-viewer': DocumentViewer,
     'model-viewer': ModelViewer,
-    logs: LogViewer
+    logs: LogViewer,
+    'widget-store': WidgetStore
   };
 
   let apps = $state([]);

@@ -38,5 +38,10 @@
     "id": "logs",
     "title": "Log Viewer",
     "icon": "Shield"
+  },
+  {
+    "id": "widget-store",
+    "title": "Widgets",
+    "icon": "LayoutGrid"
   }
 ]

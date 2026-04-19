@@ -1,9 +1,8 @@
 import { writable } from 'svelte/store';
 
-// Default initial widgets layout
 const DEFAULT_WIDGETS = [
-  { id: 'widget-clock', type: 'clock', x: 20, y: 30, w: 2, h: 2 },
-  { id: 'widget-monitor', type: 'monitor', x: 20, y: 150, w: 2, h: 3 }
+  { id: 'widget-clock', type: 'preset', source: 'clock', title: 'Clock', x: 20, y: 30, w: 200, h: 200, locked: true },
+  { id: 'widget-monitor', type: 'preset', source: 'monitor', title: 'System Monitor', x: 20, y: 250, w: 200, h: 280, locked: true }
 ];
 
 const createWidgetStore = () => {
@@ -22,7 +21,6 @@ const createWidgetStore = () => {
     isInitialized = true;
   };
 
-  // Persistence logic
   let saveTimeout;
   subscribe(items => {
     if (!isInitialized) return;
@@ -42,12 +40,23 @@ const createWidgetStore = () => {
     init,
     addWidget: (widget) => {
       update(items => {
-        const newId = `${widget.type}-${Date.now()}`;
-        return [...items, { ...widget, id: newId }];
+        const newId = `widget-${Date.now()}`;
+        return [...items, { 
+          id: newId, 
+          type: widget.type || 'preset',
+          source: widget.source || 'clock',
+          title: widget.title || 'Widget',
+          x: 100 + Math.random() * 200, 
+          y: 100 + Math.random() * 200, 
+          w: widget.w || 250, 
+          h: widget.h || 200, 
+          locked: true 
+        }];
       });
     },
     removeWidget: (id) => update(items => items.filter(w => w.id !== id)),
-    updateWidgetPosition: (id, x, y) => update(items => items.map(w => w.id === id ? { ...w, x, y } : w)),
+    updateWidget: (id, data) => update(items => items.map(w => w.id === id ? { ...w, ...data } : w)),
+    toggleLock: (id) => update(items => items.map(w => w.id === id ? { ...w, locked: !w.locked } : w)),
     reset: () => set(DEFAULT_WIDGETS)
   };
 };
