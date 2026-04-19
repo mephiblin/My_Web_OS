@@ -16,13 +16,19 @@ const createSystemStore = () => {
   const init = async () => {
     try {
       const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+      if (!token) return;
+
       const res = await fetch('/api/system/state/settings', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (!res.ok) return;
+
       const json = await res.json();
-      set(json.data || DEFAULT_SETTINGS);
+      if (json.data !== undefined) {
+        set(json.data || DEFAULT_SETTINGS);
+        isInitialized = true;
+      }
     } catch (e) {
-      set(DEFAULT_SETTINGS);
+      console.error('Error initializing system settings:', e);
     }
-    isInitialized = true;
   };
 
   // Persistence logic

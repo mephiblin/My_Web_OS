@@ -29,6 +29,7 @@
   import TransferUI from '../apps/transfer/TransferUI.svelte';
   import LogViewer from '../apps/log-viewer/LogViewer.svelte';
   import WidgetStore from '../apps/widget-store/WidgetStore.svelte';
+  import { widgetLibrary } from './stores/widgetLibraryStore.js';
   import { systemSettings } from './stores/systemStore.js';
   import { apiFetch } from '../utils/api.js';
 
@@ -85,7 +86,8 @@
     await Promise.all([
       systemSettings.init(),
       initWindows(),
-      widgets.init()
+      widgets.init(),
+      widgetLibrary.init()
     ]);
 
     updateTime();

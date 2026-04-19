@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 
 const DEFAULT_WIDGETS = [
   { id: 'widget-clock', type: 'preset', source: 'clock', title: 'Clock', x: 20, y: 30, w: 200, h: 200, locked: true },
-  { id: 'widget-monitor', type: 'preset', source: 'monitor', title: 'System Monitor', x: 20, y: 250, w: 200, h: 280, locked: true }
+  { id: 'widget-monitor', type: 'system', source: 'sys-cpu', title: 'CPU Monitor', x: 20, y: 250, w: 220, h: 200, locked: true }
 ];
 
 const createWidgetStore = () => {
@@ -12,13 +12,30 @@ const createWidgetStore = () => {
   const init = async () => {
     try {
       const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
-      const res = await fetch('/api/system/state/widgets', { headers: { 'Authorization': `Bearer ${token}` } });
+      if (!token) return; // Wait for login
+
+      const res = await fetch('/api/system/state/widgets', { 
+        headers: { 'Authorization': `Bearer ${token}` } 
+      });
+      
+      if (!res.ok) {
+        console.error('Failed to fetch widgets:', res.status);
+        return; // Don't allow saving if we can't load
+      }
+
       const json = await res.json();
-      set(json.data || DEFAULT_WIDGETS);
+      // Only set if we actually got data or empty array back
+      if (json.data !== undefined) {
+        set(json.data || DEFAULT_WIDGETS);
+        isInitialized = true; // Mark as ready to save now
+      } else {
+        set(DEFAULT_WIDGETS);
+        isInitialized = true;
+      }
     } catch (e) {
-      set(DEFAULT_WIDGETS);
+      console.error('Error initializing widgets:', e);
+      // Don't set isInitialized = true here, so we don't overwrite server with defaults
     }
-    isInitialized = true;
   };
 
   let saveTimeout;

@@ -8,16 +8,20 @@ let isInitialized = false;
 export const initWindows = async () => {
   try {
     const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+    if (!token) return;
+
     const res = await fetch('/api/system/state/windows', { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!res.ok) return;
+
     const json = await res.json();
     if (json.data && json.data.windows) {
       windows.set(json.data.windows.map(w => ({ ...w, appId: w.appId || w.id })));
       activeWindowId.set(json.data.active || null);
+      isInitialized = true;
     }
   } catch (e) {
     console.error('Failed to load window state', e);
   }
-  isInitialized = true;
 };
 
 // Persistence logic with debounce

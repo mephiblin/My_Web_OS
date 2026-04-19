@@ -1,21 +1,28 @@
 <script>
   import { widgets } from '../../core/stores/widgetStore.js';
-  import { Clock, Activity, Globe, Code, Plus, Trash2, LayoutGrid, Cpu, Wifi, HardDrive } from 'lucide-svelte';
+  import { widgetLibrary } from '../../core/stores/widgetLibraryStore.js';
+  import { 
+    Clock, Activity, Globe, Code, Plus, Trash2, LayoutGrid, 
+    Cpu, Wifi, HardDrive, Edit3, Save, ArrowLeft, Send
+  } from 'lucide-svelte';
 
   let activeTab = $state('presets'); // 'presets' | 'system' | 'url' | 'custom'
-  let urlInput = $state('');
-  let urlTitle = $state('');
-  let customCode = $state('<html>\n<body style="margin:0;color:white;background:transparent;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">\n  <h1>Hello Widget!</h1>\n</body>\n</html>');
-  let customTitle = $state('My Widget');
+  
+  // Editor State
+  let editorMode = $state('list'); // 'list' | 'create' | 'edit'
+  let editingId = $state(null);
+  
+  let tempTitle = $state('');
+  let tempSource = $state('');
 
   const presets = [
     { source: 'clock', title: 'Clock', icon: Clock, desc: 'Real-time clock display', w: 200, h: 200 },
   ];
 
   const systemWidgets = [
-    { source: 'sys-cpu', title: 'CPU Monitor', icon: Cpu, desc: 'Live CPU usage & temperature', w: 220, h: 200 },
+    { source: 'sys-cpu', title: 'CPU Monitor', icon: Cpu, desc: 'Live CPU usage & temp', w: 220, h: 200 },
     { source: 'sys-mem', title: 'Memory Monitor', icon: Activity, desc: 'Live RAM usage', w: 220, h: 200 },
-    { source: 'sys-net', title: 'Network Monitor', icon: Wifi, desc: 'Live network TX/RX stats', w: 240, h: 200 },
+    { source: 'sys-net', title: 'Network Monitor', icon: Wifi, desc: 'Live net TX/RX stats', w: 240, h: 200 },
     { source: 'sys-storage', title: 'Storage Overview', icon: HardDrive, desc: 'Disk usage overview', w: 260, h: 200 },
   ];
 
@@ -27,17 +34,50 @@
     widgets.addWidget({ type: 'system', source: sw.source, title: sw.title, w: sw.w, h: sw.h });
   }
 
-  function addUrlWidget() {
-    if (!urlInput.trim()) return;
-    widgets.addWidget({ type: 'url', source: urlInput, title: urlTitle || 'Web Widget', w: 350, h: 280 });
-    urlInput = '';
-    urlTitle = '';
+  function openCreate() {
+    editorMode = 'create';
+    editingId = null;
+    tempTitle = '';
+    tempSource = activeTab === 'custom' ? '<html>\n<body style="margin:0;color:white;background:transparent;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">\n  <h1>Hello Widget!</h1>\n</body>\n</html>' : '';
   }
 
-  function addCustomWidget() {
-    if (!customCode.trim()) return;
-    widgets.addWidget({ type: 'custom', source: customCode, title: customTitle || 'Custom Widget', w: 300, h: 250 });
+  function openEdit(item) {
+    editorMode = 'edit';
+    editingId = item.id;
+    tempTitle = item.title;
+    tempSource = item.source;
   }
+
+  function saveItem() {
+    if (!tempTitle.trim()) return;
+    const type = activeTab === 'url' ? 'url' : 'custom';
+    
+    if (editorMode === 'create') {
+      widgetLibrary.addTemplate({ type, title: tempTitle, source: tempSource });
+    } else {
+      widgetLibrary.updateTemplate(editingId, { title: tempTitle, source: tempSource });
+    }
+    
+    editorMode = 'list';
+  }
+
+  function instantiate(item) {
+    widgets.addWidget({ 
+      type: item.type, 
+      source: item.source, 
+      title: item.title, 
+      w: item.type === 'url' ? 350 : 300, 
+      h: item.type === 'url' ? 280 : 250 
+    });
+  }
+
+  function removeTemplate(id) {
+    if (confirm('Are you sure you want to delete this widget template?')) {
+      widgetLibrary.removeTemplate(id);
+    }
+  }
+
+  const filteredLibrary = $derived($widgetLibrary.filter(i => i.type === (activeTab === 'url' ? 'url' : 'custom')));
 </script>
 
 <div class="widget-store">
@@ -47,279 +87,166 @@
   </div>
 
   <div class="tabs">
-    <button class:active={activeTab === 'presets'} onclick={() => activeTab = 'presets'}>Presets</button>
-    <button class:active={activeTab === 'system'} onclick={() => activeTab = 'system'}>
+    <button class:active={activeTab === 'presets'} onclick={() => {activeTab = 'presets'; editorMode = 'list'}}>Presets</button>
+    <button class:active={activeTab === 'system'} onclick={() => {activeTab = 'system'; editorMode = 'list'}}>
       System <span class="badge">Live</span>
     </button>
-    <button class:active={activeTab === 'url'} onclick={() => activeTab = 'url'}>URL</button>
-    <button class:active={activeTab === 'custom'} onclick={() => activeTab = 'custom'}>Custom Code</button>
+    <button class:active={activeTab === 'url'} onclick={() => {activeTab = 'url'; editorMode = 'list'}}>URL</button>
+    <button class:active={activeTab === 'custom'} onclick={() => {activeTab = 'custom'; editorMode = 'list'}}>Code</button>
   </div>
 
   <div class="tab-content">
     {#if activeTab === 'presets'}
       <div class="preset-grid">
-        {#each presets as preset}
-          <div class="preset-card">
-            <div class="card-icon">
-              <svelte:component this={preset.icon} size={28} color="var(--accent-blue)" />
-            </div>
-            <div class="card-info">
-              <span class="card-title">{preset.title}</span>
-              <span class="card-desc">{preset.desc}</span>
-            </div>
-            <button class="add-btn" onclick={() => addPreset(preset)}>
-              <Plus size={14} /> Add
-            </button>
+        {#each presets as p}
+          <div class="card">
+            <div class="icon-box"><svelte:component this={p.icon} size={24} color="var(--accent-blue)" /></div>
+            <div class="info"><span class="title">{p.title}</span><span class="desc">{p.desc}</span></div>
+            <button class="add-btn" onclick={() => addPreset(p)}><Plus size={14} /> Add</button>
           </div>
         {/each}
       </div>
 
     {:else if activeTab === 'system'}
-      <p class="section-desc">Live data polled from the OS backend every 3 seconds.</p>
       <div class="preset-grid">
-        {#each systemWidgets as sw}
-          <div class="preset-card system-card">
-            <div class="card-icon sys">
-              <svelte:component this={sw.icon} size={24} color="#34d399" />
-            </div>
-            <div class="card-info">
-              <span class="card-title">{sw.title}</span>
-              <span class="card-desc">{sw.desc}</span>
-            </div>
-            <button class="add-btn sys-btn" onclick={() => addSystemWidget(sw)}>
-              <Plus size={14} /> Add
-            </button>
+        {#each systemWidgets as s}
+          <div class="card sys-card">
+            <div class="icon-box sys"><svelte:component this={s.icon} size={20} color="#34d399" /></div>
+            <div class="info"><span class="title">{s.title}</span><span class="desc">{s.desc}</span></div>
+            <button class="add-btn sys-btn" onclick={() => addSystemWidget(s)}><Plus size={14} /> Add</button>
           </div>
         {/each}
       </div>
 
-    {:else if activeTab === 'url'}
-      <div class="form-section">
-        <label>Widget Title</label>
-        <input type="text" bind:value={urlTitle} placeholder="e.g. Weather" />
-        <label>URL</label>
-        <input type="text" bind:value={urlInput} placeholder="https://example.com" />
-        <button class="submit-btn" onclick={addUrlWidget}>
-          <Globe size={14} /> Add URL Widget
-        </button>
-        <p class="hint">Enter any webpage URL. It will be embedded as an iframe widget on your desktop.</p>
+    {:else if editorMode === 'list'}
+      <button class="create-hero-btn" onclick={openCreate}>
+        <Plus size={18} /> <span>Create New {activeTab === 'url' ? 'URL' : 'Custom'} Widget</span>
+      </button>
+
+      <div class="lib-grid">
+        {#each filteredLibrary as item}
+          <div class="card lib-card">
+            <div class="icon-box lib">
+              {#if item.type === 'url'}<Globe size={20} />{:else}<Code size={20} />{/if}
+            </div>
+            <div class="info">
+              <span class="title">{item.title}</span>
+              <span class="desc">{item.type === 'url' ? item.source : 'Custom Script'}</span>
+            </div>
+            <div class="actions">
+              <button class="icon-action" onclick={() => instantiate(item)} title="Add to Desktop"><Plus size={16} /></button>
+              <button class="icon-action" onclick={() => openEdit(item)} title="Edit"><Edit3 size={16} /></button>
+              <button class="icon-action del" onclick={() => removeTemplate(item.id)} title="Delete"><Trash2 size={16} /></button>
+            </div>
+          </div>
+        {/each}
+        {#if filteredLibrary.length === 0}
+          <div class="empty-state">No saved widgets yet.</div>
+        {/if}
       </div>
 
-    {:else if activeTab === 'custom'}
-      <div class="form-section">
-        <label>Widget Title</label>
-        <input type="text" bind:value={customTitle} placeholder="My Widget" />
-        <label>HTML / CSS / JS</label>
-        <textarea bind:value={customCode} rows="12" spellcheck="false"></textarea>
-        <button class="submit-btn" onclick={addCustomWidget}>
-          <Code size={14} /> Add Custom Widget
+    {:else}
+      <div class="editor-view">
+        <div class="editor-header">
+          <button class="back-btn" onclick={() => editorMode = 'list'}><ArrowLeft size={16} /></button>
+          <h3>{editorMode === 'create' ? 'New' : 'Edit'} Widget</h3>
+        </div>
+        
+        <div class="form-group">
+          <label>Widget Title</label>
+          <input type="text" bind:value={tempTitle} placeholder="e.g. My Website" />
+        </div>
+
+        <div class="form-group">
+          <label>{activeTab === 'url' ? 'URL' : 'HTML / JS Content'}</label>
+          {#if activeTab === 'url'}
+            <input type="text" bind:value={tempSource} placeholder="https://example.com" />
+          {:else}
+            <textarea bind:value={tempSource} rows="10" spellcheck="false"></textarea>
+          {/if}
+        </div>
+
+        <button class="save-btn" onclick={saveItem}>
+          <Save size={14} /> {editorMode === 'create' ? 'Create Widget' : 'Save Changes'}
         </button>
-        <p class="hint">Write raw HTML/CSS/JS. It runs sandboxed inside an iframe on your desktop.</p>
       </div>
     {/if}
   </div>
 
-  <!-- Active Widgets List -->
-  <div class="active-section">
-    <h3>Active Widgets ({$widgets.length})</h3>
-    <div class="active-list">
-      {#each $widgets as w (w.id)}
-        <div class="active-item">
-          <span class="a-type" class:sys={w.type === 'system'}>{w.type}</span>
-          <span class="a-title">{w.title}</span>
-          <button class="a-remove" onclick={() => widgets.removeWidget(w.id)}>
-            <Trash2 size={12} />
-          </button>
-        </div>
-      {/each}
+  <div class="active-footer">
+    <div class="footer-info">
+      <span>Active on Desktop: <strong>{$widgets.length}</strong></span>
     </div>
   </div>
 </div>
 
 <style>
-  .widget-store {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    color: var(--text-main);
-    overflow: hidden;
-  }
+  .widget-store { height: 100%; display: flex; flex-direction: column; color: var(--text-main); background: rgba(0,0,0,0.2); }
+  .store-header { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--glass-border); }
+  .store-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
 
-  .store-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--glass-border);
-    background: rgba(0,0,0,0.2);
-  }
-  .store-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .tabs { display: flex; background: rgba(0,0,0,0.1); border-bottom: 1px solid var(--glass-border); }
+  .tabs button { flex: 1; padding: 10px 4px; background: none; border: none; color: var(--text-dim); font-size: 11px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; }
+  .tabs button.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); background: rgba(255,255,255,0.03); }
+  .badge { background: rgba(52, 211, 153, 0.2); color: #34d399; font-size: 9px; padding: 1px 4px; border-radius: 10px; margin-left: 4px; }
 
-  .tabs {
-    display: flex;
-    border-bottom: 1px solid var(--glass-border);
-    background: rgba(0,0,0,0.1);
-  }
-  .tabs button {
-    flex: 1;
-    padding: 10px 6px;
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-  }
-  .tabs button:hover { color: white; background: rgba(255,255,255,0.03); }
-  .tabs button.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
-
-  .badge {
-    background: rgba(52, 211, 153, 0.2);
-    color: #34d399;
-    font-size: 9px;
-    padding: 1px 5px;
-    border-radius: 10px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-  }
-
-  .tab-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .section-desc { font-size: 11px; color: var(--text-dim); margin: 0; line-height: 1.5; }
+  .tab-content { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 
   /* Cards */
-  .preset-grid { display: flex; flex-direction: column; gap: 10px; }
-  .preset-card {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 10px;
-    transition: background 0.2s;
+  .preset-grid, .lib-grid { display: flex; flex-direction: column; gap: 8px; }
+  .card { 
+    display: flex; align-items: center; gap: 12px; padding: 12px; 
+    background: rgba(255,255,255,0.04); border: 1px solid var(--glass-border); border-radius: 10px; transition: all 0.2s;
   }
-  .preset-card:hover { background: rgba(255,255,255,0.06); }
-  .system-card { border-color: rgba(52, 211, 153, 0.1); }
-  .system-card:hover { background: rgba(52, 211, 153, 0.04); }
+  .card:hover { background: rgba(255,255,255,0.07); transform: translateX(2px); }
+  .icon-box { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: rgba(88,166,255,0.1); border-radius: 8px; flex-shrink: 0; }
+  .icon-box.sys { background: rgba(52, 211, 153, 0.1); }
+  .icon-box.lib { background: rgba(255,255,255,0.05); color: var(--text-dim); }
+  
+  .info { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .title { font-size: 13px; font-weight: 600; color: white; }
+  .desc { font-size: 10.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  .card-icon { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: rgba(88,166,255,0.1); border-radius: 10px; flex-shrink: 0; }
-  .card-icon.sys { background: rgba(52, 211, 153, 0.1); }
-  .card-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .card-title { font-size: 13px; font-weight: 600; }
-  .card-desc { font-size: 11px; color: var(--text-dim); }
-
-  .add-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 6px 12px;
-    background: rgba(88,166,255,0.15);
-    border: 1px solid rgba(88,166,255,0.3);
-    border-radius: 6px;
-    color: var(--accent-blue);
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    flex-shrink: 0;
-  }
+  .add-btn { padding: 6px 12px; background: rgba(88,166,255,0.15); border: 1px solid rgba(88,166,255,0.3); border-radius: 6px; color: var(--accent-blue); font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 5px; }
   .add-btn:hover { background: rgba(88,166,255,0.25); }
-  .sys-btn {
-    background: rgba(52,211,153,0.12);
-    border-color: rgba(52,211,153,0.3);
-    color: #34d399;
-  }
+  .sys-btn { background: rgba(52,211,153,0.12); border-color: rgba(52,211,153,0.3); color: #34d399; }
   .sys-btn:hover { background: rgba(52,211,153,0.22); }
 
-  /* Forms */
-  .form-section { display: flex; flex-direction: column; gap: 10px; }
-  .form-section label { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
-  .form-section input, .form-section textarea {
-    background: rgba(0,0,0,0.3);
-    border: 1px solid var(--glass-border);
-    border-radius: 6px;
-    color: white;
-    padding: 10px 12px;
-    font-size: 13px;
-    outline: none;
-    font-family: inherit;
-    transition: border-color 0.2s;
-  }
-  .form-section input:focus, .form-section textarea:focus { border-color: var(--accent-blue); }
-  .form-section textarea { font-family: monospace; font-size: 12px; resize: vertical; min-height: 120px; }
-  .submit-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 10px;
-    background: var(--accent-blue);
-    border: none;
-    border-radius: 6px;
-    color: white;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: filter 0.2s;
-  }
-  .submit-btn:hover { filter: brightness(1.15); }
-  .hint { font-size: 11px; color: var(--text-dim); margin: 0; line-height: 1.4; }
+  /* Library Actions */
+  .actions { display: flex; gap: 4px; }
+  .icon-action { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-dim); cursor: pointer; transition: all 0.2s; }
+  .icon-action:hover { color: white; background: rgba(255,255,255,0.1); border-color: var(--accent-blue); }
+  .icon-action.del:hover { color: #ff5858; border-color: #ff585844; }
 
-  /* Active Widgets */
-  .active-section {
-    border-top: 1px solid var(--glass-border);
-    padding: 12px 16px;
-    background: rgba(0,0,0,0.15);
-    max-height: 180px;
-    overflow-y: auto;
+  .create-hero-btn { 
+    width: 100%; padding: 12px; background: rgba(88,166,255,0.08); border: 1px dashed rgba(88,166,255,0.3); 
+    border-radius: 10px; color: var(--accent-blue); font-weight: 600; font-size: 12px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px; transition: all 0.2s;
   }
-  .active-section h3 { font-size: 12px; margin: 0 0 10px 0; color: var(--text-dim); }
-  .active-list { display: flex; flex-direction: column; gap: 6px; }
-  .active-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    background: rgba(255,255,255,0.03);
-    border-radius: 6px;
-    font-size: 12px;
+  .create-hero-btn:hover { background: rgba(88,166,255,0.12); border-color: var(--accent-blue); }
+
+  /* Editor */
+  .editor-view { display: flex; flex-direction: column; gap: 16px; animation: fadeIn 0.2s ease-out; }
+  .editor-header { display: flex; align-items: center; gap: 12px; }
+  .editor-header h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--accent-blue); }
+  .back-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; padding: 4px; display: flex; border-radius: 4px; }
+  .back-btn:hover { background: rgba(255,255,255,0.05); color: white; }
+
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group label { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .form-group input, .form-group textarea { 
+    background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); border-radius: 8px; 
+    color: white; padding: 10px 12px; font-size: 13px; outline: none; transition: border-color 0.2s;
   }
-  .a-type {
-    background: rgba(88,166,255,0.15);
-    color: var(--accent-blue);
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-  }
-  .a-type.sys {
-    background: rgba(52,211,153,0.15);
-    color: #34d399;
-  }
-  .a-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .a-remove {
-    background: none;
-    border: none;
-    color: rgba(239,68,68,0.5);
-    cursor: pointer;
-    padding: 2px;
-    display: flex;
-    transition: color 0.2s;
-  }
-  .a-remove:hover { color: #ef4444; }
+  .form-group input:focus, .form-group textarea:focus { border-color: var(--accent-blue); }
+  .form-group textarea { font-family: monospace; font-size: 11.5px; line-height: 1.5; resize: vertical; }
+
+  .save-btn { width: 100%; padding: 12px; background: var(--accent-blue); color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: filter 0.2s; }
+  .save-btn:hover { filter: brightness(1.2); }
+
+  .empty-state { text-align: center; padding: 40px 0; color: var(--text-dim); font-size: 12px; opacity: 0.6; }
+
+  .active-footer { padding: 12px 20px; border-top: 1px solid var(--glass-border); background: rgba(0,0,0,0.15); font-size: 11px; color: var(--text-dim); }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 </style>
