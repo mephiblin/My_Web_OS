@@ -25,6 +25,7 @@
   import TransferUI from '../apps/transfer/TransferUI.svelte';
   import LogViewer from '../apps/log-viewer/LogViewer.svelte';
   import { systemSettings } from './stores/systemStore.js';
+  import { apiFetch } from '../utils/api.js';
 
   const iconMap = {
     Shield, Monitor, Files, TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send
@@ -49,10 +50,7 @@
   
   async function loadApps() {
     try {
-      const res = await fetch('/api/system/apps');
-      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-      
-      const data = await res.json();
+      const data = await apiFetch('/api/system/apps');
       if (!Array.isArray(data)) {
         console.error('Invalid apps data received:', data);
         return;
