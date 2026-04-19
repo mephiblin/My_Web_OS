@@ -186,10 +186,22 @@
         
         <div class="nav-overlay">
           {#if neighbors.prev}
-            <button class="nav-btn left" onclick={() => navigate(neighbors.prev)}><Play size={48} style="transform: rotate(180deg)" /></button>
+            <button 
+              class="nav-btn left" 
+              onclick={(e) => { e.stopPropagation(); navigate(neighbors.prev); }}
+              ondblclick={(e) => e.stopPropagation()}
+            >
+              <Play size={48} style="transform: rotate(180deg)" />
+            </button>
           {/if}
           {#if neighbors.next}
-            <button class="nav-btn right" onclick={() => navigate(neighbors.next)}><Play size={48} /></button>
+            <button 
+              class="nav-btn right" 
+              onclick={(e) => { e.stopPropagation(); navigate(neighbors.next); }}
+              ondblclick={(e) => e.stopPropagation()}
+            >
+              <Play size={48} />
+            </button>
           {/if}
         </div>
       </div>
