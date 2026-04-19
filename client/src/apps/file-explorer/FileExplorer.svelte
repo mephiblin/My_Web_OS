@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import { 
     Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
-    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box
+    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box, Lock, Unlock, ShieldAlert
   } from 'lucide-svelte';
+  import { notifications } from '../../core/stores/notificationStore.js';
   import { openWindow } from '../../core/stores/windowStore.js';
   import { openContextMenu } from '../../core/stores/contextMenuStore.js';
   import * as fsApi from './api.js';
@@ -15,6 +16,7 @@
   let selectedItem = $state(null);
   let viewMode = $state('grid');
   let inventoryPath = $state('');
+  let lockedFolders = $state(JSON.parse(localStorage.getItem('web_os_locked_folders') || '[]'));
 
   let sidebarLinks = $state([
     { id: 'home', label: 'Home', icon: Home, path: '/' },
@@ -46,9 +48,15 @@
     
     let itemsInfo = [];
     if (item) {
+      const isLocked = lockedFolders.includes(item.path);
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
         { label: 'Rename', icon: Pencil, action: () => handleRename(item) },
+        { 
+          label: isLocked ? 'Unlock Folder' : 'Secure Folder', 
+          icon: isLocked ? Unlock : Lock, 
+          action: () => toggleLockFolder(item) 
+        },
         { label: 'Delete', icon: Trash2, action: handleDelete, danger: true }
       ];
     } else {
@@ -77,8 +85,19 @@
     }
   }
 
-  function handleDblClick(item) {
+  async function handleDblClick(item) {
     if (item.isDirectory) {
+      if (lockedFolders.includes(item.path)) {
+        const password = prompt(`'${item.name}' is a Secure Folder. Enter Password:`);
+        if (password === '1234') { // Mock password
+          notifications.add({ title: 'Security', message: `Authorized access to ${item.name}`, type: 'success' });
+          fetchItems(item.path);
+        } else {
+          notifications.add({ title: 'Security', message: `Unauthorized access attempt to ${item.name}`, type: 'error' });
+          alert('Incorrect password!');
+        }
+        return;
+      }
       fetchItems(item.path);
     } else {
       const ext = item.name.split('.').pop()?.toLowerCase();
@@ -151,6 +170,15 @@
     } catch (err) {
       console.error(err);
     }
+  }
+
+  function toggleLockFolder(item) {
+    if (lockedFolders.includes(item.path)) {
+      lockedFolders = lockedFolders.filter(p => p !== item.path);
+    } else {
+      lockedFolders = [...lockedFolders, item.path];
+    }
+    localStorage.setItem('web_os_locked_folders', JSON.stringify(lockedFolders));
   }
 
   function handlePathKeydown(e) {
@@ -231,9 +259,16 @@
             >
               <div class="icon">
                 {#if item.isDirectory}
-                  <Folder size={48} color="var(--accent-blue)" fill="var(--accent-blue)" fill-opacity="0.2" />
+                  <div class="folder-wrapper">
+                    <Folder size={viewMode === 'list' ? 32 : 48} color="var(--accent-blue)" fill="var(--accent-blue)" fill-opacity="0.2" />
+                    {#if lockedFolders.includes(item.path)}
+                      <div class="lock-overlay" title="Secure Folder">
+                        <Lock size={viewMode === 'list' ? 10 : 14} color="white" />
+                      </div>
+                    {/if}
+                  </div>
                 {:else}
-                  <File size={48} color="var(--text-dim)" />
+                  <File size={viewMode === 'list' ? 32 : 48} color="var(--text-dim)" />
                 {/if}
               </div>
               <span class="name">{item.name}</span>
@@ -274,6 +309,20 @@
   .item:hover { background: rgba(255,255,255,0.05); }
   .item.selected { background: rgba(88, 166, 255, 0.2); border: 1px solid var(--accent-blue); }
   .icon { display: flex; align-items: center; justify-content: center; }
+  .folder-wrapper { position: relative; display: flex; align-items: center; justify-content: center; }
+  .lock-overlay { 
+    position: absolute; 
+    bottom: 2px; 
+    right: 2px; 
+    background: var(--accent-red); 
+    border-radius: 50%; 
+    padding: 3px; 
+    display: flex; 
+    align-items: center; 
+    justify-content: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    border: 1.5px solid #000;
+  }
   .name { font-size: 12px; text-align: center; word-break: break-all; max-width: 100%; border: none; background: transparent; color: inherit; outline: none; }
   .loading { display: flex; justify-content: center; align-items: center; height: 100%; color: var(--text-dim); }
 </style>

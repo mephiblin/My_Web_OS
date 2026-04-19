@@ -2,20 +2,21 @@
   import { onMount } from 'svelte';
   import { Play, Pause, Volume2, Maximize, Music, Video, Info, RefreshCw } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
-  import { activeWindowId } from '../../core/stores/windowStore.js';
+  import { activeWindowId, windows, updateWindowTitle } from '../../core/stores/windowStore.js';
   import { apiFetch } from '../../utils/api.js';
   import { API_BASE } from '../../utils/constants.js';
 
   let { data = {} } = $props();
   
-  // Use local state for the path to ensure reactivity during navigation
+  // Synchronized state for navigation
   let currentPath = $state(data.path || '');
+  let lastPropPath = $state(data.path || '');
   let mediaPath = $derived(currentPath);
   
   let isVideo = $derived(mediaPath.match(/\.(mp4|webm|mkv|mov|avi)$/i));
   let isAudio = $derived(mediaPath.match(/\.(mp3|wav|ogg|flac|m4a)$/i));
   let isImage = $derived(mediaPath.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i));
-
+ 
   let videoEl = $state(null);
   let audioEl = $state(null);
   let playing = $state(false);
@@ -37,6 +38,14 @@
     }
   });
 
+  // Automatically focus the player when it becomes the active window
+  $effect(() => {
+    if ($activeWindowId === 'player') {
+      const el = document.querySelector('.media-player-app');
+      if (el) el.focus();
+    }
+  });
+
   // Use relative URLs (proxied via Vite) with token auth
   let mediaUrl = $derived(mediaPath ? `/api/fs/raw?path=${encodeURIComponent(mediaPath)}&token=${localStorage.getItem('web_os_token')}` : '');
 
@@ -44,6 +53,9 @@
     if (!mediaPath) return;
     try {
       loadingMeta = true;
+      // Reset neighbors to ensure UI reflects loading state or current absence
+      neighbors = { prev: null, next: null };
+      
       const [info, subs, neighborData] = await Promise.all([
         apiFetch(`/api/media/info?path=${encodeURIComponent(mediaPath)}`),
         isVideo ? apiFetch(`/api/media/subtitles?path=${encodeURIComponent(mediaPath)}`) : Promise.resolve(null),
@@ -92,8 +104,10 @@
     } else if (isImage) {
       if (e.key === 'ArrowLeft' && neighbors.prev) {
         navigate(neighbors.prev);
+        e.preventDefault();
       } else if (e.key === 'ArrowRight' && neighbors.next) {
         navigate(neighbors.next);
+        e.preventDefault();
       }
     }
   }
@@ -101,6 +115,9 @@
   function navigate(path) {
     currentPath = path;
     zoomed = false;
+    // Keep focus after navigation
+    const el = document.querySelector('.media-player-app');
+    if (el) el.focus();
   }
 
   function togglePlay() {
@@ -134,6 +151,11 @@
 
   onMount(() => {
     window.addEventListener('keydown', handleKeydown);
+    // Initial focus request
+    setTimeout(() => {
+      const el = document.querySelector('.media-player-app');
+      if (el) el.focus();
+    }, 100);
     return () => window.removeEventListener('keydown', handleKeydown);
   });
 
@@ -141,11 +163,14 @@
     if (mediaPath && mediaPath !== lastFetchedPath) {
       lastFetchedPath = mediaPath;
       fetchMetadata();
+      // Synchronize window title
+      const fileName = mediaPath.split('/').pop();
+      updateWindowTitle('player', `Viewer - ${fileName}`);
     }
   });
 </script>
 
-<div class="media-player-app" oncontextmenu={(e) => e.preventDefault()}>
+<div class="media-player-app" oncontextmenu={(e) => e.preventDefault()} tabindex="-1">
   <div class="player-container glass-effect">
     {#if isVideo}
       <!-- svelte-ignore a11y_media_has_caption -->
@@ -176,7 +201,7 @@
         ></audio>
       </div>
     {:else if isImage}
-      <div class="image-viewer" ondblclick={() => zoomed = !zoomed}>
+      <div class="image-viewer" ontouchstart={() => zoomed = !zoomed} ondblclick={() => zoomed = !zoomed} tabindex="0">
         <img 
           src={mediaUrl} 
           alt={mediaPath} 
@@ -277,9 +302,10 @@
   .image-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
   .image-viewer img.zoomed { transform: scale(2); }
 
-  .nav-overlay { position: absolute; inset: 0; pointer-events: none; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; opacity: 0; transition: opacity 0.3s; }
+  .nav-overlay { position: absolute; inset: 0; pointer-events: none; display: grid; grid-template-columns: 100px 1fr 100px; align-items: center; padding: 0 20px; opacity: 0; transition: opacity 0.3s; z-index: 10; }
   .image-viewer:hover .nav-overlay { opacity: 1; }
   .nav-btn { pointer-events: auto; background: rgba(0,0,0,0.5); border: none; color: white; width: 64px; height: 64px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); transition: background 0.2s; }
+  .nav-btn.right { grid-column: 3; }
   .nav-btn:hover { background: var(--accent-blue); }
 
   .audio-visual { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; color: var(--accent-blue); }

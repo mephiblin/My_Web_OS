@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search } from 'lucide-svelte';
+  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send } from 'lucide-svelte';
   import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize } from './stores/windowStore.js';
   import { contextMenu, closeContextMenu } from './stores/contextMenuStore.js';
   import { desktops, currentDesktopId, switchDesktop } from './stores/desktopStore.js';
@@ -19,6 +19,11 @@
   import ModelViewer from '../apps/model-viewer/ModelViewer.svelte';
   import Spotlight from './Spotlight.svelte';
   import { openSpotlight, toggleSpotlight } from './stores/spotlightStore.js';
+  import Taskbar from './components/Taskbar.svelte';
+  import NotificationCenter from './components/NotificationCenter.svelte';
+  import ControlPanel from '../apps/control-panel/ControlPanel.svelte';
+  import TransferUI from '../apps/transfer/TransferUI.svelte';
+  import { systemSettings } from './stores/systemStore.js';
 
   const components = {
     files: FileExplorer,
@@ -27,6 +32,8 @@
     editor: CodeEditor,
     docker: DockerManager,
     settings: SettingsApp,
+    'control-panel': ControlPanel,
+    transfer: TransferUI,
     player: MediaPlayer,
     'doc-viewer': DocumentViewer,
     'model-viewer': ModelViewer
@@ -37,11 +44,14 @@
     { id: 'terminal', title: 'Terminal', icon: TerminalIcon },
     { id: 'monitor', title: 'Resource Monitor', icon: Monitor },
     { id: 'docker', title: 'Docker', icon: Container },
-    { id: 'settings', title: 'Settings', icon: Settings },
+    { id: 'control-panel', title: 'Settings', icon: Settings },
+    { id: 'transfer', title: 'Transfer', icon: Send },
     { id: 'player', title: 'Media', icon: Video }
   ];
 
   let time = $state('');
+  let isNotificationCenterOpen = $state(false);
+
   function updateTime() {
     const now = new Date();
     time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -55,8 +65,14 @@
 
   function handleKeydown(e) {
     // ESC: close active window
-    if (e.key === 'Escape' && $activeWindowId) {
-      closeWindow($activeWindowId);
+    if (e.key === 'Escape') {
+      if (isNotificationCenterOpen) {
+        isNotificationCenterOpen = false;
+        return;
+      }
+      if ($activeWindowId) {
+        closeWindow($activeWindowId);
+      }
     }
     // Delete: close active window
     if (e.key === 'Delete' && $activeWindowId) {
@@ -71,12 +87,22 @@
 
   // Filter windows by current desktop
   const visibleWindows = $derived($windows.filter(w => w.desktopId === $currentDesktopId));
+
+  $effect(() => {
+    // Apply initial settings to document root
+    if (typeof document !== 'undefined') {
+      const s = $systemSettings;
+      document.documentElement.style.setProperty('--glass-blur', `${s.blurIntensity}px`);
+      document.documentElement.style.setProperty('--glass-opacity', s.transparency);
+      document.documentElement.style.setProperty('--accent-blue', s.accentColor);
+    }
+  });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="desktop">
-  <div class="wallpaper"></div>
+  <div class="wallpaper" style="background: {$systemSettings.wallpaper}"></div>
 
   <div class="app-grid">
     {#each apps as app}
@@ -119,50 +145,14 @@
   {/if}
 
   <Spotlight />
+  <NotificationCenter bind:isOpen={isNotificationCenterOpen} />
 
-  <div class="taskbar glass-effect svelte-fo09mr">
-    <div class="start-menu-btn">
-      <Shield size={20} />
-    </div>
-
-    <div class="desktop-switcher">
-      <span class="desktop-num">{$currentDesktopId}</span>
-      {#each $desktops as desktop}
-        <button 
-          class="desktop-btn {$currentDesktopId === desktop.id ? 'active' : ''}"
-          onclick={() => switchDesktop(desktop.id)}
-          title={desktop.name}
-        >
-        </button>
-      {/each}
-    </div>
-
-    <div class="taskbar-search" onclick={openSpotlight}>
-      <Search size={14} />
-      <span>Search...</span>
-    </div>
-
-    <div class="active-apps">
-      {#each visibleWindows as win}
-        <button
-          class="task-item {$activeWindowId === win.id && !win.minimized ? 'active' : ''}"
-          onclick={() => {
-            if ($activeWindowId === win.id && !win.minimized) {
-              toggleMinimize(win.id);
-            } else {
-              focusWindow(win.id);
-            }
-          }}
-        >
-          <svelte:component this={win.icon} size={18} />
-        </button>
-      {/each}
-    </div>
-
-    <div class="system-tray">
-      <span class="time">{time}</span>
-    </div>
-  </div>
+  <Taskbar 
+    {time} 
+    isNotificationCenterOpen={isNotificationCenterOpen}
+    onToggleNotifications={() => isNotificationCenterOpen = !isNotificationCenterOpen}
+    onOpenSettings={() => openWindow({ id: 'control-panel', title: 'Settings', icon: Settings })}
+  />
 </div>
 
 <style>

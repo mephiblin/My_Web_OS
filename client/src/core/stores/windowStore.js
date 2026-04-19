@@ -60,3 +60,7 @@ export function toggleMaximize(id) {
 export function moveWindowToDesktop(windowId, desktopId) {
   windows.update(items => items.map(w => w.id === windowId ? { ...w, desktopId } : w));
 }
+
+export function updateWindowTitle(id, title) {
+  windows.update(items => items.map(w => w.id === id ? { ...w, title } : w));
+}
