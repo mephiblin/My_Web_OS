@@ -59,5 +59,8 @@ function initTerminalService(io) {
     });
   });
 }
+function getActiveSessions() {
+  return sessions;
+}
 
-module.exports = { initTerminalService };
+module.exports = { initTerminalService, getActiveSessions };

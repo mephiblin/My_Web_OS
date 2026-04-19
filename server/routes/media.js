@@ -1,11 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs').promises;
+const fsSync = require('fs');
+const auth = require('../middleware/auth');
+const pathGuard = require('../middleware/pathGuard');
 const mediaService = require('../services/mediaService');
 
 const THUMBNAIL_DIR = path.join(__dirname, '../storage/thumbnails');
-if (!fs.existsSync(THUMBNAIL_DIR)) fs.mkdirSync(THUMBNAIL_DIR, { recursive: true });
+if (!fsSync.existsSync(THUMBNAIL_DIR)) fsSync.mkdirSync(THUMBNAIL_DIR, { recursive: true });
+
+// Auth required for all media routes
+router.use(auth);
 
 // Get media metadata
 router.get('/info', async (req, res) => {
@@ -16,7 +22,7 @@ router.get('/info', async (req, res) => {
     const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(filePath);
     
     if (isImage) {
-      const stats = fs.statSync(filePath);
+      const stats = await fs.stat(filePath);
       return res.json({
         filename: path.basename(filePath),
         size: stats.size,
@@ -53,9 +59,8 @@ router.get('/subtitles', async (req, res) => {
   try {
     const dir = path.dirname(filePath);
     const fileName = path.basename(filePath, path.extname(filePath));
-    const files = fs.readdirSync(dir);
+    const files = await fs.readdir(dir);
     
-    // Search for .vtt or .srt with same name
     const subFile = files.find(f => {
       const ext = path.extname(f).toLowerCase();
       return (ext === '.vtt' || ext === '.srt') && path.basename(f, ext) === fileName;
@@ -73,12 +78,12 @@ router.get('/subtitles', async (req, res) => {
 
 // Get neighboring files for navigation (previous/next)
 router.get('/neighbors', async (req, res) => {
-  const { path: filePath, type } = req.query; // type: 'image' or 'media'
+  const { path: filePath, type } = req.query;
   if (!filePath) return res.status(400).json({ error: 'Path is required' });
 
   try {
     const dir = path.dirname(filePath);
-    const files = fs.readdirSync(dir);
+    const files = await fs.readdir(dir);
     
     let filtered;
     if (type === 'image') {
@@ -100,3 +105,4 @@ router.get('/neighbors', async (req, res) => {
 });
 
 module.exports = router;
+

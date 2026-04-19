@@ -39,6 +39,7 @@ const dockerRouter = require('./routes/docker');
 const settingsRouter = require('./routes/settings');
 const cloudRouter = require('./routes/cloud');
 const mediaRouter = require('./routes/media');
+const logsRouter = require('./routes/logs');
 
 // Middleware
 // app.use(helmet());
@@ -47,9 +48,20 @@ app.use(express.json());
 
 // Request Logger for Debugging
 app.use((req, res, next) => {
-  console.log(`[REQ] ${req.method} ${req.url}`);
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`[REQ] ${req.method} ${req.url} - ${res.statusCode} (${duration}ms)`);
+  });
   next();
 });
+
+// Rate Limiting (must be BEFORE routes to take effect)
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, 
+  max: 10000
+});
+app.use('/api/', limiter);
 
 // Routes
 app.use('/api/fs', fsRouter);
@@ -59,24 +71,13 @@ app.use('/api/docker', dockerRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/cloud', cloudRouter);
 app.use('/api/media', mediaRouter);
+app.use('/api/logs', logsRouter);
 
 // Static files for Inventory
 app.use('/api/inventory-files', express.static(path.join(__dirname, 'storage/inventory')));
 
-
-
-
-// Rate Limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use('/api/', limiter);
-
 // Basic Route
-app.get('/health', async (req, res) => {
-  const auditService = require('./services/auditService');
-  await auditService.log('SYSTEM', 'HEALTH_CHECK', { uptime: process.uptime() });
+app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
@@ -101,12 +102,21 @@ async function shutdown() {
   // Stop background services
   await indexService.close();
   
+  // Kill all terminal sessions
+  const { getActiveSessions } = require('./services/terminal');
+  if (getActiveSessions) {
+    const sessions = getActiveSessions();
+    for (const [id, pty] of sessions) {
+      pty.kill();
+      console.log(`[TERMINAL] Killed session ${id}`);
+    }
+  }
+  
   server.close(() => {
     console.log('[SERVER] Closed');
     process.exit(0);
   });
 
-  // Force close after 5s
   setTimeout(() => {
     console.error('[SERVER] Could not close in time, forcing shutdown');
     process.exit(1);

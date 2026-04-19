@@ -23,6 +23,7 @@
   import NotificationCenter from './components/NotificationCenter.svelte';
   import ControlPanel from '../apps/control-panel/ControlPanel.svelte';
   import TransferUI from '../apps/transfer/TransferUI.svelte';
+  import LogViewer from '../apps/log-viewer/LogViewer.svelte';
   import { systemSettings } from './stores/systemStore.js';
 
   const iconMap = {
@@ -40,7 +41,8 @@
     transfer: TransferUI,
     player: MediaPlayer,
     'doc-viewer': DocumentViewer,
-    'model-viewer': ModelViewer
+    'model-viewer': ModelViewer,
+    logs: LogViewer
   };
 
   let apps = $state([]);

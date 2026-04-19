@@ -35,11 +35,15 @@ async function writeEnv(envObj) {
   await fs.writeFile(ENV_PATH, lines.join('\n'));
 }
 
+const SENSITIVE_KEYS = ['JWT_SECRET', 'ADMIN_PASSWORD'];
+
 router.get('/', auth, async (req, res) => {
   try {
     const env = await readEnv();
-    // In a real prod setup we'd maybe strip JWT_SECRET, but OS admin has full rights.
-    res.json({ success: true, settings: env });
+    // Security: Strip sensitive keys from response
+    const safe = { ...env };
+    SENSITIVE_KEYS.forEach(k => { if (safe[k]) safe[k] = '********'; });
+    res.json({ success: true, settings: safe });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

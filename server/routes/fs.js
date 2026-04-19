@@ -8,6 +8,9 @@ const auditService = require('../services/auditService');
 const indexService = require('../services/indexService');
 const trashService = require('../services/trashService');
 
+// Auth required for ALL fs routes
+router.use(auth);
+
 /**
  * GET /api/fs/search
  * Global file search
@@ -39,7 +42,7 @@ router.post('/restore', async (req, res) => {
   const { id } = req.body;
   try {
     await trashService.restore(id);
-    auditService.log(req.user?.username || 'system', 'FS_RESTORE', { id });
+    auditService.log('FS', 'FS_RESTORE', { id, user: req.user?.username });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -52,15 +55,12 @@ router.post('/restore', async (req, res) => {
 router.delete('/empty-trash', async (req, res) => {
   try {
     await trashService.emptyTrash();
-    auditService.log(req.user?.username || 'system', 'FS_EMPTY_TRASH', {});
+    auditService.log('FS', 'FS_EMPTY_TRASH', { user: req.user?.username });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
   }
 });
-
-// Auth required for all fs routes
-router.use(auth);
 
 /**
  * Routes that do NOT require pathGuard (no user-supplied path)
@@ -239,7 +239,17 @@ router.put('/rename', async (req, res) => {
     if (!oldPath || !newName) {
       return res.status(400).json({ error: true, message: 'oldPath and newName are required.' });
     }
+    // Security: Validate oldPath against ALLOWED_ROOTS (same logic as pathGuard)
     const resolvedOld = path.resolve(oldPath);
+    const ALLOWED_ROOTS = JSON.parse(process.env.ALLOWED_ROOTS || '[]');
+    const isAllowed = ALLOWED_ROOTS.some(root => resolvedOld.startsWith(path.resolve(root)));
+    if (!isAllowed) {
+      return res.status(403).json({ error: true, code: 'FS_PERMISSION_DENIED', message: 'Access to this path is restricted.' });
+    }
+    // Security: Prevent path traversal in newName
+    if (newName.includes('/') || newName.includes('..')) {
+      return res.status(400).json({ error: true, message: 'Invalid file name.' });
+    }
     const newPath = path.join(path.dirname(resolvedOld), newName);
     await fs.rename(resolvedOld, newPath);
     await auditService.log('FS', 'RENAME', { oldPath: resolvedOld, newPath, user: req.user?.username });

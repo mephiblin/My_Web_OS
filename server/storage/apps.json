@@ -33,5 +33,10 @@
     "id": "player",
     "title": "Media",
     "icon": "Video"
+  },
+  {
+    "id": "logs",
+    "title": "Log Viewer",
+    "icon": "Shield"
   }
 ]

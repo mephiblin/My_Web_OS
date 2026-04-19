@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const auth = require('../middleware/auth');
 const cloudService = require('../services/cloudService');
 
+router.use(auth);
 // Get available cloud providers
 router.get('/providers', async (req, res) => {
   const providers = await cloudService.listProviders();

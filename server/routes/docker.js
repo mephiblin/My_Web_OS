@@ -5,6 +5,14 @@ const auth = require('../middleware/auth');
 
 router.use(auth);
 
+// Security: Sanitize container IDs to prevent command injection
+function sanitizeId(id) {
+  if (!id || typeof id !== 'string') return null;
+  // Docker container IDs/names: alphanumeric, hyphens, underscores, dots only
+  if (!/^[a-zA-Z0-9_.\-]+$/.test(id)) return null;
+  return id;
+}
+
 function runCmd(cmd) {
   return new Promise((resolve, reject) => {
     exec(cmd, (err, stdout, stderr) => {
@@ -16,7 +24,6 @@ function runCmd(cmd) {
 
 /**
  * GET /api/docker/containers
- * List all containers (running + stopped)
  */
 router.get('/containers', async (req, res) => {
   try {
@@ -36,7 +43,8 @@ router.get('/containers', async (req, res) => {
  */
 router.post('/start', async (req, res) => {
   try {
-    const { id } = req.body;
+    const id = sanitizeId(req.body.id);
+    if (!id) return res.status(400).json({ error: true, message: 'Invalid container ID.' });
     await runCmd(`docker start ${id}`);
     res.json({ success: true, message: `Container ${id} started.` });
   } catch (err) {
@@ -49,7 +57,8 @@ router.post('/start', async (req, res) => {
  */
 router.post('/stop', async (req, res) => {
   try {
-    const { id } = req.body;
+    const id = sanitizeId(req.body.id);
+    if (!id) return res.status(400).json({ error: true, message: 'Invalid container ID.' });
     await runCmd(`docker stop ${id}`);
     res.json({ success: true, message: `Container ${id} stopped.` });
   } catch (err) {
@@ -62,7 +71,8 @@ router.post('/stop', async (req, res) => {
  */
 router.post('/restart', async (req, res) => {
   try {
-    const { id } = req.body;
+    const id = sanitizeId(req.body.id);
+    if (!id) return res.status(400).json({ error: true, message: 'Invalid container ID.' });
     await runCmd(`docker restart ${id}`);
     res.json({ success: true, message: `Container ${id} restarted.` });
   } catch (err) {
@@ -75,7 +85,8 @@ router.post('/restart', async (req, res) => {
  */
 router.delete('/remove', async (req, res) => {
   try {
-    const { id } = req.body;
+    const id = sanitizeId(req.body.id);
+    if (!id) return res.status(400).json({ error: true, message: 'Invalid container ID.' });
     await runCmd(`docker rm -f ${id}`);
     res.json({ success: true, message: `Container ${id} removed.` });
   } catch (err) {

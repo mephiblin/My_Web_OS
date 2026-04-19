@@ -12,16 +12,32 @@ if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
 if (!fs.existsSync(DATA_PATH)) fs.mkdirSync(DATA_PATH, { recursive: true });
 
 /**
+ * Sanitize rclone remote name (alphanumeric, hyphens, underscores only)
+ */
+function sanitizeRemoteName(name) {
+  if (!name || typeof name !== 'string') return null;
+  if (!/^[a-zA-Z0-9_\-]+$/.test(name)) return null;
+  return name;
+}
+
+/**
+ * Sanitize remote path (reject shell metacharacters)
+ */
+function sanitizePath(p) {
+  if (!p || typeof p !== 'string') return '';
+  // Block dangerous shell characters
+  if (/[;|&$`\\!><]/.test(p)) return null;
+  return p;
+}
+
+/**
  * Executes an rclone command and returns the output.
  */
 function runRclone(args) {
   return new Promise((resolve, reject) => {
-    // Note: In a real production environment, we should verify the rclone binary exists.
-    // Here we include the config path for every command.
     const command = `rclone --config ${CONFIG_PATH} ${args}`;
     exec(command, (error, stdout, stderr) => {
       if (error) {
-        // If binary is missing, provide a helpful mock/error message for development
         if (error.code === 127) {
           return resolve({ success: false, error: 'rclone binary not found. Please install rclone.' });
         }
@@ -75,8 +91,12 @@ const cloudService = {
    * List entries in a remote path.
    */
   async listEntries(remote, remotePath = '') {
+    const safeRemote = sanitizeRemoteName(remote);
+    if (!safeRemote) throw new Error('Invalid remote name');
+    const safePath = sanitizePath(remotePath);
+    if (safePath === null) throw new Error('Invalid path characters');
     try {
-      const result = await runRclone(`lsjson "${remote}:${remotePath}"`);
+      const result = await runRclone(`lsjson "${safeRemote}:${safePath}"`);
       if (!result.success) throw new Error(result.stderr);
       
       const entries = JSON.parse(result.stdout);
@@ -89,7 +109,7 @@ const cloudService = {
         mimeType: item.MimeType
       }));
     } catch (err) {
-      console.error(`[CLOUD] List entries failed for ${remote}:`, err);
+      console.error(`[CLOUD] List entries failed for ${safeRemote}:`, err);
       throw err;
     }
   },
@@ -98,12 +118,16 @@ const cloudService = {
    * Get file content from a remote.
    */
   async getFileContent(remote, remotePath) {
+    const safeRemote = sanitizeRemoteName(remote);
+    if (!safeRemote) throw new Error('Invalid remote name');
+    const safePath = sanitizePath(remotePath);
+    if (safePath === null) throw new Error('Invalid path characters');
     try {
-      const result = await runRclone(`cat "${remote}:${remotePath}"`);
+      const result = await runRclone(`cat "${safeRemote}:${safePath}"`);
       if (!result.success) throw new Error(result.stderr);
       return result.stdout;
     } catch (err) {
-      console.error(`[CLOUD] Cat failed for ${remote}:${remotePath}:`, err);
+      console.error(`[CLOUD] Cat failed for ${safeRemote}:${safePath}:`, err);
       throw err;
     }
   },

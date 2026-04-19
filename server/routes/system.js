@@ -3,8 +3,10 @@ const router = express.Router();
 const si = require('systeminformation');
 const fs = require('fs-extra');
 const path = require('path');
+const auth = require('../middleware/auth');
 const storageService = require('../services/storageService');
 
+router.use(auth);
 /**
  * GET /api/system/overview
  * Get quick overview of system status
