@@ -10,9 +10,13 @@
 
   let status = $state({ cpu: 0, cpuTemp: { main: null, max: null }, memory: { total: 0, used: 0, percentage: 0 }, storage: [], os: {}, gpu: [], network: [] });
   let cpuHistory = $state(Array(30).fill(0));
+  let rxHistory = $state(Array(30).fill(0));
+  let txHistory = $state(Array(30).fill(0));
   let labels = $state(Array(30).fill(''));
   let activeTab = $state('overview');
   let ips = $state({ local: '...', external: '...' });
+  let processes = $state([]);
+  let connections = $state([]);
   let refreshingIps = $state(false);
   let interval;
 
@@ -24,6 +28,7 @@
     { id: 'storage', label: 'Storage' },
     { id: 'network', label: 'Network' },
     { id: 'gpu', label: 'GPU' },
+    { id: 'processes', label: 'Processes' },
   ];
 
   let storageDiagnostics = $state([]);
@@ -36,6 +41,11 @@
         status = data;
         cpuHistory = [...cpuHistory.slice(1), parseFloat(data.cpu)];
         labels = [...labels.slice(1), ''];
+
+        const rx = data.network.reduce((sum, n) => sum + (n.rx_sec || 0), 0) / 1024 / 1024;
+        const tx = data.network.reduce((sum, n) => sum + (n.tx_sec || 0), 0) / 1024 / 1024;
+        rxHistory = [...rxHistory.slice(1), rx];
+        txHistory = [...txHistory.slice(1), tx];
       }
     } catch (err) {
       console.error(err);
@@ -55,7 +65,6 @@
   }
 
   async function fetchIps() {
-// ... existing fetchIps ...
     refreshingIps = true;
     try {
       const data = await apiFetch('/api/system/network-ips');
@@ -67,11 +76,37 @@
     }
   }
 
+  async function fetchProcesses() {
+    if (activeTab !== 'processes') return;
+    try {
+      const data = await apiFetch('/api/system/processes');
+      if (!data.error) processes = data;
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function fetchConnections() {
+    if (activeTab !== 'network') return;
+    try {
+      const data = await apiFetch('/api/system/network/connections');
+      if (!data.error && Array.isArray(data)) {
+         connections = data.sort((a, b) => (a.state || '').localeCompare(b.state || ''));
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
   onMount(() => {
     fetchStats();
     fetchIps();
     fetchDiagnostics();
-    interval = setInterval(fetchStats, 1000);
+    interval = setInterval(() => {
+      fetchStats();
+      fetchProcesses();
+      fetchConnections();
+    }, 1000);
   });
 
   onDestroy(() => { clearInterval(interval); });
@@ -83,6 +118,22 @@
       backgroundColor: 'rgba(88, 166, 255, 0.1)', borderColor: '#58a6ff',
       pointRadius: 0, pointHitRadius: 10, data: cpuHistory,
     }],
+  });
+
+  let networkChartData = $derived({
+    labels: labels,
+    datasets: [
+      {
+        label: 'RX (MB/s)', fill: true, lineTension: 0.4,
+        backgroundColor: 'rgba(46, 160, 67, 0.1)', borderColor: '#7ee787',
+        pointRadius: 0, pointHitRadius: 10, data: rxHistory,
+      },
+      {
+        label: 'TX (MB/s)', fill: true, lineTension: 0.4,
+        backgroundColor: 'rgba(88, 166, 255, 0.1)', borderColor: '#58a6ff',
+        pointRadius: 0, pointHitRadius: 10, data: txHistory,
+      }
+    ],
   });
 
   let chartOptions = {
@@ -292,6 +343,9 @@
     {:else if activeTab === 'network'}
       <div class="section-title">Network Traffic</div>
       <div class="card glass-effect" style="margin-bottom: 16px;">
+        <div class="chart-area" style="height: 160px; margin-bottom: 12px;">
+          <Line data={networkChartData} options={chartOptions} />
+        </div>
         <div class="ip-info" style="border: none; padding: 0;">
           <div class="ip-row">
             <span class="label">Local IP:</span>
@@ -306,19 +360,36 @@
           </div>
         </div>
       </div>
-      {#each status.network as n}
-        {#if n.rx_sec > 0 || n.tx_sec > 0}
-          <div class="card glass-effect">
-            <div class="detail-row"><span class="drive-name">{n.iface}</span></div>
-            <div class="net-speeds">
-              <div class="speed-item down">↓ {(n.rx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
-              <div class="speed-item up">↑ {(n.tx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
-            </div>
-          </div>
-        {/if}
-      {:else}
-        <div class="card glass-effect"><div class="stats">No active traffic</div></div>
-      {/each}
+      
+      <div class="header-with-action" style="margin-top: 24px;">
+        <div class="section-title">Active Connections</div>
+      </div>
+      <div class="card glass-effect proc-card">
+        <table class="proc-table">
+          <thead>
+            <tr>
+              <th>Protocol</th>
+              <th>Local IP:Port</th>
+              <th>Remote IP:Port</th>
+              <th>State</th>
+              <th>PID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each connections as c}
+              <tr>
+                <td class="name">{c.protocol}</td>
+                <td class="user">{c.localAddress}:{c.localPort}</td>
+                <td class="user">{c.peerAddress}:{c.peerPort}</td>
+                <td class="user">{c.state || '-'}</td>
+                <td class="pid">{c.pid || '-'}</td>
+              </tr>
+            {:else}
+              <tr><td colspan="5" style="text-align: center; color: var(--text-dim); padding: 20px;">Fetching connections...</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
 
     {:else if activeTab === 'gpu'}
       <div class="section-title">GPU</div>
@@ -334,6 +405,38 @@
       {:else}
         <div class="card glass-effect"><div class="stats">No GPU detected</div></div>
       {/each}
+
+    {:else if activeTab === 'processes'}
+      <div class="header-with-action">
+        <div class="section-title">Running Processes</div>
+        <div class="stats">Top 50 by CPU</div>
+      </div>
+      <div class="card glass-effect proc-card">
+        <table class="proc-table">
+          <thead>
+            <tr>
+              <th>PID</th>
+              <th>Name</th>
+              <th>User</th>
+              <th class="num">CPU %</th>
+              <th class="num">Memory</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each processes as p}
+              <tr>
+                <td class="pid">{p.pid}</td>
+                <td class="name" title={p.command}>{p.name}</td>
+                <td class="user">{p.user || '-'}</td>
+                <td class="num {(p.cpu > 10) ? 'high' : ''}">{p.cpu.toFixed(1)}%</td>
+                <td class="num">{(p.memRss / 1024).toFixed(1)} MB</td>
+              </tr>
+            {:else}
+              <tr><td colspan="5" style="text-align: center; color: var(--text-dim); padding: 20px;">Fetching processes...</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {/if}
   </div>
 </div>
@@ -403,6 +506,17 @@
   .refresh-mini { background: transparent; border: none; color: var(--accent-blue); cursor: pointer; display: flex; align-items: center; padding: 2px; border-radius: 4px; }
   .refresh-mini:hover { background: rgba(255,255,255,0.1); }
   .refresh-mini:disabled { opacity: 0.5; cursor: not-allowed; }
+  
+  .proc-card { padding: 0; overflow: hidden; background: rgba(0,0,0,0.2); }
+  .proc-table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+  .proc-table th { background: rgba(255,255,255,0.05); padding: 10px 16px; font-weight: 600; color: var(--text-dim); position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--glass-border); }
+  .proc-table td { padding: 8px 16px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .proc-table tbody tr:hover { background: rgba(255,255,255,0.05); }
+  .proc-table .num { text-align: right; }
+  .proc-table .high { color: var(--accent-red); font-weight: 600; }
+  .proc-table .pid { color: var(--text-dim); font-family: monospace; }
+  .proc-table .name { font-weight: 500; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .proc-table .user { color: var(--text-dim); }
   
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   :global(.spin) { animation: spin 1s linear infinite; }

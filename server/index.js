@@ -14,10 +14,12 @@ dotenv.config();
 
 const indexService = require('./services/indexService');
 const trashService = require('./services/trashService');
+const shareService = require('./services/shareService');
 
 // Initialize Services
 indexService.init();
 trashService.init();
+shareService.init();
 
 const app = express();
 const server = http.createServer(app);
@@ -40,6 +42,7 @@ const settingsRouter = require('./routes/settings');
 const cloudRouter = require('./routes/cloud');
 const mediaRouter = require('./routes/media');
 const logsRouter = require('./routes/logs');
+const shareRouter = require('./routes/share');
 
 // Middleware
 // app.use(helmet());
@@ -72,6 +75,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/cloud', cloudRouter);
 app.use('/api/media', mediaRouter);
 app.use('/api/logs', logsRouter);
+app.use('/api/share', shareRouter);
 
 // Static files for Inventory
 app.use('/api/inventory-files', express.static(path.join(__dirname, 'storage/inventory')));

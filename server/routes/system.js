@@ -127,19 +127,6 @@ router.get('/apps', async (req, res) => {
   }
 });
 
-/**
- * GET /api/system/audit
- * Get recent audit logs
- */
-router.get('/audit', async (req, res) => {
-  try {
-    const auditService = require('../services/auditService');
-    const logs = await auditService.getLogs();
-    res.json(logs);
-  } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
-  }
-});
 
 /**
  * GET /api/system/storage/diagnostics
@@ -148,6 +135,36 @@ router.get('/audit', async (req, res) => {
 router.get('/storage/diagnostics', async (req, res) => {
   try {
     const data = await storageService.getDiagnostics();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * GET /api/system/processes
+ * Get running processes list
+ */
+router.get('/processes', async (req, res) => {
+  try {
+    const data = await si.processes();
+    let list = data.list || [];
+    // Sort by CPU usage descending
+    list.sort((a, b) => (b.cpu || 0) - (a.cpu || 0));
+    // Provide top 50
+    res.json(list.slice(0, 50));
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * GET /api/system/network/connections
+ * Get active ports and sessions
+ */
+router.get('/network/connections', async (req, res) => {
+  try {
+    const data = await si.networkConnections();
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });

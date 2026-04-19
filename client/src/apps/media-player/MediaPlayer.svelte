@@ -9,8 +9,8 @@
   let { data = {} } = $props();
   
   // Synchronized state for navigation
-  let currentPath = $state(data.path || '');
-  let lastPropPath = $state(data.path || '');
+  let currentPath = $state(data?.path || '');
+  let lastPropPath = $state(data?.path || '');
   let mediaPath = $derived(currentPath);
   
   let isVideo = $derived(mediaPath.match(/\.(mp4|webm|mkv|mov|avi)$/i));
@@ -32,7 +32,7 @@
 
   // Sync prop path to local state ONLY if it changes from outside (e.g. double click new file)
   $effect(() => {
-    if (data.path && data.path !== lastPropPath) {
+    if (data?.path && data?.path !== lastPropPath) {
       currentPath = data.path;
       lastPropPath = data.path;
     }

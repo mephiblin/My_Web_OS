@@ -3,7 +3,7 @@
   import { 
     Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
     Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box, Lock, Unlock, ShieldAlert,
-    Search, Undo, Cloud
+    Search, Undo, Cloud, Share2
   } from 'lucide-svelte';
   import { notifications } from '../../core/stores/notificationStore.js';
   import { openWindow } from '../../core/stores/windowStore.js';
@@ -24,6 +24,22 @@
   let isSearchView = $state(false);
   let isTrashView = $state(false);
   let cloudRemotes = $state([]);
+
+  // Preview State
+  let previewContent = $state(null);
+  let showPreview = $state(false);
+  let previewLoading = $state(false);
+
+  // Upload State
+  let isDragging = $state(false);
+  let uploadQueue = $state([]);
+  let currentUpload = $state(null);
+
+  // Share State
+  let showShareDialog = $state(false);
+  let shareTarget = $state(null);
+  let shareExpiryHours = $state(24);
+  let generatedLink = $state(null);
 
   let sidebarLinks = $state([
     { id: 'home', label: 'Home', icon: Home, path: '/' },
@@ -71,11 +87,13 @@
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
         { label: 'Rename', icon: Pencil, action: () => handleRename(item) },
+        ...(item.name.toLowerCase().endsWith('.zip') ? [{ label: 'Extract Here', icon: Package, action: () => handleExtract(item) }] : []),
         { 
           label: isLocked ? 'Unlock Folder' : 'Secure Folder', 
           icon: isLocked ? Unlock : Lock, 
           action: () => toggleLockFolder(item) 
         },
+        ...(!item.isDirectory ? [{ label: 'Share Link', icon: Share2, action: () => openShareDialog(item) }] : []),
         { label: 'Move to Trash', icon: Trash2, action: handleDelete, danger: true }
       ];
     } else if (isTrashView) {
@@ -134,11 +152,51 @@
     loading = true;
     isSearchView = true;
     isTrashView = false;
+    showPreview = false;
     try {
       const data = await fsApi.searchFiles(searchQuery);
       items = data;
     } catch (err) {
       console.error(err);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function openShareDialog(item) {
+    shareTarget = item;
+    generatedLink = null;
+    showShareDialog = true;
+  }
+
+  async function generateShareLink() {
+    try {
+      const res = await fsApi.createShareLink(shareTarget.path, shareExpiryHours);
+      if (res.success) {
+        generatedLink = `${window.location.origin}/api/share/download/${res.linkId}`;
+      }
+    } catch (e) {
+       notifications.add({ title: 'Share Error', message: 'Failed to create share link', type: 'error' });
+    }
+  }
+
+  function copyLink() {
+    navigator.clipboard.writeText(generatedLink);
+    notifications.add({ title: 'Share', message: 'Link copied to clipboard', type: 'success' });
+  }
+
+  async function handleExtract(item) {
+    if (!item.name.toLowerCase().endsWith('.zip')) return;
+    try {
+      loading = true;
+      notifications.add({ title: 'Extracting...', message: item.name, type: 'info' });
+      const res = await fsApi.extractArchive(item.path);
+      if (res.success) {
+        notifications.add({ title: 'Extracted', message: item.name, type: 'success' });
+        fetchItems(currentPath);
+      }
+    } catch (err) {
+      notifications.add({ title: 'Error', message: 'Failed to extract', type: 'error' });
     } finally {
       loading = false;
     }
@@ -236,11 +294,116 @@
     }
   }
 
+  async function handleItemClick(e, item) {
+    e.stopPropagation();
+    selectedItem = item;
+    
+    if (!item.isDirectory && !isTrashView) {
+       const ext = item.name.split('.').pop()?.toLowerCase();
+       const isCode = ['md', 'txt', 'js', 'json', 'css', 'html', 'svelte'].includes(ext);
+       if (isCode) {
+           showPreview = true;
+           previewLoading = true;
+           previewContent = 'Loading...';
+           try {
+             // For cloud files we'd need readCloudFile but let's assume local local files for side preview first
+             // or we can handle cloud file generic
+             let res;
+             if (currentPath.startsWith('cloud://')) {
+                const remote = currentPath.replace('cloud://', '').split('/')[0];
+                const remotePath = item.path.replace(`cloud://${remote}/`, '');
+                res = await fsApi.readCloudFile(remote, remotePath);
+             } else {
+                res = await fsApi.readFile(item.path);
+             }
+             previewContent = res.content;
+           } catch {
+             previewContent = 'Cannot render preview.';
+           } finally {
+             previewLoading = false;
+           }
+       } else {
+           showPreview = false;
+           previewContent = null;
+       }
+    } else {
+       showPreview = false;
+    }
+  }
+
   function goBack() {
     const parts = currentPath.split('/');
     parts.pop();
     const parentPath = parts.join('/') || '/';
     fetchItems(parentPath);
+  }
+
+  function generateId() { return Math.random().toString(36).substr(2, 9); }
+
+  function handleDragOver(e) {
+    e.preventDefault();
+    isDragging = true;
+  }
+  function handleDragLeave(e) {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    isDragging = false;
+  }
+  async function handleDrop(e) {
+    e.preventDefault();
+    isDragging = false;
+    
+    if (currentPath.startsWith('cloud://')) {
+       addToast('Uploading directly to cloud via UI not supported yet.', 'warning');
+       return;
+    }
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      for (const file of e.dataTransfer.files) {
+         uploadQueue.push({ file, path: currentPath, progress: 0, status: 'pending', id: generateId() });
+      }
+      uploadQueue = [...uploadQueue];
+      processUploadQueue();
+    }
+  }
+
+  async function processUploadQueue() {
+    if (currentUpload) return;
+    const next = uploadQueue.find(u => u.status === 'pending');
+    if (!next) return;
+
+    currentUpload = next;
+    currentUpload.status = 'uploading';
+    uploadQueue = [...uploadQueue];
+
+    const chunkSize = 1024 * 1024 * 5; // 5MB
+    const totalChunks = Math.max(1, Math.ceil(currentUpload.file.size / chunkSize));
+    const uploadId = currentUpload.id;
+
+    try {
+      for (let i = 0; i < totalChunks; i++) {
+         const start = i * chunkSize;
+         const end = Math.min(start + chunkSize, currentUpload.file.size);
+         const chunk = currentUpload.file.slice(start, end);
+
+         await fsApi.uploadChunk(currentUpload.path, chunk, uploadId, i, totalChunks, currentUpload.file.name);
+         currentUpload.progress = Math.round(((i + 1) / totalChunks) * 100);
+         uploadQueue = [...uploadQueue];
+      }
+      currentUpload.status = 'done';
+      addToast(`Uploaded ${currentUpload.file.name}`, 'success');
+      if (currentUpload.path === currentPath) fetchItems(currentPath);
+    } catch (e) {
+      currentUpload.status = 'error';
+      addToast(`Failed to upload ${currentUpload.file.name}`, 'error');
+    }
+
+    currentUpload = null;
+    uploadQueue = [...uploadQueue];
+    processUploadQueue();
+  }
+
+  function clearUploads() {
+    uploadQueue = uploadQueue.filter(u => u.status === 'pending' || u.status === 'uploading');
   }
 
   async function createFile() {
@@ -386,7 +549,11 @@
       </div>
     </aside>
 
-    <div class="content-area">
+    <div class="content-area {isDragging ? 'dragging' : ''}"
+         role="presentation"
+         ondragover={handleDragOver}
+         ondragleave={handleDragLeave}
+         ondrop={handleDrop}>
       {#if loading}
         <div class="loading">Loading...</div>
       {:else}
@@ -394,7 +561,7 @@
           {#each items as item}
             <div
               class="item {selectedItem?.path === item.path ? 'selected' : ''}"
-              onclick={(e) => { e.stopPropagation(); selectedItem = item; }}
+              onclick={(e) => handleItemClick(e, item)}
               ondblclick={() => handleDblClick(item)}
               oncontextmenu={(e) => handleContextMenu(e, item)}
             >
@@ -427,7 +594,82 @@
         </div>
       {/if}
     </div>
+
+    {#if showPreview && previewContent !== null}
+       <aside class="preview-panel glass-effect">
+         <div class="preview-header">
+           <span class="preview-title">{selectedItem?.name}</span>
+           <button class="close-btn" onclick={() => showPreview = false}>X</button>
+         </div>
+         {#if previewLoading}
+           <div class="preview-loading">Loading preview...</div>
+         {:else}
+           <pre class="preview-content"><code>{previewContent}</code></pre>
+         {/if}
+       </aside>
+    {/if}
   </div>
+
+  {#if uploadQueue.length > 0}
+  <div class="upload-popover glass-effect">
+    <div class="popover-header">
+       <span>Transfers ({uploadQueue.filter(u => u.status === 'done').length}/{uploadQueue.length})</span>
+       <button onclick={clearUploads}>X</button>
+    </div>
+    <div class="upload-list">
+       {#each uploadQueue as u}
+         <div class="upload-item">
+           <span class="u-name" title={u.file.name}>{u.file.name}</span>
+           {#if u.status === 'uploading'}
+             <div class="u-progress-bg">
+               <div class="u-progress-bar" style="width: {u.progress}%"></div>
+             </div>
+           {:else if u.status === 'done'}
+             <span class="u-status success">Done</span>
+           {:else if u.status === 'error'}
+             <span class="u-status err">Failed</span>
+           {:else}
+             <span class="u-status pending">Pending</span>
+           {/if}
+         </div>
+       {/each}
+    </div>
+  </div>
+  {/if}
+
+  {#if showShareDialog}
+    <div class="share-dialog-overlay" onclick={() => showShareDialog = false} role="presentation">
+      <div class="share-dialog glass-effect" onclick={(e) => e.stopPropagation()} role="presentation">
+         <div class="share-header">Share Link</div>
+         <div class="share-body">
+           <p class="share-target">File: <strong>{shareTarget.name}</strong></p>
+           {#if generatedLink}
+             <div class="link-box">
+                <input class="link-input" readonly value={generatedLink} onclick={(e) => e.target.select()} />
+                <button class="copy-btn" onclick={copyLink}>Copy</button>
+             </div>
+             <p class="expiry-msg">Link expires in: {shareExpiryHours > 0 ? shareExpiryHours + ' hours' : 'Never'}</p>
+           {:else}
+             <label class="share-label" for="expirySelect">Expires in:</label>
+             <select id="expirySelect" class="share-select" bind:value={shareExpiryHours}>
+               <option value={1}>1 Hour</option>
+               <option value={24}>1 Day (24 Hours)</option>
+               <option value={168}>1 Week (168 Hours)</option>
+               <option value={0}>Never Expires</option>
+             </select>
+           {/if}
+         </div>
+         <div class="share-footer">
+           {#if !generatedLink}
+             <button class="share-btn cancel" onclick={() => showShareDialog = false}>Cancel</button>
+             <button class="share-btn primary" onclick={generateShareLink}>Generate Link</button>
+           {:else}
+             <button class="share-btn primary" onclick={() => showShareDialog = false}>Close</button>
+           {/if}
+         </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -487,4 +729,69 @@
   }
   .name { font-size: 12px; text-align: center; word-break: break-all; max-width: 100%; border: none; background: transparent; color: inherit; outline: none; }
   .loading { display: flex; justify-content: center; align-items: center; height: 100%; color: var(--text-dim); }
+
+  .preview-panel {
+    width: 250px;
+    border-left: 1px solid var(--glass-border);
+    display: flex;
+    flex-direction: column;
+    background: rgba(0,0,0,0.15);
+    flex-shrink: 0;
+  }
+  .preview-header { padding: 12px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center; }
+  .preview-title { font-size: 13px; font-weight: 600; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .close-btn { background: transparent; border: none; color: var(--text-dim); cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+  .close-btn:hover { color: white; background: rgba(255,255,255,0.1); }
+  .preview-content { flex: 1; padding: 12px; margin: 0; overflow: auto; font-size: 11px; color: #a5d6ff; line-height: 1.4; white-space: pre-wrap; word-break: break-all; font-family: monospace; }
+  .preview-loading { padding: 20px; color: var(--text-dim); text-align: center; font-size: 12px; }
+
+  .content-area.dragging {
+    outline: 2px dashed var(--accent-blue);
+    outline-offset: -4px;
+    background: rgba(88, 166, 255, 0.05);
+  }
+  .upload-popover {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    width: 250px;
+    max-height: 200px;
+    display: flex;
+    flex-direction: column;
+    border-radius: 8px;
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    z-index: 100;
+  }
+  .popover-header { padding: 8px 12px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--glass-border); font-size: 12px; font-weight: bold; }
+  .popover-header button { background: none; border: none; color: var(--text-dim); cursor: pointer; }
+  .popover-header button:hover { color: white; }
+  .upload-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .upload-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; }
+  .u-name { text-overflow: ellipsis; overflow: hidden; white-space: nowrap; max-width: 100px; flex: 1; }
+  .u-progress-bg { flex: 1; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+  .u-progress-bar { height: 100%; background: var(--accent-blue); transition: width 0.2s; }
+  .u-status { font-weight: 500; font-size: 10px; }
+  .u-status.success { color: #4CAF50; }
+  .u-status.err { color: #F44336; }
+
+  /* Share Dialog */
+  .share-dialog-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
+  .share-dialog { width: 340px; border-radius: 8px; border: 1px solid var(--glass-border); display: flex; flex-direction: column; overflow: hidden; background: rgba(30, 35, 45, 0.95); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+  .share-header { padding: 12px 16px; font-weight: 600; font-size: 14px; border-bottom: 1px solid var(--glass-border); background: rgba(255,255,255,0.05); }
+  .share-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .share-target { font-size: 13px; margin: 0; color: var(--text-dim); }
+  .share-target strong { color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .share-label { font-size: 12px; color: var(--text-dim); }
+  .share-select { padding: 8px; border-radius: 4px; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: white; outline: none; }
+  .link-box { display: flex; gap: 8px; align-items: center; }
+  .link-input { flex: 1; padding: 8px; border-radius: 4px; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: var(--accent-blue); font-family: monospace; font-size: 11px; outline: none; }
+  .copy-btn { padding: 6px 12px; border-radius: 4px; background: rgba(255,255,255,0.1); border: none; color: white; cursor: pointer; font-size: 12px; font-weight: 500; transition: background 0.2s; }
+  .copy-btn:hover { background: rgba(255,255,255,0.2); }
+  .expiry-msg { font-size: 11px; color: #4CAF50; margin: 0; }
+  .share-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--glass-border); background: rgba(0,0,0,0.2); }
+  .share-btn { padding: 6px 16px; border-radius: 4px; border: none; font-size: 13px; font-weight: 500; cursor: pointer; background: transparent; color: var(--text-dim); transition: all 0.2s; }
+  .share-btn:hover { color: white; background: rgba(255,255,255,0.1); }
+  .share-btn.primary { background: var(--accent-blue); color: white; }
+  .share-btn.primary:hover { filter: brightness(1.1); background: var(--accent-blue); }
 </style>

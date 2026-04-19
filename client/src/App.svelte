@@ -16,16 +16,15 @@
     }
     try {
       const res = await fetch('/api/auth/verify', {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${token}` },
+        signal: AbortSignal.timeout(3000), // 3s timeout
       });
       if (res.ok) {
         loggedIn = true;
       } else {
-        // Token expired or invalid — clear it
         localStorage.removeItem('web_os_token');
       }
     } catch {
-      // Server unreachable — clear stale token
       localStorage.removeItem('web_os_token');
     }
     checking = false;

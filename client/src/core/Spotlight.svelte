@@ -1,9 +1,10 @@
 <script>
   import { onMount } from 'svelte';
-  import { Search, Command, AppWindow, File, Settings, LogOut, Power, RefreshCw } from 'lucide-svelte';
+  import { Search, Command, AppWindow, File, Folder, Settings, LogOut, Power, RefreshCw } from 'lucide-svelte';
   import { spotlightVisible, spotlightQuery, closeSpotlight } from './stores/spotlightStore.js';
   import { openWindow } from './stores/windowStore.js';
   import { addToast } from './stores/toastStore.js';
+  import * as fsApi from '../apps/file-explorer/api.js';
 
   let inputEl;
   let results = $state([]);
@@ -30,10 +31,13 @@
     }
   });
 
+  let debounceTimer;
+
   $effect(() => {
-    const q = $spotlightQuery.toLowerCase();
+    const q = $spotlightQuery.trim().toLowerCase();
     if (!q) {
       results = [];
+      if (debounceTimer) clearTimeout(debounceTimer);
       return;
     }
 
@@ -42,6 +46,24 @@
     
     results = [...appResults, ...actionResults];
     selectedIndex = 0;
+
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+      try {
+        const fileResults = await fsApi.searchFiles(q);
+        const mappedFiles = fileResults.map(f => ({
+          id: f.path,
+          title: f.name,
+          type: f.type === 'dir' ? 'Folder' : 'File',
+          icon: f.type === 'dir' ? Folder : File,
+          path: f.path
+        }));
+        
+        results = [...appResults, ...actionResults, ...mappedFiles];
+      } catch (err) {
+        console.error('Search error', err);
+      }
+    }, 300);
   });
 
   function handleKeydown(e) {
@@ -63,6 +85,10 @@
   function executeResult(item) {
     if (item.type === 'action') {
       addToast(`${item.title} action triggered (Mock)`, 'info');
+    } else if (item.type === 'File') {
+      openWindow({ id: 'editor', title: `Editor - ${item.title}`, icon: File }, { path: item.path });
+    } else if (item.type === 'Folder') {
+      openWindow({ id: 'files', title: 'File Station', icon: Folder }); // Opening folder directly may require state passing. Usually ok to just open File Station.
     } else {
       openWindow(item);
     }

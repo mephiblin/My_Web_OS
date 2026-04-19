@@ -259,4 +259,126 @@ router.put('/rename', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/fs/archive-list
+ * List contents of a ZIP archive
+ */
+router.get('/archive-list', async (req, res) => {
+  try {
+    const AdmZip = require('adm-zip');
+    const targetPath = req.safePath;
+    
+    const stats = await fs.stat(targetPath);
+    if (stats.isDirectory()) {
+      return res.status(400).json({ error: true, message: 'Not an archive.' });
+    }
+
+    const zip = new AdmZip(targetPath);
+    const zipEntries = zip.getEntries();
+    
+    const items = zipEntries.map(e => ({
+      name: e.entryName,
+      isDirectory: e.isDirectory,
+      size: e.header.size
+    }));
+    
+    res.json({ path: targetPath, items });
+  } catch (err) {
+    res.status(500).json({ error: true, message: 'Failed to read archive: ' + err.message });
+  }
+});
+
+/**
+ * POST /api/fs/extract
+ * Extract a ZIP archive to a destination
+ */
+router.post('/extract', async (req, res) => {
+  try {
+    const AdmZip = require('adm-zip');
+    const sourcePath = req.safePath;
+    let { destPath } = req.body;
+    
+    if (!destPath) {
+       destPath = path.dirname(sourcePath); 
+    } else {
+       const resolvedDest = path.resolve(destPath);
+       const ALLOWED_ROOTS = JSON.parse(process.env.ALLOWED_ROOTS || '[]');
+       const isAllowed = ALLOWED_ROOTS.some(root => resolvedDest.startsWith(path.resolve(root)));
+       if (!isAllowed) {
+         return res.status(403).json({ error: true, message: 'Restricted dest location.' });
+       }
+       destPath = resolvedDest;
+    }
+
+    const zip = new AdmZip(sourcePath);
+    zip.extractAllToAsync(destPath, true, false, async (err) => {
+       if (err) return res.status(500).json({ error: true, message: err.message });
+       await auditService.log('FS', 'EXTRACT_ARCHIVE', { path: sourcePath, destPath, user: req.user?.username });
+       res.json({ success: true, message: 'Extracted successfully.' });
+    });
+  } catch (err) {
+    res.status(500).json({ error: true, message: 'Failed to extract archive: ' + err.message });
+  }
+});
+
+const multer = require('multer');
+const upload = multer({ dest: path.join(__dirname, '../storage/tmp/') });
+
+/**
+ * POST /api/fs/upload-chunk
+ * Handle multipart chunked file upload
+ * Body should have: path (target directory valid for pathGuard), uploadId, chunkIndex, totalChunks, fileName
+ */
+router.post('/upload-chunk', upload.single('chunk'), async (req, res) => {
+  try {
+    const { uploadId, chunkIndex, totalChunks, fileName } = req.body;
+    const targetDir = req.safePath;
+    
+    if (!req.file || !uploadId || chunkIndex === undefined || !totalChunks || !fileName) {
+      if (req.file) await fs.remove(req.file.path);
+      return res.status(400).json({ error: true, message: 'Missing parameters.' });
+    }
+
+    const chunkDir = path.join(__dirname, '../storage/tmp', uploadId);
+    await fs.ensureDir(chunkDir);
+    
+    // Move uploaded chunk to uploadId folder named by chunkIndex
+    await fs.move(req.file.path, path.join(chunkDir, chunkIndex), { overwrite: true });
+
+    // Merge if last chunk
+    if (parseInt(chunkIndex) === parseInt(totalChunks) - 1) {
+       const finalPath = path.join(targetDir, fileName);
+       
+       // Security: Prevent path traversal in fileName
+       if (fileName.includes('/') || fileName.includes('..')) {
+         await fs.remove(chunkDir);
+         return res.status(400).json({ error: true, message: 'Invalid file name.' });
+       }
+
+       const outStream = fs.createWriteStream(finalPath);
+       
+       for (let i = 0; i < totalChunks; i++) {
+         const cp = path.join(chunkDir, i.toString());
+         const data = await fs.readFile(cp);
+         outStream.write(data);
+       }
+       outStream.end();
+       
+       await new Promise((resolve, reject) => {
+         outStream.on('finish', resolve);
+         outStream.on('error', reject);
+       });
+       
+       await fs.remove(chunkDir);
+       await auditService.log('FS', 'UPLOAD', { path: finalPath, user: req.user?.username });
+       return res.json({ success: true, complete: true });
+    }
+    
+    res.json({ success: true, complete: false });
+  } catch (err) {
+    if (req.file) await fs.remove(req.file.path);
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
 module.exports = router;

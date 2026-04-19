@@ -12,6 +12,21 @@ export async function listDir(path) {
   return apiFetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
 }
 
+export async function uploadChunk(path, fileChunk, uploadId, chunkIndex, totalChunks, fileName) {
+  const formData = new FormData();
+  formData.append('path', path);
+  formData.append('uploadId', uploadId);
+  formData.append('chunkIndex', chunkIndex);
+  formData.append('totalChunks', totalChunks);
+  formData.append('fileName', fileName);
+  formData.append('chunk', fileChunk);
+
+  return apiFetch('/api/fs/upload-chunk', {
+    method: 'POST',
+    body: formData
+  });
+}
+
 export async function readFile(path) {
   return apiFetch(`/api/fs/read?path=${encodeURIComponent(path)}`);
 }
@@ -65,6 +80,17 @@ export async function emptyTrash() {
   });
 }
 
+export async function listArchive(path) {
+  return apiFetch(`/api/fs/archive-list?path=${encodeURIComponent(path)}`);
+}
+
+export async function extractArchive(path, destPath = '') {
+  return apiFetch('/api/fs/extract', {
+    method: 'POST',
+    body: JSON.stringify({ path, destPath })
+  });
+}
+
 export async function fetchCloudRemotes() {
   return apiFetch('/api/cloud/remotes');
 }
@@ -75,4 +101,11 @@ export async function listCloudDir(remote, path) {
 
 export async function readCloudFile(remote, path) {
   return apiFetch(`/api/cloud/read?remote=${encodeURIComponent(remote)}&path=${encodeURIComponent(path)}`);
+}
+
+export async function createShareLink(path, expiryHours) {
+  return apiFetch('/api/share/create', {
+    method: 'POST',
+    body: JSON.stringify({ path, expiryHours })
+  });
 }
