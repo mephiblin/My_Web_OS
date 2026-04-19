@@ -6,6 +6,7 @@
     Search, Undo, Cloud, Share2
   } from 'lucide-svelte';
   import { notifications } from '../../core/stores/notificationStore.js';
+  import { agentStore } from '../../core/stores/agentStore.js';
   import { openWindow } from '../../core/stores/windowStore.js';
   import { openContextMenu } from '../../core/stores/contextMenuStore.js';
   import * as fsApi from './api.js';
@@ -193,10 +194,12 @@
       const res = await fsApi.extractArchive(item.path);
       if (res.success) {
         notifications.add({ title: 'Extracted', message: item.name, type: 'success' });
+        agentStore.triggerEmotion('happy', `Extracted ${item.name}!`, 3000);
         fetchItems(currentPath);
       }
     } catch (err) {
       notifications.add({ title: 'Error', message: 'Failed to extract', type: 'error' });
+      agentStore.notifyError('Failed to extract archive.');
     } finally {
       loading = false;
     }
@@ -391,10 +394,12 @@
       }
       currentUpload.status = 'done';
       addToast(`Uploaded ${currentUpload.file.name}`, 'success');
+      agentStore.notifyUploadComplete();
       if (currentUpload.path === currentPath) fetchItems(currentPath);
     } catch (e) {
       currentUpload.status = 'error';
       addToast(`Failed to upload ${currentUpload.file.name}`, 'error');
+      agentStore.notifyError('Upload failed.');
     }
 
     currentUpload = null;
@@ -433,10 +438,12 @@
     if (!confirm(`Delete ${selectedItem.name}?`)) return;
     try {
       await fsApi.deleteItem(selectedItem.path);
+      agentStore.triggerEmotion('alert', `Deleted ${selectedItem.name}`, 3000);
       selectedItem = null;
       fetchItems(currentPath);
     } catch (err) {
       console.error(err);
+      agentStore.notifyError('Failed to delete item.');
     }
   }
 

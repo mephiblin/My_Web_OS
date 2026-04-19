@@ -4,6 +4,7 @@ const DEFAULT_SETTINGS = {
   blurIntensity: 20,
   transparency: 0.05,
   accentColor: '#58a6ff',
+  wallpaperType: 'css', // can be 'css', 'image', 'video'
   wallpaper: 'linear-gradient(135deg, #1e2a3a 0%, #0d1117 100%)',
   wallpaperId: 'default'
 };

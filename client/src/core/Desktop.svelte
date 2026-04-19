@@ -5,9 +5,13 @@
   import { contextMenu, closeContextMenu } from './stores/contextMenuStore.js';
   import { desktops, currentDesktopId, switchDesktop } from './stores/desktopStore.js';
   import { snapGhost } from './stores/snapStore.js';
+  import { widgets } from './stores/widgetStore.js';
   import Window from './Window.svelte';
+  import DashboardWidget from './components/DashboardWidget.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
-
+  import Agent from './components/Agent.svelte';
+  import { agentStore } from './stores/agentStore.js';
+  
   import FileExplorer from '../apps/file-explorer/FileExplorer.svelte';
   import TerminalApp from '../apps/terminal/Terminal.svelte';
   import ResourceMonitor from '../apps/resource-monitor/ResourceMonitor.svelte';
@@ -120,7 +124,20 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="desktop">
-  <div class="wallpaper" style="background: {$systemSettings.wallpaper}"></div>
+  {#if $systemSettings.wallpaperType === 'video'}
+    <video class="wallpaper" src="{$systemSettings.wallpaper}" autoplay loop muted playsinline disablePictureInPicture></video>
+  {:else if $systemSettings.wallpaperType === 'image'}
+    <div class="wallpaper" style="background-image: url({$systemSettings.wallpaper}); background-size: cover; background-position: center;"></div>
+  {:else}
+    <div class="wallpaper" style="background: {$systemSettings.wallpaper}"></div>
+  {/if}
+
+  <!-- Widget Layer -->
+  <div class="widget-layer">
+    {#each $widgets as widget (widget.id)}
+      <DashboardWidget {widget} />
+    {/each}
+  </div>
 
   <div class="app-grid">
     {#each apps as app}
@@ -164,6 +181,8 @@
 
   <Spotlight />
   <NotificationCenter bind:isOpen={isNotificationCenterOpen} />
+  
+  <Agent />
 
   <Taskbar 
     {time} 
@@ -175,7 +194,15 @@
 
 <style>
   .desktop { width: 100vw; height: 100vh; position: relative; background: #000; overflow: hidden; }
-  .wallpaper { position: absolute; inset: 0; background: linear-gradient(135deg, #1e2a3a 0%, #0d1117 100%); opacity: 0.8; }
+  .wallpaper { position: absolute; inset: 0; opacity: 0.8; width: 100%; height: 100%; object-fit: cover; z-index: 0; pointer-events: none; }
+  .wallpaper[style*="linear-gradient"] { opacity: 0.8; }
+  
+  .widget-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+  }
   .app-grid { 
     position: absolute; 
     top: 30px; 

@@ -75,6 +75,10 @@ export function moveWindowToDesktop(windowId, desktopId) {
   windows.update(items => items.map(w => w.id === windowId ? { ...w, desktopId } : w));
 }
 
+export function updateWindowData(id, newData) {
+  windows.update(items => items.map(w => w.id === id ? { ...w, data: { ...w.data, ...newData } } : w));
+}
+
 export function updateWindowTitle(id, title) {
   windows.update(items => items.map(w => w.id === id ? { ...w, title } : w));
 }
