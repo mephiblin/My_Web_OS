@@ -9,7 +9,7 @@ const createLibraryStore = () => {
       const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
       if (!token) return;
 
-      const res = await fetch('/api/system/state/widget_library', { 
+      const res = await fetch('/api/system/widget-library', { 
         headers: { 'Authorization': `Bearer ${token}` } 
       });
       
@@ -25,29 +25,51 @@ const createLibraryStore = () => {
     }
   };
 
-  let saveTimeout;
-  subscribe(items => {
-    if (!isInitialized) return;
-    clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
-      const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
-      fetch('/api/system/state/widget_library', {
+  const saveToBackend = async (item) => {
+    try {
+      const token = localStorage.getItem('web_os_token') || '';
+      await fetch(`/api/system/widget-library/${item.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(items)
-      }).catch(console.error);
-    }, 500);
-  });
+        body: JSON.stringify(item)
+      });
+    } catch (e) { console.error('Failed to save widget template:', e); }
+  };
+
+  const deleteFromBackend = async (id) => {
+    try {
+      const token = localStorage.getItem('web_os_token') || '';
+      await fetch(`/api/system/widget-library/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+    } catch (e) { console.error('Failed to delete widget template:', e); }
+  };
 
   return {
     subscribe,
     init,
-    addTemplate: (item) => update(items => {
+    addTemplate: async (item) => {
       const newId = `tpl-${Date.now()}`;
-      return [...items, { ...item, id: newId }];
-    }),
-    updateTemplate: (id, data) => update(items => items.map(i => i.id === id ? { ...i, ...data } : i)),
-    removeTemplate: (id) => update(items => items.filter(i => i.id !== id))
+      const newItem = { ...item, id: newId };
+      update(items => [...items, newItem]);
+      await saveToBackend(newItem);
+    },
+    updateTemplate: async (id, data) => {
+      let updatedItem;
+      update(items => items.map(i => {
+        if (i.id === id) {
+          updatedItem = { ...i, ...data };
+          return updatedItem;
+        }
+        return i;
+      }));
+      if (updatedItem) await saveToBackend(updatedItem);
+    },
+    removeTemplate: async (id) => {
+      update(items => items.filter(i => i.id !== id));
+      await deleteFromBackend(id);
+    }
   };
 };
 

@@ -190,6 +190,63 @@ router.get('/state/:key', async (req, res) => {
 });
 
 /**
+ * GET /api/system/widget-library
+ * List all widget templates from Inventory
+ */
+router.get('/widget-library', async (req, res) => {
+  try {
+    const widgetsDir = path.join(__dirname, '../storage/inventory/widgets');
+    await fs.ensureDir(widgetsDir);
+    const files = await fs.readdir(widgetsDir);
+    const library = [];
+    
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const data = await fs.readJson(path.join(widgetsDir, file));
+        library.push(data);
+      }
+    }
+    res.json({ success: true, data: library });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * POST /api/system/widget-library/:id
+ * Save/Update a widget template
+ */
+router.post('/widget-library/:id', async (req, res) => {
+  try {
+    const widgetsDir = path.join(__dirname, '../storage/inventory/widgets');
+    await fs.ensureDir(widgetsDir);
+    const widgetFile = path.join(widgetsDir, `${req.params.id}.json`);
+    await fs.writeJson(widgetFile, req.body, { spaces: 2 });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * DELETE /api/system/widget-library/:id
+ * Remove a widget template
+ */
+router.delete('/widget-library/:id', async (req, res) => {
+  try {
+    const widgetFile = path.join(__dirname, `../storage/inventory/widgets/${req.params.id}.json`);
+    if (await fs.pathExists(widgetFile)) {
+      await fs.remove(widgetFile);
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: true, message: 'Widget template not found' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
  * POST /api/system/state/:key
  * Write OS state to Inventory
  */
