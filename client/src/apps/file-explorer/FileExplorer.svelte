@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { 
     Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
-    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package 
+    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box
   } from 'lucide-svelte';
   import { openWindow } from '../../core/stores/windowStore.js';
   import { openContextMenu } from '../../core/stores/contextMenuStore.js';
@@ -84,11 +84,14 @@
       const ext = item.name.split('.').pop()?.toLowerCase();
       const isMedia = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext);
       const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+      const is3D = ['gltf', 'glb', 'fbx', 'obj'].includes(ext);
       
       if (isMedia || isImage) {
         openWindow({ id: 'player', title: `Viewer - ${item.name}`, icon: isImage ? Image : Video }, { path: item.path });
       } else if (ext === 'pdf') {
         openWindow({ id: 'doc-viewer', title: `PDF Reader - ${item.name}`, icon: FileText }, { path: item.path });
+      } else if (is3D) {
+        openWindow({ id: 'model-viewer', title: `3D Viewer - ${item.name}`, icon: Box }, { path: item.path });
       } else {
         openWindow({ id: 'editor', title: `Editor - ${item.name}`, icon: FileText }, { path: item.path });
       }

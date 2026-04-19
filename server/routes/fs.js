@@ -113,8 +113,17 @@ router.get('/raw', async (req, res) => {
       return res.status(400).json({ error: true, message: 'Cannot stream a directory.' });
     }
 
-    res.sendFile(targetPath);
+    console.log(`[FS] Sending raw file: ${targetPath}`);
+    res.sendFile(targetPath, (err) => {
+      if (err) {
+        console.error(`[FS] Error sending file: ${err.message}`);
+        if (!res.headersSent) {
+          res.status(err.status || 500).end();
+        }
+      }
+    });
   } catch (err) {
+    console.error(`[FS] Error in /raw: ${err.message}`);
     res.status(500).json({ error: true, message: err.message });
   }
 });

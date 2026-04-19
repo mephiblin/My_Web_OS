@@ -16,6 +16,7 @@
   import SettingsApp from '../apps/settings/Settings.svelte';
   import MediaPlayer from '../apps/media-player/MediaPlayer.svelte';
   import DocumentViewer from '../apps/document-viewer/DocumentViewer.svelte';
+  import ModelViewer from '../apps/model-viewer/ModelViewer.svelte';
   import Spotlight from './Spotlight.svelte';
   import { openSpotlight, toggleSpotlight } from './stores/spotlightStore.js';
 
@@ -27,7 +28,8 @@
     docker: DockerManager,
     settings: SettingsApp,
     player: MediaPlayer,
-    'doc-viewer': DocumentViewer
+    'doc-viewer': DocumentViewer,
+    'model-viewer': ModelViewer
   };
 
   const apps = [
