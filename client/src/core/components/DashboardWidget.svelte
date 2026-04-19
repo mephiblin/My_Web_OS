@@ -1,5 +1,5 @@
 <script>
-  import { Clock, Activity, GripVertical, Lock, Unlock, X } from 'lucide-svelte';
+  import { Clock, Activity, GripVertical, Lock, Unlock, X, Cpu, Wifi, HardDrive } from 'lucide-svelte';
   import { widgets } from '../stores/widgetStore.js';
 
   let { widget } = $props();
@@ -11,9 +11,25 @@
 
   // Clock state
   let time = $state(new Date().toLocaleTimeString());
+
+  // System API state (for type=system widgets)
+  let sysData = $state(null);
+
   $effect(() => {
     if (widget.source === 'clock') {
       const timer = setInterval(() => { time = new Date().toLocaleTimeString(); }, 1000);
+      return () => clearInterval(timer);
+    }
+    if (widget.type === 'system') {
+      const fetchSys = async () => {
+        try {
+          const token = localStorage.getItem('web_os_token') || '';
+          const res = await fetch('/api/system/overview', { headers: { Authorization: `Bearer ${token}` } });
+          sysData = await res.json();
+        } catch (e) { /* silently fail */ }
+      };
+      fetchSys();
+      const timer = setInterval(fetchSys, 3000);
       return () => clearInterval(timer);
     }
   });
@@ -34,13 +50,11 @@
     window.addEventListener('mousemove', onDrag);
     window.addEventListener('mouseup', stopDrag);
   }
-
   function onDrag(e) {
     const dx = e.clientX - dragStart.x;
     const dy = e.clientY - dragStart.y;
     widgets.updateWidget(widget.id, { x: dragStart.wx + dx, y: dragStart.wy + dy });
   }
-
   function stopDrag() {
     isDragging = false;
     window.removeEventListener('mousemove', onDrag);
@@ -57,7 +71,6 @@
     window.addEventListener('mousemove', onResize);
     window.addEventListener('mouseup', stopResize);
   }
-
   function onResize(e) {
     const dw = e.clientX - resizeStart.x;
     const dh = e.clientY - resizeStart.y;
@@ -66,7 +79,6 @@
       h: Math.max(80, resizeStart.wh + dh)
     });
   }
-
   function stopResize() {
     isResizing = false;
     window.removeEventListener('mousemove', onResize);
@@ -101,23 +113,51 @@
         <h2>{time}</h2>
       </div>
 
-    {:else if widget.type === 'preset' && widget.source === 'monitor'}
-      <div class="preset monitor-widget">
-        <div class="header">
-          <Activity size={16} color="var(--accent-blue)"/>
-          <span>System</span>
+    {:else if widget.type === 'system'}
+      {#if !sysData}
+        <div class="preset fallback"><span>Loading...</span></div>
+      {:else if widget.source === 'sys-cpu'}
+        <div class="preset sys-widget">
+          <div class="sys-header"><Cpu size={14} color="#34d399"/><span>CPU</span><span class="sys-val">{parseFloat(sysData.cpu).toFixed(1)}%</span></div>
+          <div class="bar-bg"><div class="bar-fg green" style="width:{sysData.cpu}%"></div></div>
+          {#if sysData.cpuTemp?.main}
+            <div class="sys-sub">Temp: {sysData.cpuTemp.main}°C  Max: {sysData.cpuTemp.max}°C</div>
+          {/if}
         </div>
-        <div class="stats">
-          <div class="stat">
-            <label>CPU</label>
-            <div class="bar-bg"><div class="bar-fg" style="width:34%"></div></div>
-          </div>
-          <div class="stat">
-            <label>RAM</label>
-            <div class="bar-bg"><div class="bar-fg" style="width:68%"></div></div>
+
+      {:else if widget.source === 'sys-mem'}
+        <div class="preset sys-widget">
+          <div class="sys-header"><Activity size={14} color="#34d399"/><span>Memory</span><span class="sys-val">{sysData.memory?.percentage}%</span></div>
+          <div class="bar-bg"><div class="bar-fg green" style="width:{sysData.memory?.percentage}%"></div></div>
+          <div class="sys-sub">
+            {((sysData.memory?.used || 0) / 1024 / 1024 / 1024).toFixed(1)} GB / {((sysData.memory?.total || 0) / 1024 / 1024 / 1024).toFixed(1)} GB
           </div>
         </div>
-      </div>
+
+      {:else if widget.source === 'sys-net'}
+        <div class="preset sys-widget">
+          <div class="sys-header"><Wifi size={14} color="#34d399"/><span>Network</span></div>
+          {#each (sysData.network || []).slice(0, 2) as iface}
+            <div class="net-row">
+              <span class="iface-name">{iface.iface}</span>
+              <span class="net-stat">↑ {((iface.tx_sec || 0)/1024).toFixed(1)} KB/s</span>
+              <span class="net-stat">↓ {((iface.rx_sec || 0)/1024).toFixed(1)} KB/s</span>
+            </div>
+          {/each}
+        </div>
+
+      {:else if widget.source === 'sys-storage'}
+        <div class="preset sys-widget">
+          <div class="sys-header"><HardDrive size={14} color="#34d399"/><span>Storage</span></div>
+          {#each (sysData.storage || []).slice(0, 3) as drive}
+            <div class="drive-row">
+              <span class="drive-name">{drive.fs?.split('/').pop() || drive.fs}</span>
+              <div class="bar-bg small"><div class="bar-fg green" style="width:{drive.use}%"></div></div>
+              <span class="drive-pct">{Math.round(drive.use)}%</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
     {:else if widget.type === 'url'}
       <iframe 
@@ -237,7 +277,21 @@
   .stat label { font-size: 10px; color: rgba(255,255,255,0.4); margin-bottom: 4px; display: block; }
   .bar-bg { width: 100%; height: 5px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
   .bar-fg { height: 100%; background: var(--accent-blue); border-radius: 3px; transition: width 0.5s; }
+  .bar-fg.green { background: #34d399; }
   .fallback { align-items: center; justify-content: center; font-size: 13px; color: rgba(255,255,255,0.4); }
+
+  /* System widgets */
+  .sys-widget { gap: 8px; }
+  .sys-header { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.8); margin-bottom: 4px; }
+  .sys-val { margin-left: auto; font-size: 14px; font-weight: 700; color: #34d399; }
+  .sys-sub { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 4px; }
+  .bar-bg.small { height: 4px; }
+  .net-row { display: flex; align-items: center; gap: 6px; font-size: 10px; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .iface-name { font-weight: 600; color: #34d399; min-width: 50px; font-size: 10px; }
+  .net-stat { color: rgba(255,255,255,0.5); flex: 1; }
+  .drive-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+  .drive-name { font-size: 10px; color: rgba(255,255,255,0.6); min-width: 55px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .drive-pct { font-size: 10px; color: #34d399; min-width: 30px; text-align: right; }
 
   /* Lock Handle */
   .handle-btn {

@@ -50,19 +50,43 @@
         <h2>Personalization</h2>
         
         <div class="setting-group">
-          <label>Wallpaper</label>
-          <div class="wallpaper-grid">
-            {#each wallpapers as wp}
-              <button 
-                class="wallpaper-item {$systemSettings.wallpaperId === wp.id ? 'active' : ''}"
-                style="background: {wp.color}"
-                onclick={() => systemSettings.updateSettings({ wallpaper: wp.color, wallpaperId: wp.id })}
-              >
-                <span class="wp-name">{wp.name}</span>
-              </button>
-            {/each}
+          <label>Wallpaper Type</label>
+          <div class="type-selector">
+            <button class:active={$systemSettings.wallpaperType === 'css'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'css' })}>Gradient</button>
+            <button class:active={$systemSettings.wallpaperType === 'image'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'image' })}>Image</button>
+            <button class:active={$systemSettings.wallpaperType === 'video'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'video' })}>Video (MP4/WebM)</button>
           </div>
         </div>
+
+        {#if $systemSettings.wallpaperType === 'css'}
+          <div class="setting-group">
+            <label>Presets</label>
+            <div class="wallpaper-grid">
+              {#each wallpapers as wp}
+                <button 
+                  class="wallpaper-item {$systemSettings.wallpaperId === wp.id ? 'active' : ''}"
+                  style="background: {wp.color}"
+                  onclick={() => systemSettings.updateSettings({ wallpaper: wp.color, wallpaperId: wp.id })}
+                >
+                  <span class="wp-name">{wp.name}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {:else}
+          <div class="setting-group">
+            <label>{$systemSettings.wallpaperType === 'video' ? 'Video' : 'Image'} URL</label>
+            <div class="url-input-container">
+              <input 
+                type="text" 
+                placeholder="https://example.com/background.mp4"
+                value={$systemSettings.wallpaper}
+                onchange={(e) => systemSettings.updateSettings({ wallpaper: e.target.value, wallpaperId: 'custom' })}
+              />
+            </div>
+            <p class="hint">Enter a direct URL to a {$systemSettings.wallpaperType === 'video' ? 'WebM or MP4' : 'JPG or PNG'} file.</p>
+          </div>
+        {/if}
 
         <div class="setting-group">
           <label>Glassmorphism Blur ({$systemSettings.blurIntensity}px)</label>
@@ -171,6 +195,17 @@
   .color-picker { display: flex; align-items: center; gap: 12px; }
   input[type="color"] { border: none; width: 40px; height: 40px; border-radius: 8px; background: transparent; cursor: pointer; }
   .color-value { font-family: monospace; font-size: 14px; color: var(--text-dim); }
+
+  .type-selector { display: flex; gap: 8px; background: rgba(0,0,0,0.2); padding: 4px; border-radius: 10px; border: 1px solid var(--glass-border); }
+  .type-selector button { flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-dim); border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.2s; }
+  .type-selector button:hover { color: white; background: rgba(255,255,255,0.05); }
+  .type-selector button.active { background: var(--accent-blue); color: white; box-shadow: 0 2px 8px rgba(88, 166, 255, 0.3); }
+
+  .url-input-container { display: flex; gap: 8px; }
+  .url-input-container input { flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: white; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-family: monospace; outline: none; }
+  .url-input-container input:focus { border-color: var(--accent-blue); }
+  
+  .hint { font-size: 11px; color: var(--text-dim); margin: 0; line-height: 1.4; opacity: 0.7; }
 
   .info-card { padding: 20px; border-radius: 12px; display: flex; flex-direction: column; gap: 12px; }
   .info-item { display: flex; gap: 10px; font-size: 14px; }
