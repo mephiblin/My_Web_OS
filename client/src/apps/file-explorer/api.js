@@ -59,8 +59,8 @@ export async function renameItem(oldPath, newName) {
   });
 }
 
-export async function searchFiles(query) {
-  return apiFetch(`/api/fs/search?q=${encodeURIComponent(query)}`);
+export async function searchFiles(query, path = '') {
+  return apiFetch(`/api/fs/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}`);
 }
 
 export async function fetchTrash() {
@@ -107,5 +107,12 @@ export async function createShareLink(path, expiryHours) {
   return apiFetch('/api/share/create', {
     method: 'POST',
     body: JSON.stringify({ path, expiryHours })
+  });
+}
+
+export async function addWebDAV(name, url, user, pass) {
+  return apiFetch('/api/cloud/add-webdav', {
+    method: 'POST',
+    body: JSON.stringify({ name, url, user, pass })
   });
 }

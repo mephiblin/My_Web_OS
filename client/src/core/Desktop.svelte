@@ -156,15 +156,37 @@
       { label: 'Remove Shortcut', icon: Trash2, action: () => removeShortcut(shortcutId), danger: true }
     ]);
   }
+
+  function getBgStyle(fit) {
+    switch (fit) {
+      case 'contain': return 'background-size: contain; background-repeat: no-repeat; background-position: center;';
+      case 'stretch': return 'background-size: 100% 100%; background-repeat: no-repeat; background-position: center;';
+      case 'center': return 'background-size: auto; background-repeat: no-repeat; background-position: center;';
+      case 'tile': return 'background-size: auto; background-repeat: repeat; background-position: top left;';
+      case 'cover':
+      default: return 'background-size: cover; background-repeat: no-repeat; background-position: center;';
+    }
+  }
+
+  function getVideoObjectFit(fit) {
+    switch (fit) {
+      case 'contain': return 'contain';
+      case 'stretch': return 'fill';
+      case 'center': return 'none';
+      case 'tile': return 'none';
+      case 'cover':
+      default: return 'cover';
+    }
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="desktop">
   {#if $systemSettings.wallpaperType === 'video'}
-    <video class="wallpaper" src="{$systemSettings.wallpaper}" autoplay loop muted playsinline disablePictureInPicture></video>
+    <video class="wallpaper" style="object-fit: {getVideoObjectFit($systemSettings.wallpaperFit)};" src="{$systemSettings.wallpaper}" autoplay loop muted playsinline disablePictureInPicture></video>
   {:else if $systemSettings.wallpaperType === 'image'}
-    <div class="wallpaper" style="background-image: url({$systemSettings.wallpaper}); background-size: cover; background-position: center;"></div>
+    <div class="wallpaper" style="background-image: url('{$systemSettings.wallpaper}'); {getBgStyle($systemSettings.wallpaperFit)}"></div>
   {:else}
     <div class="wallpaper" style="background: {$systemSettings.wallpaper}"></div>
   {/if}

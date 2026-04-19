@@ -139,6 +139,28 @@ const cloudService = {
     // This starts a background process
     runRclone(`serve webdav ${name}: --addr :${port} --vfs-cache-mode full`).catch(e => console.error(e));
     return { success: true, url: `http://localhost:${port}` };
+  },
+
+  /**
+   * Add a new WebDAV remote using rclone config create
+   */
+  async addWebDAV(name, url, user, pass) {
+    const safeName = sanitizeRemoteName(name);
+    if (!safeName) throw new Error('Invalid remote name');
+    
+    // Obscure password
+    let obscuredPass = pass;
+    if (pass) {
+      const obsResult = await runRclone(`obscure "${pass.replace(/"/g, '\\"')}"`);
+      if (obsResult.success) {
+        obscuredPass = obsResult.stdout.trim();
+      }
+    }
+    
+    const args = `config create ${safeName} webdav url="${url.replace(/"/g, '\\"')}" vendor=other user="${(user||'').replace(/"/g, '\\"')}" pass="${obscuredPass}"`;
+    const result = await runRclone(args);
+    if (!result.success) throw new Error(result.stderr);
+    return { success: true };
   }
 };
 

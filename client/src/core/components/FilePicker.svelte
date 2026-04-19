@@ -60,6 +60,19 @@
     return filter.includes(ext);
   }
 
+  function getBreadcrumbs(p) {
+    if (!p) return [];
+    const INVENTORY_PATH = '/home/inri/문서/web_os/server/storage/inventory';
+    const HOME_PATH = '/home/inri';
+    if (p.startsWith(INVENTORY_PATH)) {
+      return ['Inventory', ...p.slice(INVENTORY_PATH.length).split('/').filter(Boolean)];
+    }
+    if (p.startsWith(HOME_PATH)) {
+      return ['Home', ...p.slice(HOME_PATH.length).split('/').filter(Boolean)];
+    }
+    return ['Root', ...p.split('/').filter(Boolean)];
+  }
+
   const filteredItems = $derived(
     items.filter(i => isAllowed(i) && i.name.toLowerCase().includes(searchQuery.toLowerCase()))
   );
@@ -86,7 +99,7 @@
     <div class="path-bar">
       <button class="nav-btn" onclick={goBack} disabled={currentPath === '/'}><ArrowLeft size={16} /></button>
       <div class="breadcrumbs">
-        {#each currentPath.split('/').filter(Boolean) as part}
+        {#each getBreadcrumbs(currentPath) as part}
           <span class="sep">/</span>
           <span class="part">{part}</span>
         {/each}
@@ -104,7 +117,11 @@
           <button class="side-item {currentPath.includes('wallpapers') ? 'active' : ''}" onclick={() => loadPath('/home/inri/문서/web_os/server/storage/inventory/wallpapers')}>
             <ImageIcon size={16} /> <span>Wallpapers</span>
           </button>
-          <button class="side-item" onclick={() => loadPath('/home/inri')}>
+        </div>
+
+        <div class="section">
+          <label>Locations</label>
+          <button class="side-item {currentPath === '/home/inri' ? 'active' : ''}" onclick={() => loadPath('/home/inri')}>
             <Home size={16} /> <span>Home</span>
           </button>
         </div>
@@ -162,7 +179,8 @@
 
 <style>
   .file-picker-overlay {
-    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%; height: 100%;
     background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
     z-index: 10000; backdrop-filter: blur(4px);
   }

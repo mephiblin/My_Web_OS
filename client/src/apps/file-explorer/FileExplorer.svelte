@@ -44,6 +44,13 @@
   let shareExpiryHours = $state(24);
   let generatedLink = $state(null);
 
+  // Cloud Connect State
+  let showAddCloudDialog = $state(false);
+  let cloudName = $state('');
+  let cloudUrl = $state('');
+  let cloudUser = $state('');
+  let cloudPass = $state('');
+
   let sidebarLinks = $state([
     { id: 'home', label: 'Home', icon: Home, path: '/' },
   ]);
@@ -158,7 +165,7 @@
     isTrashView = false;
     showPreview = false;
     try {
-      const data = await fsApi.searchFiles(searchQuery);
+      const data = await fsApi.searchFiles(searchQuery, currentPath);
       items = data;
     } catch (err) {
       console.error(err);
@@ -498,6 +505,35 @@
     }
     fetchItems(currentPath);
   });
+
+  async function handleAddCloud() {
+    if (!cloudName.trim() || !cloudUrl.trim()) {
+      notifications.add({ title: 'Error', message: 'Name and URL are required.', type: 'error' });
+      return;
+    }
+    loading = true;
+    try {
+      const res = await fsApi.addWebDAV(cloudName.trim(), cloudUrl.trim(), cloudUser.trim(), cloudPass.trim());
+      if (res.success) {
+        notifications.add({ title: 'Success', message: 'Network location added.', type: 'success' });
+        showAddCloudDialog = false;
+        
+        // Refresh sidebar
+        const [userDirs, remotes] = await Promise.all([fsApi.fetchUserDirs(), fsApi.fetchCloudRemotes()]);
+        cloudRemotes = remotes || [];
+        sidebarLinks = buildSidebarLinks(userDirs.home || initialPath, userDirs);
+        
+        // Reset form
+        cloudName = ''; cloudUrl = ''; cloudUser = ''; cloudPass = '';
+      } else {
+         notifications.add({ title: 'Error', message: res.message || 'Failed to add connection.', type: 'error' });
+      }
+    } catch (e) {
+      notifications.add({ title: 'Error', message: 'Connection failed.', type: 'error' });
+    } finally {
+      loading = false;
+    }
+  }
 </script>
 
 <div class="file-explorer" oncontextmenu={(e) => handleContextMenu(e, null)} onclick={() => selectedItem = null}>
@@ -511,7 +547,7 @@
       {#if isSearchView}
         <div class="search-indicator">
           <Search size={14} />
-          <span>Searching for "{searchQuery}"</span>
+          <span>Searching "{searchQuery}" in {currentPath}</span>
           <button class="clear-search" onclick={() => fetchItems(currentPath)}>X</button>
         </div>
       {:else if isTrashView}
@@ -556,6 +592,11 @@
             <span>{link.label}</span>
           </button>
         {/each}
+        <div style="height: 12px;"></div>
+        <button class="sidebar-item add-cloud-btn" onclick={() => showAddCloudDialog = true}>
+          <Plus size={16} />
+          <span>Add Network Drive</span>
+        </button>
       </div>
     </aside>
 
@@ -676,6 +717,31 @@
            {:else}
              <button class="share-btn primary" onclick={() => showShareDialog = false}>Close</button>
            {/if}
+         </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showAddCloudDialog}
+    <div class="share-dialog-overlay" onclick={() => showAddCloudDialog = false} role="presentation">
+      <div class="share-dialog glass-effect" onclick={(e) => e.stopPropagation()} role="presentation">
+         <div class="share-header">Add Network Drive (WebDAV)</div>
+         <div class="share-body" style="gap: 8px;">
+           <label class="share-label" style="text-align: left;">Name (Alias)</label>
+           <input class="link-input" type="text" placeholder="e.g. MyNAS" bind:value={cloudName} />
+           
+           <label class="share-label" style="text-align: left;">WebDAV URL</label>
+           <input class="link-input" type="text" placeholder="http://192.168.1.100:5005/webdav" bind:value={cloudUrl} />
+           
+           <label class="share-label" style="text-align: left;">Username (Optional)</label>
+           <input class="link-input" type="text" placeholder="admin" bind:value={cloudUser} />
+           
+           <label class="share-label" style="text-align: left;">Password (Optional)</label>
+           <input class="link-input" type="password" placeholder="password123" bind:value={cloudPass} />
+         </div>
+         <div class="share-footer">
+           <button class="share-btn cancel" onclick={() => showAddCloudDialog = false}>Cancel</button>
+           <button class="share-btn primary" default onclick={handleAddCloud}>Connect</button>
          </div>
       </div>
     </div>

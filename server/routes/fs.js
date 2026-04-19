@@ -11,15 +11,6 @@ const trashService = require('../services/trashService');
 // Auth required for ALL fs routes
 router.use(auth);
 
-/**
- * GET /api/fs/search
- * Global file search
- */
-router.get('/search', async (req, res) => {
-  const { q } = req.query;
-  const results = indexService.search(q);
-  res.json(results);
-});
 
 /**
  * GET /api/fs/trash
@@ -129,6 +120,56 @@ router.get('/list', async (req, res) => {
     );
 
     res.json({ path: targetPath, items: details });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * GET /api/fs/search
+ * Recursive directory file search
+ */
+async function searchDirectory(dir, query, limit, results = []) {
+  if (results.length >= limit) return results;
+  try {
+    const files = await fs.readdir(dir, { withFileTypes: true });
+    for (const file of files) {
+      if (results.length >= limit) break;
+      const fullPath = path.join(dir, file.name);
+      
+      if (file.name.toLowerCase().includes(query)) {
+        try {
+          const stats = await fs.stat(fullPath);
+          results.push({
+            name: file.name,
+            path: fullPath,
+            isDirectory: file.isDirectory(),
+            size: stats.size,
+            mtime: stats.mtime
+          });
+        } catch(e) {}
+      }
+
+      if (file.isDirectory() && !file.name.startsWith('.')) {
+         await searchDirectory(fullPath, query, limit, results);
+      }
+    }
+  } catch (err) {
+    // Ignore permissions/access errors
+  }
+  return results;
+}
+
+router.get('/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    const targetPath = req.safePath;
+    if (!q) {
+      return res.json([]);
+    }
+    const query = q.toLowerCase();
+    const results = await searchDirectory(targetPath, query, 200);
+    res.json(results);
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
   }

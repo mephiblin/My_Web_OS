@@ -48,4 +48,16 @@ router.get('/read', async (req, res) => {
   }
 });
 
+// Setup a new WebDAV connection
+router.post('/add-webdav', async (req, res) => {
+  const { name, url, user, pass } = req.body;
+  if (!name || !url) return res.status(400).json({ error: 'Name and URL are required' });
+  try {
+    await cloudService.addWebDAV(name, url, user, pass);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
 module.exports = router;

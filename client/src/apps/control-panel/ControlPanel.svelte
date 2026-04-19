@@ -200,6 +200,17 @@
               />
             </div>
           </div>
+
+          <div class="setting-group">
+            <label>Display Mode</label>
+            <div class="type-selector">
+              <button class:active={$systemSettings.wallpaperFit === 'cover' || !$systemSettings.wallpaperFit} onclick={() => systemSettings.updateSettings({ wallpaperFit: 'cover' })}>Fill</button>
+              <button class:active={$systemSettings.wallpaperFit === 'contain'} onclick={() => systemSettings.updateSettings({ wallpaperFit: 'contain' })}>Fit</button>
+              <button class:active={$systemSettings.wallpaperFit === 'stretch'} onclick={() => systemSettings.updateSettings({ wallpaperFit: 'stretch' })}>Stretch</button>
+              <button class:active={$systemSettings.wallpaperFit === 'center'} onclick={() => systemSettings.updateSettings({ wallpaperFit: 'center' })}>Original</button>
+              <button class:active={$systemSettings.wallpaperFit === 'tile'} onclick={() => systemSettings.updateSettings({ wallpaperFit: 'tile' })}>Tile</button>
+            </div>
+          </div>
         {/if}
 
         <div class="setting-divider"></div>
