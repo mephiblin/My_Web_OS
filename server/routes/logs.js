@@ -8,14 +8,11 @@ router.use(auth);
 router.get('/', async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
-    const type = req.query.type; // Optional filter: SYSTEM, FS, AUTH
+    const category = req.query.category || req.query.type; // Backward compatibility
+    const level = req.query.level;
+    const search = req.query.search;
     
-    let logs = await auditService.getLogs(limit);
-    
-    if (type && type !== 'ALL') {
-      logs = logs.filter(l => l.type === type);
-    }
-    
+    const logs = await auditService.getLogs({ limit, category, level, search });
     res.json(logs);
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -24,6 +24,8 @@
 
   // Search & Trash State
   let searchQuery = $state('');
+  let searchMeta = $state(null);
+  let filterQuery = $state('');
   let isSearchView = $state(false);
   let isTrashView = $state(false);
   let cloudRemotes = $state([]);
@@ -127,6 +129,7 @@
     loading = true;
     isSearchView = false;
     isTrashView = false;
+    filterQuery = '';
     try {
       if (path === 'trash') {
         return fetchTrash();
@@ -164,15 +167,25 @@
     isSearchView = true;
     isTrashView = false;
     showPreview = false;
+    filterQuery = '';
     try {
       const data = await fsApi.searchFiles(searchQuery, currentPath);
-      items = data;
+      items = data.items || [];
+      searchMeta = data.meta || null;
     } catch (err) {
       console.error(err);
+      notifications.add({ title: 'Search Error', message: 'Failed to search files', type: 'error' });
     } finally {
       loading = false;
     }
   }
+
+  // Reactive derived state for filtered items
+  let filteredItems = $derived.by(() => {
+    if (!isSearchView || !filterQuery.trim()) return items;
+    const f = filterQuery.toLowerCase();
+    return items.filter(item => item.name.toLowerCase().includes(f));
+  });
 
   function openShareDialog(item) {
     shareTarget = item;
@@ -547,7 +560,18 @@
       {#if isSearchView}
         <div class="search-indicator">
           <Search size={14} />
-          <span>Searching "{searchQuery}" in {currentPath}</span>
+          <span class="search-text">
+            "{searchQuery}" in {currentPath}
+            {#if searchMeta}
+              <span class="search-meta">({searchMeta.total} results via {searchMeta.source})</span>
+            {/if}
+          </span>
+          <input 
+            type="text" 
+            class="filter-input" 
+            placeholder="Filter results..." 
+            bind:value={filterQuery} 
+          />
           <button class="clear-search" onclick={() => fetchItems(currentPath)}>X</button>
         </div>
       {:else if isTrashView}
@@ -609,7 +633,7 @@
         <div class="loading">Loading...</div>
       {:else}
         <div class="view-container {viewMode}">
-          {#each items as item}
+          {#each filteredItems as item}
             <div
               class="item {selectedItem?.path === item.path ? 'selected' : ''}"
               onclick={(e) => handleItemClick(e, item)}
@@ -764,8 +788,11 @@
   .search-box { display: flex; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; padding: 2px 4px; gap: 4px; }
   .search-box input { background: transparent; border: none; color: white; padding: 2px 8px; font-size: 12px; width: 150px; outline: none; }
   
-  .search-indicator, .trash-indicator { display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.1); padding: 4px 12px; border-radius: 4px; font-size: 12px; }
-  .search-indicator span, .trash-indicator span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .search-indicator, .trash-indicator { display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.1); padding: 4px 12px; border-radius: 4px; font-size: 12px; flex: 1; }
+  .search-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .search-meta { opacity: 0.6; font-size: 11px; margin-left: 4px; }
+  .filter-input { background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); border-radius: 4px; color: white; padding: 2px 8px; font-size: 11px; width: 120px; outline: none; transition: width 0.3s; }
+  .filter-input:focus { width: 180px; border-color: var(--accent-blue); }
   .clear-search, .empty-trash-btn { background: rgba(255,255,255,0.1) !important; padding: 2px 8px !important; width: auto !important; height: auto !important; font-size: 10px !important; }
 
   .layout-body { flex: 1; display: flex; overflow: hidden; }

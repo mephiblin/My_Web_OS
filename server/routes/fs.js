@@ -33,7 +33,7 @@ router.post('/restore', async (req, res) => {
   const { id } = req.body;
   try {
     await trashService.restore(id);
-    auditService.log('FS', 'FS_RESTORE', { id, user: req.user?.username });
+    await auditService.log('FILE_TRANSFER', 'Restore from Trash', { id, user: req.user?.username }, 'INFO');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -46,7 +46,7 @@ router.post('/restore', async (req, res) => {
 router.delete('/empty-trash', async (req, res) => {
   try {
     await trashService.emptyTrash();
-    auditService.log('FS', 'FS_EMPTY_TRASH', { user: req.user?.username });
+    await auditService.log('SYSTEM', 'Empty Trash', { user: req.user?.username }, 'WARNING');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -165,11 +165,39 @@ router.get('/search', async (req, res) => {
     const { q } = req.query;
     const targetPath = req.safePath;
     if (!q) {
-      return res.json([]);
+      return res.json({ items: [], meta: null });
     }
     const query = q.toLowerCase();
-    const results = await searchDirectory(targetPath, query, 200);
-    res.json(results);
+    
+    // 1. Try index search first
+    let results = indexService.search(query, targetPath);
+    let source = 'index';
+
+    // 2. Fallback to recursive scan if index is empty or has very few results 
+    // (This helps if indexing is still in progress or specifically excluded by index rules)
+    if (results.length < 5) {
+      const scanResults = await searchDirectory(targetPath, query, 200);
+      // Merge results, avoiding duplicates by path
+      const resultPaths = new Set(results.map(r => r.path));
+      for (const item of scanResults) {
+        if (!resultPaths.has(item.path)) {
+          results.push(item);
+        }
+        if (results.length >= 200) break;
+      }
+      source = results.length > scanResults.length ? 'mixed' : 'scan';
+    }
+
+    res.json({
+      items: results,
+      meta: {
+        query: q,
+        source: source,
+        total: results.length,
+        path: targetPath
+      }
+    });
+
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
   }
@@ -233,7 +261,7 @@ router.post('/write', async (req, res) => {
     const { content } = req.body;
 
     await fs.writeFile(targetPath, content || '', 'utf8');
-    await auditService.log('FS', 'WRITE', { path: targetPath, user: req.user?.username });
+    await auditService.log('FILE_TRANSFER', 'Write File', { path: targetPath, user: req.user?.username }, 'INFO');
     res.json({ success: true, message: 'File saved successfully.' });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -248,7 +276,7 @@ router.delete('/delete', async (req, res) => {
   try {
     const targetPath = req.safePath;
     await trashService.moveToTrash(targetPath);
-    await auditService.log('FS', 'MOVE_TO_TRASH', { path: targetPath, user: req.user?.username });
+    await auditService.log('FILE_TRANSFER', 'Move to Trash', { path: targetPath, user: req.user?.username }, 'INFO');
     res.json({ success: true, message: 'Item moved to trash.' });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -263,7 +291,7 @@ router.post('/create-dir', async (req, res) => {
   try {
     const targetPath = req.safePath;
     await fs.ensureDir(targetPath);
-    await auditService.log('FS', 'CREATE_DIR', { path: targetPath, user: req.user?.username });
+    await auditService.log('FILE_TRANSFER', 'Create Directory', { path: targetPath, user: req.user?.username }, 'INFO');
     res.json({ success: true, message: 'Directory created successfully.' });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -293,7 +321,7 @@ router.put('/rename', async (req, res) => {
     }
     const newPath = path.join(path.dirname(resolvedOld), newName);
     await fs.rename(resolvedOld, newPath);
-    await auditService.log('FS', 'RENAME', { oldPath: resolvedOld, newPath, user: req.user?.username });
+    await auditService.log('FILE_TRANSFER', 'Rename Item', { oldPath: resolvedOld, newPath, user: req.user?.username }, 'INFO');
     res.json({ success: true, message: 'Renamed successfully.' });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -354,7 +382,7 @@ router.post('/extract', async (req, res) => {
     const zip = new AdmZip(sourcePath);
     zip.extractAllToAsync(destPath, true, false, async (err) => {
        if (err) return res.status(500).json({ error: true, message: err.message });
-       await auditService.log('FS', 'EXTRACT_ARCHIVE', { path: sourcePath, destPath, user: req.user?.username });
+       await auditService.log('FILE_TRANSFER', 'Extract Archive', { path: sourcePath, destPath, user: req.user?.username }, 'INFO');
        res.json({ success: true, message: 'Extracted successfully.' });
     });
   } catch (err) {
@@ -411,7 +439,7 @@ router.post('/upload-chunk', upload.single('chunk'), async (req, res) => {
        });
        
        await fs.remove(chunkDir);
-       await auditService.log('FS', 'UPLOAD', { path: finalPath, user: req.user?.username });
+       await auditService.log('FILE_TRANSFER', 'Upload File', { path: finalPath, user: req.user?.username }, 'INFO');
        return res.json({ success: true, complete: true });
     }
     

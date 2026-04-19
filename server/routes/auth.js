@@ -9,6 +9,8 @@ const ADMIN_USER = {
   passwordHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || '', 8)
 };
 
+const auditService = require('../services/auditService');
+
 /**
  * POST /api/auth/login
  */
@@ -16,12 +18,19 @@ router.post('/login', async (req, res) => {
   const { username, password } = req.body;
 
   if (username !== ADMIN_USER.username || !bcrypt.compareSync(password, ADMIN_USER.passwordHash)) {
+    await auditService.log('CONNECTION', 'Login failed', { 
+      user: username || 'unknown',
+      ip: req.ip || req.headers['x-forwarded-for'],
+      reason: 'Invalid credentials'
+    }, 'WARNING');
     return res.status(401).json({ error: true, message: 'Invalid credentials' });
   }
 
   const token = jwt.sign({ username }, process.env.JWT_SECRET, {
     expiresIn: '24h'
   });
+
+  await auditService.log('CONNECTION', 'User logged in', { user: username }, 'INFO');
 
   res.json({ success: true, token });
 });

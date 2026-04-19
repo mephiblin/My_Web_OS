@@ -1,5 +1,5 @@
-const express = require('express');
 const router = express.Router();
+const auditService = require('../services/auditService');
 const si = require('systeminformation');
 const fs = require('fs-extra');
 const path = require('path');
@@ -204,8 +204,9 @@ const uploadWP = multer({
  * POST /api/system/wallpapers/upload
  * Upload a new wallpaper
  */
-router.post('/wallpapers/upload', uploadWP.single('file'), (req, res) => {
+router.post('/wallpapers/upload', uploadWP.single('file'), async (req, res) => {
   if (req.file) {
+    await auditService.log('SYSTEM', 'Upload Wallpaper', { fileName: req.file.filename, user: req.user?.username }, 'INFO');
     res.json({ success: true, filename: req.file.filename });
   } else {
     res.status(400).json({ error: true, message: 'Upload failed' });
@@ -293,6 +294,7 @@ router.post('/state/:key', async (req, res) => {
     await fs.ensureDir(inventoryDir);
     const stateFile = path.join(inventoryDir, `state_${req.params.key}.json`);
     await fs.writeJson(stateFile, req.body, { spaces: 2 });
+    await auditService.log('SYSTEM', `Save State: ${req.params.key}`, { user: req.user?.username }, 'INFO');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
