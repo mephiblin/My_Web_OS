@@ -12,6 +12,13 @@ const { initTerminalService } = require('./services/terminal');
 
 dotenv.config();
 
+const indexService = require('./services/indexService');
+const trashService = require('./services/trashService');
+
+// Initialize Services
+indexService.init();
+trashService.init();
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -67,7 +74,9 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // Basic Route
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+  const auditService = require('./services/auditService');
+  await auditService.log('SYSTEM', 'HEALTH_CHECK', { uptime: process.uptime() });
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
@@ -84,3 +93,25 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Web OS Server running on port ${PORT}`);
 });
+
+// Graceful Shutdown
+async function shutdown() {
+  console.log('\n[SERVER] Shutting down gracefully...');
+  
+  // Stop background services
+  await indexService.close();
+  
+  server.close(() => {
+    console.log('[SERVER] Closed');
+    process.exit(0);
+  });
+
+  // Force close after 5s
+  setTimeout(() => {
+    console.error('[SERVER] Could not close in time, forcing shutdown');
+    process.exit(1);
+  }, 5000);
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

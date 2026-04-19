@@ -24,14 +24,26 @@ router.post('/setup', async (req, res) => {
   res.json(result);
 });
 
-// Mount (serve) a remote
-router.post('/mount', async (req, res) => {
-  const { name } = req.body;
-  if (!name) {
-    return res.status(400).json({ error: 'Remote name is required' });
+// List entries in a remote
+router.get('/list', async (req, res) => {
+  const { remote, path: remotePath } = req.query;
+  try {
+    const items = await cloudService.listEntries(remote, remotePath || '');
+    res.json(items);
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
   }
-  const result = await cloudService.mountRemote(name);
-  res.json(result);
+});
+
+// Read file content from a remote
+router.get('/read', async (req, res) => {
+  const { remote, path: remotePath } = req.query;
+  try {
+    const content = await cloudService.getFileContent(remote, remotePath);
+    res.json({ content });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
 });
 
 module.exports = router;

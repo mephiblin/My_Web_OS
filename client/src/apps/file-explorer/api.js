@@ -43,3 +43,36 @@ export async function renameItem(oldPath, newName) {
     body: JSON.stringify({ oldPath, newName })
   });
 }
+
+export async function searchFiles(query) {
+  return apiFetch(`/api/fs/search?q=${encodeURIComponent(query)}`);
+}
+
+export async function fetchTrash() {
+  return apiFetch('/api/fs/trash');
+}
+
+export async function restoreItem(id) {
+  return apiFetch('/api/fs/restore', {
+    method: 'POST',
+    body: JSON.stringify({ id })
+  });
+}
+
+export async function emptyTrash() {
+  return apiFetch('/api/fs/empty-trash', {
+    method: 'DELETE'
+  });
+}
+
+export async function fetchCloudRemotes() {
+  return apiFetch('/api/cloud/remotes');
+}
+
+export async function listCloudDir(remote, path) {
+  return apiFetch(`/api/cloud/list?remote=${encodeURIComponent(remote)}&path=${encodeURIComponent(path)}`);
+}
+
+export async function readCloudFile(remote, path) {
+  return apiFetch(`/api/cloud/read?remote=${encodeURIComponent(remote)}&path=${encodeURIComponent(path)}`);
+}

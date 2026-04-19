@@ -59,41 +59,62 @@ const cloudService = {
     try {
       const result = await runRclone('listremotes');
       if (!result.success) return [];
-      return result.stdout.trim().split('\n').filter(Boolean).map(r => ({
+      
+      const remotes = result.stdout.trim().split('\n').filter(Boolean).map(r => ({
         name: r.replace(':', ''),
-        connected: true // In a real app, we might check if it's mounted
+        type: 'cloud'
       }));
+      return remotes;
     } catch (err) {
+      console.error('[CLOUD] List remotes failed:', err);
       return [];
     }
   },
 
   /**
-   * Setup a new remote (Simplified for this project).
-   * In a real app, this would handle the interactive OAuth flow.
+   * List entries in a remote path.
    */
-  async setupRemote(name, provider) {
-    // This is a complex interaction in CLI; for the Web OS, we'd likely use 
-    // `rclone config create` or manual config file manipulation.
-    return { 
-      success: true, 
-      message: `Remote ${name} configured. (OAuth flow would happen here in a real rclone setup)` 
-    };
+  async listEntries(remote, remotePath = '') {
+    try {
+      const result = await runRclone(`lsjson "${remote}:${remotePath}"`);
+      if (!result.success) throw new Error(result.stderr);
+      
+      const entries = JSON.parse(result.stdout);
+      return entries.map(item => ({
+        name: item.Name,
+        path: item.Path,
+        isDirectory: item.IsDir,
+        size: item.Size,
+        mtime: item.ModTime,
+        mimeType: item.MimeType
+      }));
+    } catch (err) {
+      console.error(`[CLOUD] List entries failed for ${remote}:`, err);
+      throw err;
+    }
   },
 
   /**
-   * Serve a remote via WebDAV (More portable for Docker than FUSE mount).
+   * Get file content from a remote.
+   */
+  async getFileContent(remote, remotePath) {
+    try {
+      const result = await runRclone(`cat "${remote}:${remotePath}"`);
+      if (!result.success) throw new Error(result.stderr);
+      return result.stdout;
+    } catch (err) {
+      console.error(`[CLOUD] Cat failed for ${remote}:${remotePath}:`, err);
+      throw err;
+    }
+  },
+
+  /**
+   * Serve a remote via WebDAV (fallback for complex mounts).
    */
   async mountRemote(name, port = 8081) {
-    try {
-      // Use `rclone serve webdav` as it doesn't require FUSE on the host
-      // This would typically be a long-running process managed by the server
-      const args = `serve webdav ${name}: --addr :${port} --vfs-cache-mode full`;
-      // For this implementation, we just return the endpoint info
-      return { success: true, url: `http://localhost:${port}` };
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
+    // This starts a background process
+    runRclone(`serve webdav ${name}: --addr :${port} --vfs-cache-mode full`).catch(e => console.error(e));
+    return { success: true, url: `http://localhost:${port}` };
   }
 };
 

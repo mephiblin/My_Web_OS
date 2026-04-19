@@ -4,6 +4,60 @@ const fs = require('fs-extra');
 const path = require('path');
 const pathGuard = require('../middleware/pathGuard');
 const auth = require('../middleware/auth');
+const auditService = require('../services/auditService');
+const indexService = require('../services/indexService');
+const trashService = require('../services/trashService');
+
+/**
+ * GET /api/fs/search
+ * Global file search
+ */
+router.get('/search', async (req, res) => {
+  const { q } = req.query;
+  const results = indexService.search(q);
+  res.json(results);
+});
+
+/**
+ * GET /api/fs/trash
+ * List trash items
+ */
+router.get('/trash', async (req, res) => {
+  try {
+    const items = await trashService.getTrashItems();
+    res.json(items);
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * POST /api/fs/restore
+ * Restore from trash
+ */
+router.post('/restore', async (req, res) => {
+  const { id } = req.body;
+  try {
+    await trashService.restore(id);
+    auditService.log(req.user?.username || 'system', 'FS_RESTORE', { id });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * DELETE /api/fs/empty-trash
+ */
+router.delete('/empty-trash', async (req, res) => {
+  try {
+    await trashService.emptyTrash();
+    auditService.log(req.user?.username || 'system', 'FS_EMPTY_TRASH', {});
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
 
 // Auth required for all fs routes
 router.use(auth);
@@ -138,6 +192,7 @@ router.post('/write', async (req, res) => {
     const { content } = req.body;
 
     await fs.writeFile(targetPath, content || '', 'utf8');
+    await auditService.log('FS', 'WRITE', { path: targetPath, user: req.user?.username });
     res.json({ success: true, message: 'File saved successfully.' });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -151,8 +206,9 @@ router.post('/write', async (req, res) => {
 router.delete('/delete', async (req, res) => {
   try {
     const targetPath = req.safePath;
-    await fs.remove(targetPath);
-    res.json({ success: true, message: 'Item deleted successfully.' });
+    await trashService.moveToTrash(targetPath);
+    await auditService.log('FS', 'MOVE_TO_TRASH', { path: targetPath, user: req.user?.username });
+    res.json({ success: true, message: 'Item moved to trash.' });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
   }
@@ -166,6 +222,7 @@ router.post('/create-dir', async (req, res) => {
   try {
     const targetPath = req.safePath;
     await fs.ensureDir(targetPath);
+    await auditService.log('FS', 'CREATE_DIR', { path: targetPath, user: req.user?.username });
     res.json({ success: true, message: 'Directory created successfully.' });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
@@ -185,6 +242,7 @@ router.put('/rename', async (req, res) => {
     const resolvedOld = path.resolve(oldPath);
     const newPath = path.join(path.dirname(resolvedOld), newName);
     await fs.rename(resolvedOld, newPath);
+    await auditService.log('FS', 'RENAME', { oldPath: resolvedOld, newPath, user: req.user?.username });
     res.json({ success: true, message: 'Renamed successfully.' });
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });

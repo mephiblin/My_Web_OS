@@ -25,6 +25,10 @@
   import TransferUI from '../apps/transfer/TransferUI.svelte';
   import { systemSettings } from './stores/systemStore.js';
 
+  const iconMap = {
+    Shield, Monitor, Files, TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send
+  };
+
   const components = {
     files: FileExplorer,
     terminal: TerminalApp,
@@ -39,15 +43,28 @@
     'model-viewer': ModelViewer
   };
 
-  const apps = [
-    { id: 'files', title: 'File Station', icon: Files },
-    { id: 'terminal', title: 'Terminal', icon: TerminalIcon },
-    { id: 'monitor', title: 'Resource Monitor', icon: Monitor },
-    { id: 'docker', title: 'Docker', icon: Container },
-    { id: 'control-panel', title: 'Settings', icon: Settings },
-    { id: 'transfer', title: 'Transfer', icon: Send },
-    { id: 'player', title: 'Media', icon: Video }
-  ];
+  let apps = $state([]);
+  
+  async function loadApps() {
+    try {
+      const res = await fetch('/api/system/apps');
+      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+      
+      const data = await res.json();
+      if (!Array.isArray(data)) {
+        console.error('Invalid apps data received:', data);
+        return;
+      }
+
+      // Map icon strings to components
+      apps = data.map(app => ({
+        ...app,
+        icon: iconMap[app.icon] || LayoutGrid
+      }));
+    } catch (err) {
+      console.error('Failed to load apps:', err);
+    }
+  }
 
   let time = $state('');
   let isNotificationCenterOpen = $state(false);
@@ -59,6 +76,7 @@
 
   onMount(() => {
     updateTime();
+    loadApps();
     const timer = setInterval(updateTime, 1000);
     return () => clearInterval(timer);
   });
@@ -117,8 +135,8 @@
 
   {#each visibleWindows as win (win.id)}
     <Window window={win} active={$activeWindowId === win.id}>
-      {#if components[win.id]}
-        <svelte:component this={components[win.id]} data={win.data} />
+      {#if components[win.appId]}
+        <svelte:component this={components[win.appId]} data={win.data} />
       {:else}
         <div style="padding: 20px; color: var(--text-dim);">
           <h2>{win.title}</h2>

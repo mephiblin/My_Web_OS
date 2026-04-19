@@ -152,6 +152,9 @@
 
   <div class="content">
     {@render children()}
+    {#if dragging || resizing}
+      <div class="drag-overlay"></div>
+    {/if}
   </div>
   {#if !win.maximized}
     <div class="resize-handle" onmousedown={handleResizeStart}></div>
@@ -183,7 +186,14 @@
 
   .window.interacting .content {
     pointer-events: none;
-    visibility: hidden;
+  }
+
+  .drag-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    cursor: grabbing;
+    background: transparent;
   }
 
   .window.minimized {

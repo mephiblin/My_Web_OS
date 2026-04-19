@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { 
     Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
-    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box, Lock, Unlock, ShieldAlert
+    Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box, Lock, Unlock, ShieldAlert,
+    Search, Undo, Cloud
   } from 'lucide-svelte';
   import { notifications } from '../../core/stores/notificationStore.js';
   import { openWindow } from '../../core/stores/windowStore.js';
@@ -17,6 +18,12 @@
   let viewMode = $state('grid');
   let inventoryPath = $state('');
   let lockedFolders = $state(JSON.parse(localStorage.getItem('web_os_locked_folders') || '[]'));
+
+  // Search & Trash State
+  let searchQuery = $state('');
+  let isSearchView = $state(false);
+  let isTrashView = $state(false);
+  let cloudRemotes = $state([]);
 
   let sidebarLinks = $state([
     { id: 'home', label: 'Home', icon: Home, path: '/' },
@@ -33,10 +40,17 @@
     if (dirs.videos?.path) links.push({ id: 'videos', label: 'Videos', icon: Video, path: dirs.videos.path });
     if (dirs.music?.path) links.push({ id: 'music', label: 'Music', icon: Clock, path: dirs.music.path });
 
-    // Always add Inventory at the end
+    // Always add Inventory and Trash
     if (inventoryPath) {
       links.push({ id: 'inventory', label: 'Inventory', icon: Package, path: inventoryPath });
     }
+    
+    // Add Cloud Remotes
+    cloudRemotes.forEach(remote => {
+      links.push({ id: `cloud-${remote.name}`, label: remote.name, icon: Cloud, path: `cloud://${remote.name}/` });
+    });
+
+    links.push({ id: 'trash', label: 'Trash', icon: Trash2, path: 'trash' });
 
     return links;
   }
@@ -47,7 +61,12 @@
     selectedItem = item;
     
     let itemsInfo = [];
-    if (item) {
+    if (isTrashView && item) {
+      itemsInfo = [
+        { label: 'Restore', icon: Undo, action: () => handleRestore(item) },
+        { label: 'Erase Permanently', icon: Trash2, action: () => notifications.add({ title: 'Safety', message: 'Use Empty Trash to clear all items permanently.', type: 'info' }), danger: true }
+      ];
+    } else if (item) {
       const isLocked = lockedFolders.includes(item.path);
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
@@ -57,7 +76,12 @@
           icon: isLocked ? Unlock : Lock, 
           action: () => toggleLockFolder(item) 
         },
-        { label: 'Delete', icon: Trash2, action: handleDelete, danger: true }
+        { label: 'Move to Trash', icon: Trash2, action: handleDelete, danger: true }
+      ];
+    } else if (isTrashView) {
+      itemsInfo = [
+        { label: 'Empty Trash', icon: Trash2, action: handleEmptyTrash, danger: true },
+        { label: 'Refresh', icon: RotateCcw, action: fetchTrash }
       ];
     } else {
       itemsInfo = [
@@ -72,7 +96,27 @@
 
   async function fetchItems(path) {
     loading = true;
+    isSearchView = false;
+    isTrashView = false;
     try {
+      if (path === 'trash') {
+        return fetchTrash();
+      }
+
+      // Handle Cloud Paths (cloud://remote/path)
+      if (path.startsWith('cloud://')) {
+        const parts = path.replace('cloud://', '').split('/');
+        const remote = parts[0];
+        const remotePath = parts.slice(1).join('/');
+        const data = await fsApi.listCloudDir(remote, remotePath);
+        items = data.map(item => ({
+          ...item,
+          path: `cloud://${remote}/${item.path}` // Keep virtual path consistency
+        }));
+        currentPath = path;
+        return;
+      }
+
       const data = await fsApi.listDir(path);
       if (!data.error) {
         items = data.items;
@@ -85,7 +129,83 @@
     }
   }
 
+  async function handleSearch() {
+    if (!searchQuery.trim()) return;
+    loading = true;
+    isSearchView = true;
+    isTrashView = false;
+    try {
+      const data = await fsApi.searchFiles(searchQuery);
+      items = data;
+    } catch (err) {
+      console.error(err);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function fetchTrash() {
+    loading = true;
+    isTrashView = true;
+    isSearchView = false;
+    currentPath = 'trash';
+    try {
+      const data = await fsApi.fetchTrash();
+      items = data.map(item => ({
+        ...item,
+        name: item.fileName,
+        path: item.id, // Use ID for trash operations
+        isDirectory: false // Simplification: display as files
+      }));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function handleRestore(item) {
+    try {
+      await fsApi.restoreItem(item.id);
+      notifications.add({ title: 'Trash', message: `Restored ${item.name}`, type: 'success' });
+      fetchTrash();
+    } catch (err) {
+      notifications.add({ title: 'Error', message: 'Failed to restore item.', type: 'error' });
+    }
+  }
+
+  async function handleEmptyTrash() {
+    if (!confirm('Are you sure you want to permanently delete all items in trash?')) return;
+    try {
+      await fsApi.emptyTrash();
+      notifications.add({ title: 'Trash', message: 'Trash emptied.', type: 'success' });
+      fetchTrash();
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
   async function handleDblClick(item) {
+    if (isTrashView) return;
+
+    // Cloud support for dblclick
+    if (currentPath.startsWith('cloud://')) {
+      if (item.isDirectory) {
+        fetchItems(item.path);
+      } else {
+        notifications.add({ title: 'Cloud', message: 'Fetching cloud file...', type: 'info' });
+        const remote = currentPath.replace('cloud://', '').split('/')[0];
+        const remotePath = item.path.replace(`cloud://${remote}/`, '');
+        try {
+          const res = await fsApi.readCloudFile(remote, remotePath);
+          openWindow({ id: 'editor', title: `Cloud Edit - ${item.name}`, icon: FileText }, { content: res.content, readonly: true });
+        } catch (e) {
+          notifications.add({ title: 'Error', message: 'Could not fetch cloud content.', type: 'error' });
+        }
+      }
+      return;
+    }
+
     if (item.isDirectory) {
       if (lockedFolders.includes(item.path)) {
         const password = prompt(`'${item.name}' is a Secure Folder. Enter Password:`);
@@ -93,8 +213,7 @@
           notifications.add({ title: 'Security', message: `Authorized access to ${item.name}`, type: 'success' });
           fetchItems(item.path);
         } else {
-          notifications.add({ title: 'Security', message: `Unauthorized access attempt to ${item.name}`, type: 'error' });
-          alert('Incorrect password!');
+          notifications.add({ title: 'Security', message: `Unauthorized access attempt! Incorrect password.`, type: 'error' });
         }
         return;
       }
@@ -187,9 +306,10 @@
 
   onMount(async () => {
     try {
-      const [config, userDirs] = await Promise.all([
+      const [config, userDirs, remotes] = await Promise.all([
         fsApi.fetchConfig(),
         fsApi.fetchUserDirs(),
+        fsApi.fetchCloudRemotes(),
       ]);
 
       if (config.initialPath) {
@@ -197,10 +317,8 @@
         currentPath = initialPath;
       }
 
-      // Compute inventory path relative to server
+      cloudRemotes = remotes || [];
       inventoryPath = userDirs._inventoryPath || '';
-
-      // Build sidebar from detected directories
       sidebarLinks = buildSidebarLinks(userDirs.home || initialPath, userDirs);
     } catch (e) {
       console.error('Failed to load dirs:', e);
@@ -217,7 +335,30 @@
       <button onclick={() => fetchItems(currentPath)}><RotateCcw size={16} /></button>
     </div>
     <div class="path-bar">
-      <input type="text" bind:value={currentPath} onkeydown={handlePathKeydown} />
+      {#if isSearchView}
+        <div class="search-indicator">
+          <Search size={14} />
+          <span>Searching for "{searchQuery}"</span>
+          <button class="clear-search" onclick={() => fetchItems(currentPath)}>X</button>
+        </div>
+      {:else if isTrashView}
+        <div class="trash-indicator">
+          <Trash2 size={14} />
+          <span>Trash Bin</span>
+          <button class="empty-trash-btn" onclick={handleEmptyTrash}>Empty Trash</button>
+        </div>
+      {:else}
+        <input type="text" bind:value={currentPath} onkeydown={handlePathKeydown} />
+      {/if}
+    </div>
+    <div class="search-box">
+      <input 
+        type="text" 
+        placeholder="Search files..." 
+        bind:value={searchQuery} 
+        onkeydown={(e) => e.key === 'Enter' && handleSearch()}
+      />
+      <button onclick={handleSearch}><Search size={16} /></button>
     </div>
     <div class="actions">
       <button class={viewMode === 'grid' ? 'active' : ''} onclick={() => viewMode = 'grid'}><LayoutGrid size={16} /></button>
@@ -267,11 +408,20 @@
                       </div>
                     {/if}
                   </div>
+                {:else if isTrashView}
+                  <Trash2 size={viewMode === 'list' ? 32 : 48} color="var(--accent-red)" />
                 {:else}
                   <File size={viewMode === 'list' ? 32 : 48} color="var(--text-dim)" />
                 {/if}
               </div>
-              <span class="name">{item.name}</span>
+              <div class="item-info">
+                <span class="name">{item.name}</span>
+                {#if isSearchView}
+                  <span class="original-path">{item.path}</span>
+                {:else if isTrashView && item.deletedAt}
+                  <span class="delete-date">Deleted: {new Date(item.deletedAt).toLocaleDateString()}</span>
+                {/if}
+              </div>
             </div>
           {/each}
         </div>
@@ -289,9 +439,17 @@
   .toolbar button.active { background: rgba(255,255,255,0.15); color: var(--accent-blue); }
   .toolbar button:disabled { opacity: 0.3; cursor: not-allowed; }
   .separator { width: 1px; background: var(--glass-border); margin: 0 4px; height: 24px; align-self: center; }
-  .path-bar { flex: 1; }
+  
+  .path-bar { flex: 1; min-width: 0; }
   .path-bar input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); border-radius: 4px; color: white; padding: 4px 12px; font-size: 13px; }
   
+  .search-box { display: flex; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 4px; padding: 2px 4px; gap: 4px; }
+  .search-box input { background: transparent; border: none; color: white; padding: 2px 8px; font-size: 12px; width: 150px; outline: none; }
+  
+  .search-indicator, .trash-indicator { display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.1); padding: 4px 12px; border-radius: 4px; font-size: 12px; }
+  .search-indicator span, .trash-indicator span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .clear-search, .empty-trash-btn { background: rgba(255,255,255,0.1) !important; padding: 2px 8px !important; width: auto !important; height: auto !important; font-size: 10px !important; }
+
   .layout-body { flex: 1; display: flex; overflow: hidden; }
   .sidebar { width: 180px; background: rgba(0,0,0,0.15); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; padding: 12px 8px; flex-shrink: 0; }
   .sidebar-section h3 { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin: 0 0 8px 8px; letter-spacing: 0.5px; }
@@ -305,9 +463,13 @@
   .item { display: flex; border-radius: 8px; cursor: pointer; transition: background 0.2s; border: 1px solid transparent; }
   .view-container.grid .item { flex-direction: column; align-items: center; gap: 8px; padding: 10px; }
   .view-container.list .item { flex-direction: row; align-items: center; gap: 12px; padding: 6px 12px; }
-  .view-container.list .icon { transform: scale(0.6); transform-origin: center; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; }
   .item:hover { background: rgba(255,255,255,0.05); }
   .item.selected { background: rgba(88, 166, 255, 0.2); border: 1px solid var(--accent-blue); }
+  
+  .item-info { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1; min-width: 0; }
+  .view-container.list .item-info { align-items: flex-start; }
+  .original-path, .delete-date { font-size: 10px; color: var(--text-dim); opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+  
   .icon { display: flex; align-items: center; justify-content: center; }
   .folder-wrapper { position: relative; display: flex; align-items: center; justify-content: center; }
   .lock-overlay { 

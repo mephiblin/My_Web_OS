@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const si = require('systeminformation');
+const fs = require('fs-extra');
+const path = require('path');
+const storageService = require('../services/storageService');
 
 /**
  * GET /api/system/overview
@@ -99,6 +102,51 @@ router.get('/network-ips', async (req, res) => {
       local: local ? local.ip4 : 'Unknown',
       external
     });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * GET /api/system/apps
+ * Get dynamic app registry
+ */
+router.get('/apps', async (req, res) => {
+  try {
+    const appsPath = path.join(__dirname, '../storage/apps.json');
+    if (await fs.pathExists(appsPath)) {
+      const apps = await fs.readJson(appsPath);
+      res.json(apps);
+    } else {
+      res.json([]);
+    }
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * GET /api/system/audit
+ * Get recent audit logs
+ */
+router.get('/audit', async (req, res) => {
+  try {
+    const auditService = require('../services/auditService');
+    const logs = await auditService.getLogs();
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * GET /api/system/storage/diagnostics
+ * Get S.M.A.R.T health data
+ */
+router.get('/storage/diagnostics', async (req, res) => {
+  try {
+    const data = await storageService.getDiagnostics();
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
   }

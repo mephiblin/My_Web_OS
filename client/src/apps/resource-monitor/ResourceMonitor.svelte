@@ -26,6 +26,9 @@
     { id: 'gpu', label: 'GPU' },
   ];
 
+  let storageDiagnostics = $state([]);
+  let loadingDiagnostics = $state(false);
+
   async function fetchStats() {
     try {
       const data = await fetchSystemOverview();
@@ -39,7 +42,20 @@
     }
   }
 
+  async function fetchDiagnostics() {
+    loadingDiagnostics = true;
+    try {
+      const data = await apiFetch('/api/system/storage/diagnostics');
+      storageDiagnostics = data;
+    } catch (err) {
+      console.error(err);
+    } finally {
+      loadingDiagnostics = false;
+    }
+  }
+
   async function fetchIps() {
+// ... existing fetchIps ...
     refreshingIps = true;
     try {
       const data = await apiFetch('/api/system/network-ips');
@@ -54,6 +70,7 @@
   onMount(() => {
     fetchStats();
     fetchIps();
+    fetchDiagnostics();
     interval = setInterval(fetchStats, 1000);
   });
 
@@ -226,7 +243,44 @@
       </div>
 
     {:else if activeTab === 'storage'}
-      <div class="section-title">Storage</div>
+      <div class="header-with-action">
+        <div class="section-title">Storage & Health</div>
+        <button class="refresh-btn" onclick={fetchDiagnostics} disabled={loadingDiagnostics}>
+          <RotateCcw size={14} class={loadingDiagnostics ? 'spin' : ''} />
+          <span>Refresh S.M.A.R.T</span>
+        </button>
+      </div>
+
+      <div class="diagnostics-grid">
+        {#each storageDiagnostics as diag}
+          <div class="card glass-effect diag-card {diag.status}">
+            <div class="diag-header">
+              <span class="model">{diag.model || 'Unknown Disk'}</span>
+              <span class="status-badge">{diag.status.toUpperCase()}</span>
+            </div>
+            {#if diag.smart}
+              <div class="diag-metrics">
+                <div class="metric">
+                  <span class="label">Temperature</span>
+                  <span class="value">{diag.smart.temperature ?? '--'} °C</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Life Remaining</span>
+                  <span class="value">{diag.smart.percentage_used != null ? (100 - diag.smart.percentage_used) + '%' : '--'}</span>
+                </div>
+                <div class="metric">
+                  <span class="label">Power Hours</span>
+                  <span class="value">{diag.smart.power_on_hours ?? '--'} h</span>
+                </div>
+              </div>
+            {:else}
+              <div class="diag-error">{diag.error || 'No S.M.A.R.T data available'}</div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      <div class="section-title" style="margin-top: 24px;">Mounted Partitions</div>
       {#each status.storage as drive}
         <div class="card glass-effect drive-card">
           <div class="detail-row"><span class="drive-name">{drive.fs}</span><span>{drive.use}%</span></div>
@@ -308,6 +362,29 @@
   .detail-row { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; }
   .drive-name { font-weight: 600; }
   .drive-card { margin-bottom: 4px; }
+  
+  .header-with-action { display: flex; justify-content: space-between; align-items: center; }
+  .refresh-btn { background: rgba(88, 166, 255, 0.15); border: 1px solid var(--glass-border); color: var(--accent-blue); padding: 6px 12px; border-radius: 6px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+  .refresh-btn:hover { background: rgba(88, 166, 255, 0.25); color: white; }
+  
+  .diagnostics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-top: 12px; }
+  .diag-card { border-left: 4px solid var(--glass-border); }
+  .diag-card.healthy { border-left-color: var(--accent-green); }
+  .diag-card.warning { border-left-color: var(--accent-red); }
+  .diag-card.unknown { border-left-color: var(--text-dim); }
+  
+  .diag-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .diag-header .model { font-size: 14px; font-weight: 600; }
+  .status-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1); }
+  .healthy .status-badge { background: rgba(46, 160, 67, 0.2); color: #7ee787; }
+  .warning .status-badge { background: rgba(219, 109, 40, 0.2); color: #ffa657; }
+  
+  .diag-metrics { display: flex; flex-direction: column; gap: 6px; }
+  .metric { display: flex; justify-content: space-between; font-size: 12px; }
+  .metric .label { color: var(--text-dim); }
+  .metric .value { font-weight: 600; color: white; }
+  .diag-error { font-size: 11px; color: var(--text-dim); font-style: italic; }
+
   .net-speeds { display: flex; gap: 20px; margin-top: 4px; }
   .speed-item { font-size: 14px; font-weight: 500; }
   .down { color: var(--accent-blue); }
