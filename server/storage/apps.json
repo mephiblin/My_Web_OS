@@ -12,22 +12,26 @@
   {
     "id": "monitor",
     "title": "Resource Monitor",
-    "icon": "Monitor"
+    "icon": "Monitor",
+    "singleton": true
   },
   {
     "id": "docker",
     "title": "Docker",
-    "icon": "Container"
+    "icon": "Container",
+    "singleton": true
   },
   {
     "id": "control-panel",
     "title": "Settings",
-    "icon": "Settings"
+    "icon": "Settings",
+    "singleton": true
   },
   {
     "id": "transfer",
     "title": "Transfer",
-    "icon": "Send"
+    "icon": "Send",
+    "singleton": true
   },
   {
     "id": "player",
@@ -37,11 +41,13 @@
   {
     "id": "logs",
     "title": "Log Viewer",
-    "icon": "Shield"
+    "icon": "Shield",
+    "singleton": true
   },
   {
     "id": "widget-store",
     "title": "Widgets",
-    "icon": "LayoutGrid"
+    "icon": "LayoutGrid",
+    "singleton": true
   }
 ]

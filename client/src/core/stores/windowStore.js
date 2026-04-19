@@ -43,6 +43,17 @@ windows.subscribe(items => saveState(items, get(activeWindowId)));
 activeWindowId.subscribe(id => saveState(get(windows), id));
 
 export function openWindow(app, data = null) {
+  const currentWindows = get(windows);
+  
+  // Singleton check
+  if (app.singleton) {
+    const existing = currentWindows.find(w => w.appId === app.id);
+    if (existing) {
+      focusWindow(existing.id);
+      return;
+    }
+  }
+
   windows.update(items => {
     const maxZ = items.length > 0 ? Math.max(...items.map(w => w.zIndex)) : 50;
     const newId = `${app.id}-${Date.now()}`;
