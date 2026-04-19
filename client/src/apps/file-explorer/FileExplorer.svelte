@@ -3,12 +3,14 @@
   import { 
     Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
     Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box, Lock, Unlock, ShieldAlert,
-    Search, Undo, Cloud, Share2
+    Search, Undo, Cloud, Share2, ExternalLink
   } from 'lucide-svelte';
   import { notifications } from '../../core/stores/notificationStore.js';
   import { agentStore } from '../../core/stores/agentStore.js';
   import { openWindow } from '../../core/stores/windowStore.js';
   import { openContextMenu } from '../../core/stores/contextMenuStore.js';
+  import { addShortcut } from '../../core/stores/shortcutStore.js';
+  import { systemSettings } from '../../core/stores/systemStore.js';
   import * as fsApi from './api.js';
 
   let currentPath = $state('/');
@@ -88,6 +90,7 @@
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
         { label: 'Rename', icon: Pencil, action: () => handleRename(item) },
+        { label: 'Create Desktop Shortcut', icon: ExternalLink, action: () => addShortcut(item) },
         ...(item.name.toLowerCase().endsWith('.zip') ? [{ label: 'Extract Here', icon: Package, action: () => handleExtract(item) }] : []),
         { 
           label: isLocked ? 'Unlock Folder' : 'Secure Folder', 

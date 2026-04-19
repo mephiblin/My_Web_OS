@@ -1,11 +1,12 @@
 <script>
   import { onMount } from 'svelte';
-  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send } from 'lucide-svelte';
+  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send, Folder, File, Trash2, ExternalLink } from 'lucide-svelte';
   import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize, initWindows } from './stores/windowStore.js';
-  import { contextMenu, closeContextMenu } from './stores/contextMenuStore.js';
+  import { contextMenu, openContextMenu, closeContextMenu } from './stores/contextMenuStore.js';
   import { desktops, currentDesktopId, switchDesktop } from './stores/desktopStore.js';
   import { snapGhost } from './stores/snapStore.js';
   import { widgets } from './stores/widgetStore.js';
+  import { shortcuts, initShortcuts, removeShortcut } from './stores/shortcutStore.js';
   import Window from './Window.svelte';
   import DashboardWidget from './components/DashboardWidget.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
@@ -87,7 +88,8 @@
       systemSettings.init(),
       initWindows(),
       widgets.init(),
-      widgetLibrary.init()
+      widgetLibrary.init(),
+      initShortcuts()
     ]);
 
     updateTime();
@@ -130,6 +132,30 @@
       document.documentElement.style.setProperty('--accent-blue', s.accentColor);
     }
   });
+
+  function openShortcut(shortcut) {
+    if (shortcut.isDirectory) {
+      openWindow({ id: 'files', title: 'File Station', icon: Folder }, { path: shortcut.path });
+    } else {
+      const ext = shortcut.ext;
+      if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) {
+        openWindow({ id: 'player', title: `Viewer - ${shortcut.name}`, icon: Image }, { path: shortcut.path });
+      } else if (['mp4', 'webm', 'mov'].includes(ext)) {
+        openWindow({ id: 'player', title: `Player - ${shortcut.name}`, icon: Video }, { path: shortcut.path });
+      } else if (['pdf'].includes(ext)) {
+        openWindow({ id: 'doc-viewer', title: `PDF Reader - ${shortcut.name}`, icon: File }, { path: shortcut.path });
+      } else {
+        openWindow({ id: 'editor', title: `Editor - ${shortcut.name}`, icon: File }, { path: shortcut.path });
+      }
+    }
+  }
+
+  function handleShortcutContext(e, shortcutId) {
+    e.preventDefault();
+    openContextMenu(e.clientX, e.clientY, [
+      { label: 'Remove Shortcut', icon: Trash2, action: () => removeShortcut(shortcutId), danger: true }
+    ]);
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -150,13 +176,35 @@
     {/each}
   </div>
 
-  <div class="app-grid">
+  <div class="app-grid" onclick={() => closeContextMenu()}>
     {#each apps as app}
       <button class="app-icon" ondblclick={() => openWindow(app)}>
         <div class="icon-box glass-effect">
           <svelte:component this={app.icon} size={32} />
         </div>
         <span>{app.title}</span>
+      </button>
+    {/each}
+
+    {#each $shortcuts as shortcut (shortcut.id)}
+      <button 
+        class="app-icon shortcut" 
+        ondblclick={() => openShortcut(shortcut)}
+        oncontextmenu={(e) => handleShortcutContext(e, shortcut.id)}
+      >
+        <div class="icon-box glass-effect {shortcut.isDirectory ? 'dir' : 'file'}">
+          {#if shortcut.isDirectory}
+            <Folder size={32} />
+          {:else if ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(shortcut.ext)}
+            <Image size={32} />
+          {:else if ['mp4', 'webm', 'mov'].includes(shortcut.ext)}
+            <Video size={32} />
+          {:else}
+            <File size={32} />
+          {/if}
+          <div class="shortcut-badge"><ExternalLink size={10} /></div>
+        </div>
+        <span>{shortcut.name}</span>
       </button>
     {/each}
   </div>
@@ -257,11 +305,22 @@
     border-color: rgba(255, 255, 255, 0.3);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4), 0 0 15px rgba(88, 166, 255, 0.2);
   }
+  .icon-box.dir { color: #58a6ff; }
+  .icon-box.file { color: #f0f6fc; }
+  
+  .shortcut-badge { 
+    position: absolute; 
+    bottom: -4px; right: -4px; 
+    background: var(--accent-blue); 
+    color: white; 
+    border-radius: 4px; 
+    width: 16px; height: 16px; 
+    display: flex; align-items: center; justify-content: center; 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  }
+
   .app-icon span { 
-    font-size: 11px; 
-    font-weight: 500;
-    text-align: center;
-    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+    font-size: 13px; color: white; text-shadow: 0 1px 3px rgba(0,0,0,0.8); text-align: center;
     max-width: 90px;
     overflow: hidden;
     text-overflow: ellipsis;
