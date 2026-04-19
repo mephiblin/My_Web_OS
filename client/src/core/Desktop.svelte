@@ -199,7 +199,7 @@
     {time} 
     isNotificationCenterOpen={isNotificationCenterOpen}
     onToggleNotifications={() => isNotificationCenterOpen = !isNotificationCenterOpen}
-    onOpenSettings={() => openWindow({ id: 'control-panel', title: 'Settings', icon: Settings })}
+    onOpenSettings={() => openWindow({ id: 'control-panel', title: 'Settings', icon: Settings, singleton: true })}
   />
 </div>
 

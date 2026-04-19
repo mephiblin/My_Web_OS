@@ -14,9 +14,9 @@
   const apps = [
     { id: 'files', title: 'File Station', icon: File },
     { id: 'terminal', title: 'Terminal', icon: Command },
-    { id: 'monitor', title: 'Resource Monitor', icon: Settings },
-    { id: 'docker', title: 'Docker', icon: AppWindow },
-    { id: 'settings', title: 'Settings', icon: Settings }
+    { id: 'monitor', title: 'Resource Monitor', icon: Settings, singleton: true },
+    { id: 'docker', title: 'Docker', icon: AppWindow, singleton: true },
+    { id: 'control-panel', title: 'Settings', icon: Settings, singleton: true }
   ];
 
   const actions = [

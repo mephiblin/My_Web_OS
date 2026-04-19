@@ -175,6 +175,43 @@ router.get('/network/connections', async (req, res) => {
  * GET /api/system/state/:key
  * Read OS state from Inventory
  */
+/**
+ * GET /api/system/wallpapers/list
+ * List all files in the wallpapers inventory
+ */
+router.get('/wallpapers/list', async (req, res) => {
+  try {
+    const wpDir = path.join(__dirname, '../storage/inventory/wallpapers');
+    await fs.ensureDir(wpDir);
+    const files = await fs.readdir(wpDir);
+    // Filter for common image/video extensions
+    const wallpapers = files.filter(f => /\.(jpg|jpeg|png|webp|mp4|webm|gif)$/i.test(f));
+    res.json({ success: true, data: wallpapers });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+const multer = require('multer');
+const uploadWP = multer({ 
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, path.join(__dirname, '../storage/inventory/wallpapers')),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
+  })
+});
+
+/**
+ * POST /api/system/wallpapers/upload
+ * Upload a new wallpaper
+ */
+router.post('/wallpapers/upload', uploadWP.single('file'), (req, res) => {
+  if (req.file) {
+    res.json({ success: true, filename: req.file.filename });
+  } else {
+    res.status(400).json({ error: true, message: 'Upload failed' });
+  }
+});
+
 router.get('/state/:key', async (req, res) => {
   try {
     const stateFile = path.join(__dirname, `../storage/inventory/state_${req.params.key}.json`);

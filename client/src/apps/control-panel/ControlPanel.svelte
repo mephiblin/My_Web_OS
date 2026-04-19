@@ -1,9 +1,15 @@
 <script>
-  import { Settings, Image, Palette, Info, Monitor, Shield, Trash2, Heart } from 'lucide-svelte';
+  import { onMount } from 'svelte';
+  import { Settings, Image as ImageIcon, Palette, Info, Monitor, Shield, Trash2, Heart, Plus, Folder, Upload, Play, Check, ExternalLink } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
   import { systemSettings } from '../../core/stores/systemStore.js';
+  import FilePicker from '../../core/components/FilePicker.svelte';
 
   let activeTab = $state('personalization');
+  let wallpaperList = $state([]);
+  let isLoadingList = $state(false);
+  let showFilePicker = $state(false);
+  let fileInput;
   
   const tabs = [
     { id: 'personalization', title: 'Personalization', icon: Palette },
@@ -12,12 +18,66 @@
     { id: 'about', title: 'About', icon: Info }
   ];
 
-  function applySettings() {
-    // Already handled by systemSettings.updateSettings in the UI
-    addToast('Settings synchronized', 'success');
+  async function fetchWallpapers() {
+    isLoadingList = true;
+    try {
+      const token = localStorage.getItem('web_os_token') || '';
+      const res = await fetch('/api/system/wallpapers/list', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const json = await res.json();
+      if (json.success) {
+        wallpaperList = json.data;
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      isLoadingList = false;
+    }
   }
 
-  const wallpapers = [
+  async function uploadWallpaper(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const token = localStorage.getItem('web_os_token') || '';
+      const res = await fetch('/api/system/wallpapers/upload', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
+      });
+      const json = await res.json();
+      if (json.success) {
+        addToast('Wallpaper uploaded successfully', 'success');
+        fetchWallpapers();
+      }
+    } catch (e) {
+      addToast('Upload failed', 'error');
+    }
+  }
+
+  function selectWallpaper(file) {
+    const url = `/api/inventory-files/wallpapers/${file}`;
+    systemSettings.updateSettings({ wallpaper: url, wallpaperId: file });
+  }
+
+  function handleFileSelected(path) {
+    // Convert absolute path to a URL the browser can access
+    const url = `/api/fs/raw?path=${encodeURIComponent(path)}`;
+    systemSettings.updateSettings({ wallpaper: url, wallpaperId: path });
+    showFilePicker = false;
+    addToast('Wallpaper applied from Inventory', 'success');
+  }
+
+  onMount(() => {
+    fetchWallpapers();
+  });
+
+  const gradientPresets = [
     { id: 'default', name: 'Standard Blue', color: 'linear-gradient(135deg, #1e2a3a 0%, #0d1117 100%)' },
     { id: 'neon', name: 'Cyber Neon', color: 'linear-gradient(135deg, #2a1e3a 0%, #0d1117 100%)' },
     { id: 'nature', name: 'Deep Forest', color: 'linear-gradient(135deg, #1e3a2a 0%, #0d1117 100%)' },
@@ -50,11 +110,17 @@
         <h2>Personalization</h2>
         
         <div class="setting-group">
-          <label>Wallpaper Type</label>
+          <label>Background Source</label>
           <div class="type-selector">
-            <button class:active={$systemSettings.wallpaperType === 'css'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'css' })}>Gradient</button>
-            <button class:active={$systemSettings.wallpaperType === 'image'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'image' })}>Image</button>
-            <button class:active={$systemSettings.wallpaperType === 'video'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'video' })}>Video (MP4/WebM)</button>
+            <button class:active={$systemSettings.wallpaperType === 'css'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'css' })}>
+              <Palette size={14} /> Gradient
+            </button>
+            <button class:active={$systemSettings.wallpaperType === 'image'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'image' })}>
+              <ImageIcon size={14} /> My Images
+            </button>
+            <button class:active={$systemSettings.wallpaperType === 'video'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'video' })}>
+              <Play size={14} /> My Videos
+            </button>
           </div>
         </div>
 
@@ -62,12 +128,15 @@
           <div class="setting-group">
             <label>Presets</label>
             <div class="wallpaper-grid">
-              {#each wallpapers as wp}
+              {#each gradientPresets as wp}
                 <button 
                   class="wallpaper-item {$systemSettings.wallpaperId === wp.id ? 'active' : ''}"
                   style="background: {wp.color}"
                   onclick={() => systemSettings.updateSettings({ wallpaper: wp.color, wallpaperId: wp.id })}
                 >
+                  {#if $systemSettings.wallpaperId === wp.id}
+                    <div class="active-check"><Check size={16} /></div>
+                  {/if}
                   <span class="wp-name">{wp.name}</span>
                 </button>
               {/each}
@@ -75,18 +144,65 @@
           </div>
         {:else}
           <div class="setting-group">
-            <label>{$systemSettings.wallpaperType === 'video' ? 'Video' : 'Image'} URL</label>
+            <div class="lib-header">
+              <label>Inventory Gallery</label>
+              <div class="header-actions">
+                <button class="action-btn-outline" onclick={() => showFilePicker = true}>
+                  <ExternalLink size={14} /> Browse from Files
+                </button>
+                <button class="upload-action-btn" onclick={() => fileInput.click()}>
+                  <Upload size={14} /> Upload New
+                </button>
+              </div>
+              <input type="file" bind:this={fileInput} hidden onchange={uploadWallpaper} accept={$systemSettings.wallpaperType === 'video' ? 'video/*' : 'image/*'} />
+            </div>
+
+            <div class="gallery-grid">
+              {#each wallpaperList as file}
+                {#if ($systemSettings.wallpaperType === 'video' && /\.(mp4|webm)$/i.test(file)) || ($systemSettings.wallpaperType === 'image' && /\.(jpg|jpeg|png|webp|gif)$/i.test(file))}
+                  <button 
+                    class="gallery-item {$systemSettings.wallpaperId === file ? 'active' : ''}"
+                    onclick={() => selectWallpaper(file)}
+                  >
+                    {#if $systemSettings.wallpaperType === 'video'}
+                      <div class="video-preview">
+                        <Play size={20} />
+                      </div>
+                    {:else}
+                      <img src="/api/inventory-files/wallpapers/{file}" alt={file} loading="lazy" />
+                    {/if}
+                    
+                    {#if $systemSettings.wallpaperId === file}
+                      <div class="active-check"><Check size={16} /></div>
+                    {/if}
+                    <span class="wp-name">{file}</span>
+                  </button>
+                {/if}
+              {/each}
+              
+              {#if wallpaperList.length === 0 && !isLoadingList}
+                <div class="empty-gallery">
+                  <Folder size={32} />
+                  <p>No {$systemSettings.wallpaperType === 'video' ? 'videos' : 'images'} found in Inventory/wallpapers</p>
+                </div>
+              {/if}
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <label>Or manually enter URL</label>
             <div class="url-input-container">
               <input 
                 type="text" 
-                placeholder="https://example.com/background.mp4"
+                placeholder="https://example.com/custom.png"
                 value={$systemSettings.wallpaper}
                 onchange={(e) => systemSettings.updateSettings({ wallpaper: e.target.value, wallpaperId: 'custom' })}
               />
             </div>
-            <p class="hint">Enter a direct URL to a {$systemSettings.wallpaperType === 'video' ? 'WebM or MP4' : 'JPG or PNG'} file.</p>
           </div>
         {/if}
+
+        <div class="setting-divider"></div>
 
         <div class="setting-group">
           <label>Glassmorphism Blur ({$systemSettings.blurIntensity}px)</label>
@@ -159,6 +275,14 @@
   </main>
 </div>
 
+{#if showFilePicker}
+  <FilePicker 
+    filter={$systemSettings.wallpaperType === 'video' ? ['mp4', 'webm', 'mov'] : ['jpg', 'jpeg', 'png', 'webp', 'gif']} 
+    onSelect={handleFileSelected} 
+    onCancel={() => showFilePicker = false} 
+  />
+{/if}
+
 <style>
   .control-panel { display: flex; height: 100%; overflow: hidden; background: rgba(0,0,0,0.2); }
   
@@ -181,31 +305,49 @@
   .setting-group { margin-bottom: 24px; display: flex; flex-direction: column; gap: 10px; }
   .setting-group label { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
   
+  .setting-divider { height: 1px; background: var(--glass-border); margin: 30px 0; }
+
   input[type="range"] { width: 100%; accent-color: var(--accent-blue); height: 6px; border-radius: 3px; cursor: pointer; }
   
-  .wallpaper-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
-  .wallpaper-item { 
-    height: 80px; border-radius: 8px; border: 2px solid transparent; cursor: pointer; 
-    position: relative; overflow: hidden; transition: all 0.2s;
+  .wallpaper-grid, .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
+  
+  .wallpaper-item, .gallery-item { 
+    height: 90px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; 
+    position: relative; overflow: hidden; transition: all 0.2s; background: rgba(0,0,0,0.3);
   }
-  .wallpaper-item:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
-  .wallpaper-item.active { border-color: var(--accent-blue); box-shadow: 0 0 15px rgba(88, 166, 255, 0.4); }
-  .wp-name { position: absolute; bottom: 0; left: 0; width: 100%; padding: 4px; background: rgba(0,0,0,0.5); font-size: 10px; color: white; text-align: center; }
+  
+  .gallery-item img { width: 100%; height: 100%; object-fit: cover; }
+  .video-preview { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(88,166,255,0.1); color: var(--accent-blue); }
+
+  .wallpaper-item:hover, .gallery-item:hover { transform: translateY(-3px); box-shadow: 0 8px 16px rgba(0,0,0,0.4); }
+  .wallpaper-item.active, .gallery-item.active { border-color: var(--accent-blue); box-shadow: 0 0 15px rgba(88, 166, 255, 0.4); }
+  
+  .active-check { position: absolute; top: 8px; right: 8px; background: var(--accent-blue); color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 2px solid rgba(255,255,255,0.2); z-index: 2; }
+
+  .wp-name { position: absolute; bottom: 0; left: 0; width: 100%; padding: 6px; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent); font-size: 10px; color: white; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .lib-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .header-actions { display: flex; gap: 8px; }
+  .upload-action-btn { background: rgba(88,166,255,0.1); border: 1px dashed var(--accent-blue); color: var(--accent-blue); padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s; }
+  .upload-action-btn:hover { background: rgba(88,166,255,0.2); transform: translateY(-1px); }
+  
+  .action-btn-outline { background: transparent; border: 1px solid var(--glass-border); color: var(--text-secondary); padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s; }
+  .action-btn-outline:hover { background: rgba(255,255,255,0.05); color: white; }
 
   .color-picker { display: flex; align-items: center; gap: 12px; }
   input[type="color"] { border: none; width: 40px; height: 40px; border-radius: 8px; background: transparent; cursor: pointer; }
   .color-value { font-family: monospace; font-size: 14px; color: var(--text-dim); }
 
   .type-selector { display: flex; gap: 8px; background: rgba(0,0,0,0.2); padding: 4px; border-radius: 10px; border: 1px solid var(--glass-border); }
-  .type-selector button { flex: 1; padding: 8px; border: none; background: transparent; color: var(--text-dim); border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.2s; }
+  .type-selector button { flex: 1; padding: 10px; border: none; background: transparent; color: var(--text-dim); border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; }
   .type-selector button:hover { color: white; background: rgba(255,255,255,0.05); }
   .type-selector button.active { background: var(--accent-blue); color: white; box-shadow: 0 2px 8px rgba(88, 166, 255, 0.3); }
 
   .url-input-container { display: flex; gap: 8px; }
   .url-input-container input { flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: white; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-family: monospace; outline: none; }
-  .url-input-container input:focus { border-color: var(--accent-blue); }
   
-  .hint { font-size: 11px; color: var(--text-dim); margin: 0; line-height: 1.4; opacity: 0.7; }
+  .empty-gallery { grid-column: 1 / -1; padding: 40px; border: 2px dashed var(--glass-border); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-dim); opacity: 0.6; }
+  .empty-gallery p { margin: 0; font-size: 13px; }
 
   .info-card { padding: 20px; border-radius: 12px; display: flex; flex-direction: column; gap: 12px; }
   .info-item { display: flex; gap: 10px; font-size: 14px; }
