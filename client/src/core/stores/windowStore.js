@@ -1,30 +1,42 @@
 import { writable, get } from 'svelte/store';
 import { currentDesktopId } from './desktopStore.js';
 
-// Load initial state from localStorage
-const savedWindows = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_windows') : null;
-const savedActive = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_active_window') : null;
+export const windows = writable([]);
+export const activeWindowId = writable(null);
+let isInitialized = false;
 
-export const windows = writable(savedWindows ? JSON.parse(savedWindows).map(w => ({
-  ...w,
-  appId: w.appId || w.id // Ensure appId exists for component lookup
-})) : []);
-export const activeWindowId = writable(savedActive || null);
+export const initWindows = async () => {
+  try {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+    const res = await fetch('/api/system/state/windows', { headers: { 'Authorization': `Bearer ${token}` } });
+    const json = await res.json();
+    if (json.data && json.data.windows) {
+      windows.set(json.data.windows.map(w => ({ ...w, appId: w.appId || w.id })));
+      activeWindowId.set(json.data.active || null);
+    }
+  } catch (e) {
+    console.error('Failed to load window state', e);
+  }
+  isInitialized = true;
+};
 
 // Persistence logic with debounce
 let saveTimeout;
-if (typeof localStorage !== 'undefined') {
-  windows.subscribe(items => {
-    clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
-      localStorage.setItem('web_os_windows', JSON.stringify(items));
-    }, 1000); // 1s debounce
-  });
-  activeWindowId.subscribe(id => {
-    if (id) localStorage.setItem('web_os_active_window', id);
-    else localStorage.removeItem('web_os_active_window');
-  });
-}
+const saveState = (items, activeId) => {
+  if (!isInitialized) return;
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+    fetch('/api/system/state/windows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ windows: items, active: activeId })
+    }).catch(console.error);
+  }, 1000);
+};
+
+windows.subscribe(items => saveState(items, get(activeWindowId)));
+activeWindowId.subscribe(id => saveState(get(windows), id));
 
 export function openWindow(app, data = null) {
   windows.update(items => {

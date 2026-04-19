@@ -171,4 +171,38 @@ router.get('/network/connections', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/system/state/:key
+ * Read OS state from Inventory
+ */
+router.get('/state/:key', async (req, res) => {
+  try {
+    const stateFile = path.join(__dirname, `../storage/inventory/state_${req.params.key}.json`);
+    if (await fs.pathExists(stateFile)) {
+      const data = await fs.readJson(stateFile);
+      res.json({ success: true, data });
+    } else {
+      res.json({ success: true, data: null });
+    }
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * POST /api/system/state/:key
+ * Write OS state to Inventory
+ */
+router.post('/state/:key', async (req, res) => {
+  try {
+    const inventoryDir = path.join(__dirname, '../storage/inventory');
+    await fs.ensureDir(inventoryDir);
+    const stateFile = path.join(inventoryDir, `state_${req.params.key}.json`);
+    await fs.writeJson(stateFile, req.body, { spaces: 2 });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
+
 module.exports = router;

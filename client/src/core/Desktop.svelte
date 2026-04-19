@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send } from 'lucide-svelte';
-  import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize } from './stores/windowStore.js';
+  import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize, initWindows } from './stores/windowStore.js';
   import { contextMenu, closeContextMenu } from './stores/contextMenuStore.js';
   import { desktops, currentDesktopId, switchDesktop } from './stores/desktopStore.js';
   import { snapGhost } from './stores/snapStore.js';
@@ -78,7 +78,14 @@
     time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  onMount(() => {
+  onMount(async () => {
+    // Initialize OS State from backend inventory
+    await Promise.all([
+      systemSettings.init(),
+      initWindows(),
+      widgets.init()
+    ]);
+
     updateTime();
     loadApps();
     const timer = setInterval(updateTime, 1000);

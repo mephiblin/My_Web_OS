@@ -10,37 +10,47 @@ const DEFAULT_SETTINGS = {
 };
 
 const createSystemStore = () => {
-  // Load from localStorage
-  const saved = localStorage.getItem('web_os_system_settings');
-  const initial = saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-  
-  const { subscribe, set, update } = writable(initial);
+  const { subscribe, set, update } = writable(DEFAULT_SETTINGS);
+  let isInitialized = false;
+
+  const init = async () => {
+    try {
+      const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+      const res = await fetch('/api/system/state/settings', { headers: { 'Authorization': `Bearer ${token}` } });
+      const json = await res.json();
+      set(json.data || DEFAULT_SETTINGS);
+    } catch (e) {
+      set(DEFAULT_SETTINGS);
+    }
+    isInitialized = true;
+  };
+
+  // Persistence logic
+  let saveTimeout;
+  subscribe(settings => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.style.setProperty('--glass-blur', `${settings.blurIntensity}px`);
+      document.documentElement.style.setProperty('--glass-opacity', `${settings.transparency}`);
+      document.documentElement.style.setProperty('--accent-blue', settings.accentColor);
+    }
+
+    if (!isInitialized) return;
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+      fetch('/api/system/state/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(settings)
+      }).catch(console.error);
+    }, 500);
+  });
 
   return {
     subscribe,
-    updateSettings: (newSettings) => {
-      update(s => {
-        const updated = { ...s, ...newSettings };
-        localStorage.setItem('web_os_system_settings', JSON.stringify(updated));
-        
-        // Apply to CSS variables
-        if (updated.blurIntensity !== undefined) {
-          document.documentElement.style.setProperty('--glass-blur', `${updated.blurIntensity}px`);
-        }
-        if (updated.transparency !== undefined) {
-          document.documentElement.style.setProperty('--glass-opacity', updated.transparency);
-        }
-        if (updated.accentColor !== undefined) {
-          document.documentElement.style.setProperty('--accent-blue', updated.accentColor);
-        }
-        
-        return updated;
-      });
-    },
-    reset: () => {
-      set(DEFAULT_SETTINGS);
-      localStorage.removeItem('web_os_system_settings');
-    }
+    init,
+    updateSettings: (newSettings) => update(s => ({ ...s, ...newSettings })),
+    reset: () => set(DEFAULT_SETTINGS)
   };
 };
 

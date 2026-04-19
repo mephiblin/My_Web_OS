@@ -7,24 +7,39 @@ const DEFAULT_WIDGETS = [
 ];
 
 const createWidgetStore = () => {
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_widgets') : null;
-  const initial = saved ? JSON.parse(saved) : DEFAULT_WIDGETS;
-  
-  const { subscribe, set, update } = writable(initial);
+  const { subscribe, set, update } = writable([]);
+  let isInitialized = false;
+
+  const init = async () => {
+    try {
+      const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+      const res = await fetch('/api/system/state/widgets', { headers: { 'Authorization': `Bearer ${token}` } });
+      const json = await res.json();
+      set(json.data || DEFAULT_WIDGETS);
+    } catch (e) {
+      set(DEFAULT_WIDGETS);
+    }
+    isInitialized = true;
+  };
 
   // Persistence logic
   let saveTimeout;
-  if (typeof localStorage !== 'undefined') {
-    subscribe(items => {
-      clearTimeout(saveTimeout);
-      saveTimeout = setTimeout(() => {
-        localStorage.setItem('web_os_widgets', JSON.stringify(items));
-      }, 500);
-    });
-  }
+  subscribe(items => {
+    if (!isInitialized) return;
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+      fetch('/api/system/state/widgets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(items)
+      }).catch(console.error);
+    }, 500);
+  });
 
   return {
     subscribe,
+    init,
     addWidget: (widget) => {
       update(items => {
         const newId = `${widget.type}-${Date.now()}`;
