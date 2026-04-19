@@ -29,10 +29,11 @@
   let zoomed = $state(false);
   let lastFetchedPath = $state('');
 
-  // Sync prop path to local state if it changes from outside (e.g. double click new file)
+  // Sync prop path to local state ONLY if it changes from outside (e.g. double click new file)
   $effect(() => {
-    if (data.path && data.path !== currentPath) {
+    if (data.path && data.path !== lastPropPath) {
       currentPath = data.path;
+      lastPropPath = data.path;
     }
   });
 
