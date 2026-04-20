@@ -8,6 +8,7 @@
   import { widgets } from './stores/widgetStore.js';
   import { shortcuts, initShortcuts, removeShortcut } from './stores/shortcutStore.js';
   import Window from './Window.svelte';
+  import SandboxAppFrame from './components/SandboxAppFrame.svelte';
   import DashboardWidget from './components/DashboardWidget.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
   import Agent from './components/Agent.svelte';
@@ -29,6 +30,7 @@
   import ControlPanel from '../apps/control-panel/ControlPanel.svelte';
   import TransferUI from '../apps/transfer/TransferUI.svelte';
   import LogViewer from '../apps/log-viewer/LogViewer.svelte';
+  import PackageCenter from '../apps/package-center/PackageCenter.svelte';
   import WidgetStore from '../apps/widget-store/WidgetStore.svelte';
   import { widgetLibrary } from './stores/widgetLibraryStore.js';
   import { systemSettings } from './stores/systemStore.js';
@@ -51,6 +53,7 @@
     'doc-viewer': DocumentViewer,
     'model-viewer': ModelViewer,
     logs: LogViewer,
+    'package-center': PackageCenter,
     'widget-store': WidgetStore
   };
 
@@ -235,6 +238,8 @@
     <Window window={win} active={$activeWindowId === win.id}>
       {#if components[win.appId]}
         <svelte:component this={components[win.appId]} data={win.data} />
+      {:else if win.runtime === 'sandbox'}
+        <SandboxAppFrame app={win} />
       {:else}
         <div style="padding: 20px; color: var(--text-dim);">
           <h2>{win.title}</h2>

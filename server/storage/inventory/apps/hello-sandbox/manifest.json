@@ -1,0 +1,24 @@
+{
+  "id": "hello-sandbox",
+  "version": "1.0.0",
+  "title": "Hello Sandbox",
+  "description": "Demo package that exercises the first sandbox bridge.",
+  "icon": "LayoutGrid",
+  "type": "app",
+  "entry": "index.html",
+  "singleton": true,
+  "permissions": [
+    "app.data.list",
+    "app.data.read",
+    "app.data.write",
+    "ui.notification",
+    "window.open",
+    "system.info"
+  ],
+  "window": {
+    "width": 920,
+    "height": 680,
+    "minWidth": 640,
+    "minHeight": 420
+  }
+}

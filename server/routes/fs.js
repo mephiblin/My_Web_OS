@@ -7,6 +7,8 @@ const auth = require('../middleware/auth');
 const auditService = require('../services/auditService');
 const indexService = require('../services/indexService');
 const trashService = require('../services/trashService');
+const serverConfig = require('../config/serverConfig');
+const { resolveSafePath, isWithinAllowedRoots, isSafeLeafName } = require('../utils/pathPolicy');
 
 // Auth required for ALL fs routes
 router.use(auth);
@@ -62,9 +64,13 @@ router.delete('/empty-trash', async (req, res) => {
  * Return public fs configuration like initial path
  */
 router.get('/config', (req, res) => {
-  res.json({
-    initialPath: process.env.INITIAL_PATH || '/'
-  });
+  serverConfig.getPaths()
+    .then((paths) => {
+      res.json({ initialPath: paths.initialPath || '/' });
+    })
+    .catch((err) => {
+      res.status(500).json({ error: true, message: err.message });
+    });
 });
 
 /**
@@ -308,17 +314,18 @@ router.put('/rename', async (req, res) => {
     if (!oldPath || !newName) {
       return res.status(400).json({ error: true, message: 'oldPath and newName are required.' });
     }
-    // Security: Validate oldPath against ALLOWED_ROOTS (same logic as pathGuard)
-    const resolvedOld = path.resolve(oldPath);
-    const ALLOWED_ROOTS = JSON.parse(process.env.ALLOWED_ROOTS || '[]');
-    const isAllowed = ALLOWED_ROOTS.some(root => resolvedOld.startsWith(path.resolve(root)));
+
+    const resolvedOld = resolveSafePath(oldPath);
+    const { allowedRoots } = await serverConfig.getPaths();
+    const isAllowed = isWithinAllowedRoots(resolvedOld, allowedRoots);
     if (!isAllowed) {
       return res.status(403).json({ error: true, code: 'FS_PERMISSION_DENIED', message: 'Access to this path is restricted.' });
     }
-    // Security: Prevent path traversal in newName
-    if (newName.includes('/') || newName.includes('..')) {
+
+    if (!isSafeLeafName(newName)) {
       return res.status(400).json({ error: true, message: 'Invalid file name.' });
     }
+
     const newPath = path.join(path.dirname(resolvedOld), newName);
     await fs.rename(resolvedOld, newPath);
     await auditService.log('FILE_TRANSFER', 'Rename Item', { oldPath: resolvedOld, newPath, user: req.user?.username }, 'INFO');
@@ -370,9 +377,9 @@ router.post('/extract', async (req, res) => {
     if (!destPath) {
        destPath = path.dirname(sourcePath); 
     } else {
-       const resolvedDest = path.resolve(destPath);
-       const ALLOWED_ROOTS = JSON.parse(process.env.ALLOWED_ROOTS || '[]');
-       const isAllowed = ALLOWED_ROOTS.some(root => resolvedDest.startsWith(path.resolve(root)));
+       const resolvedDest = resolveSafePath(destPath);
+       const { allowedRoots } = await serverConfig.getPaths();
+       const isAllowed = isWithinAllowedRoots(resolvedDest, allowedRoots);
        if (!isAllowed) {
          return res.status(403).json({ error: true, message: 'Restricted dest location.' });
        }
@@ -418,8 +425,7 @@ router.post('/upload-chunk', upload.single('chunk'), async (req, res) => {
     if (parseInt(chunkIndex) === parseInt(totalChunks) - 1) {
        const finalPath = path.join(targetDir, fileName);
        
-       // Security: Prevent path traversal in fileName
-       if (fileName.includes('/') || fileName.includes('..')) {
+       if (!isSafeLeafName(fileName)) {
          await fs.remove(chunkDir);
          return res.status(400).json({ error: true, message: 'Invalid file name.' });
        }

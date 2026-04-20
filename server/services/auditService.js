@@ -3,8 +3,18 @@ const path = require('path');
 
 const AUDIT_FILE = path.join(__dirname, '../storage/audit.log');
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
+let startedAt = null;
+let lastError = null;
 
 const auditService = {
+  name: 'audit',
+
+  async init() {
+    await fs.ensureDir(path.dirname(AUDIT_FILE));
+    startedAt = Date.now();
+    lastError = null;
+  },
+
   async log(category, action, details = {}, level = 'INFO') {
     try {
       const entry = {
@@ -30,6 +40,7 @@ const auditService = {
 
       await fs.appendFile(AUDIT_FILE, JSON.stringify(entry) + '\n', 'utf8');
     } catch (err) {
+      lastError = err.message;
       console.error('[AUDIT] Failed to write log:', err.message);
     }
   },
@@ -59,13 +70,26 @@ const auditService = {
           );
         }
 
-        return logs.slice(-limit).reverse();
-      }
-      return [];
+      return logs.slice(-limit).reverse();
+    }
+    return [];
     } catch (err) {
+      lastError = err.message;
       console.error('[AUDIT] Error reading logs:', err);
       return [];
     }
+  },
+
+  async close() {
+    // No long-running resource yet, keep method for ServiceManager contract.
+  },
+
+  getStatus() {
+    return {
+      startedAt,
+      lastError,
+      file: AUDIT_FILE
+    };
   }
 };
 

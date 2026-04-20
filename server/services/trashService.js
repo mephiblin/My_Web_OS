@@ -4,13 +4,19 @@ const { v4: uuidv4 } = require('uuid');
 
 const TRASH_ROOT = path.join(__dirname, '../storage/.trash');
 const TRASH_INFO_FILE = path.join(__dirname, '../storage/.trash_info.json');
+let startedAt = null;
+let lastError = null;
 
 const trashService = {
+  name: 'trash',
+
   async init() {
     await fs.ensureDir(TRASH_ROOT);
     if (!(await fs.pathExists(TRASH_INFO_FILE))) {
       await fs.writeJson(TRASH_INFO_FILE, {});
     }
+    startedAt = Date.now();
+    lastError = null;
   },
 
   async moveToTrash(sourcePath) {
@@ -54,6 +60,18 @@ const trashService = {
       id,
       ...meta
     }));
+  },
+
+  async close() {
+    // No long-running resource yet, keep method for ServiceManager contract.
+  },
+
+  getStatus() {
+    return {
+      startedAt,
+      lastError,
+      trashRoot: TRASH_ROOT
+    };
   }
 };
 

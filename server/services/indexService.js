@@ -1,32 +1,53 @@
 const chokidar = require('chokidar');
 const path = require('path');
 const fs = require('fs-extra');
+const serverConfig = require('../config/serverConfig');
 
-const DATA_ROOT = process.env.INITIAL_PATH || path.join(__dirname, '../../data'); 
 const INDEX_FILE = path.join(__dirname, '../storage/index.json');
-const INDEX_DEPTH = parseInt(process.env.INDEX_DEPTH || '5');
 
 let index = new Map();
 let watcher = null;
 let updateQueue = new Map(); // key: filePath, value: type — deduplicates same-file events
 let updateTimer = null;
 let saveInterval = null;
+let startedAt = null;
+let lastError = null;
+let currentDataRoot = null;
+let currentIndexDepth = 5;
+
+async function resolveRuntimeConfig() {
+  const config = await serverConfig.getAll();
+  return {
+    dataRoot: config.env.INITIAL_PATH || path.join(__dirname, '../../data'),
+    indexDepth: config.paths.indexDepth
+  };
+}
 
 const indexService = {
+  name: 'index',
+
   async init() {
     try {
-      await fs.ensureDir(DATA_ROOT);
+      const previousDataRoot = currentDataRoot;
+      const runtime = await resolveRuntimeConfig();
+
+      currentDataRoot = runtime.dataRoot;
+      currentIndexDepth = runtime.indexDepth;
+
+      await fs.ensureDir(currentDataRoot);
       
-      if (await fs.pathExists(INDEX_FILE)) {
+      if (previousDataRoot && previousDataRoot !== currentDataRoot) {
+        index = new Map();
+      } else if (await fs.pathExists(INDEX_FILE)) {
         console.log('[INDEX] Loading existing index...');
         const data = await fs.readJson(INDEX_FILE);
         index = new Map(Object.entries(data));
         console.log(`[INDEX] Loaded ${index.size} entries`);
       }
 
-      console.log(`[INDEX] Starting watcher (Depth: ${INDEX_DEPTH}) on: ${DATA_ROOT}`);
+      console.log(`[INDEX] Starting watcher (Depth: ${currentIndexDepth}) on: ${currentDataRoot}`);
       
-      watcher = chokidar.watch(DATA_ROOT, {
+      watcher = chokidar.watch(currentDataRoot, {
         ignored: [
           /(^|[\/\\])\../,
           '**/node_modules/**',
@@ -36,7 +57,7 @@ const indexService = {
         ],
         persistent: true,
         ignoreInitial: false,
-        depth: INDEX_DEPTH
+        depth: currentIndexDepth
       });
 
       watcher
@@ -47,9 +68,13 @@ const indexService = {
         .on('change', (filePath) => this.queueUpdate(filePath, 'file'));
 
       saveInterval = setInterval(() => this.save(), 60000);
+      startedAt = Date.now();
+      lastError = null;
 
     } catch (err) {
+      lastError = err.message;
       console.error('[INDEX] Initialization failed:', err.message);
+      throw err;
     }
   },
 
@@ -69,7 +94,7 @@ const indexService = {
 
     for (const [filePath, type] of batch) {
       try {
-        const relPath = path.relative(DATA_ROOT, filePath);
+        const relPath = path.relative(currentDataRoot, filePath);
         const fileName = path.basename(filePath);
         const stats = await fs.stat(filePath);
 
@@ -88,7 +113,7 @@ const indexService = {
   },
 
   remove(filePath) {
-    const relPath = path.relative(DATA_ROOT, filePath);
+    const relPath = path.relative(currentDataRoot, filePath);
     index.delete(relPath);
   },
 
@@ -123,10 +148,25 @@ const indexService = {
   async close() {
     if (updateTimer) clearTimeout(updateTimer);
     if (saveInterval) clearInterval(saveInterval);
+    updateTimer = null;
+    saveInterval = null;
     if (watcher) {
       await watcher.close();
       console.log('[INDEX] Watcher closed');
+      watcher = null;
     }
+  },
+
+  getStatus() {
+    return {
+      startedAt,
+      lastError,
+      entries: index.size,
+      queueSize: updateQueue.size,
+      watching: Boolean(watcher),
+      dataRoot: currentDataRoot,
+      indexDepth: currentIndexDepth
+    };
   }
 };
 

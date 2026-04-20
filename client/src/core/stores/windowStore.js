@@ -44,6 +44,7 @@ activeWindowId.subscribe(id => saveState(get(windows), id));
 
 export function openWindow(app, data = null) {
   const currentWindows = get(windows);
+  const windowConfig = app.window || {};
   
   // Singleton check
   if (app.singleton) {
@@ -65,8 +66,8 @@ export function openWindow(app, data = null) {
       data,
       x: 100 + items.length * 30,
       y: 100 + items.length * 30,
-      width: 800,
-      height: 600,
+      width: Number.isFinite(Number(windowConfig.width)) ? Number(windowConfig.width) : 800,
+      height: Number.isFinite(Number(windowConfig.height)) ? Number(windowConfig.height) : 600,
       minimized: false,
       maximized: false,
       zIndex: maxZ + 1,

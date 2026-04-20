@@ -4,18 +4,33 @@ const crypto = require('crypto');
 
 const DB_FILE = path.join(__dirname, '../storage/shares.json');
 let shares = new Map();
+let cleanupInterval = null;
+let startedAt = null;
+let lastError = null;
 
 const shareService = {
+  name: 'share',
+
   async init() {
     await fs.ensureFile(DB_FILE);
     try {
       const data = await fs.readJson(DB_FILE);
       shares = new Map(Object.entries(data));
-      this.cleanup();
-      setInterval(() => this.cleanup(), 60 * 60 * 1000); // 1 hour
-    } catch {
+      await this.cleanup();
+      if (cleanupInterval) clearInterval(cleanupInterval);
+      cleanupInterval = setInterval(() => {
+        this.cleanup().catch((err) => {
+          lastError = err.message;
+          console.error('[SHARE] Cleanup error:', err.message);
+        });
+      }, 60 * 60 * 1000); // 1 hour
+      startedAt = Date.now();
+      lastError = null;
+    } catch (err) {
+      lastError = err.message;
       await fs.writeJson(DB_FILE, {});
     }
+    startedAt = Date.now();
     console.log('[SHARE] Initialized DB');
   },
 
@@ -67,6 +82,23 @@ const shareService = {
       await this.save();
       console.log('[SHARE] Cleaned up expired links');
     }
+  },
+
+  async close() {
+    if (cleanupInterval) {
+      clearInterval(cleanupInterval);
+      cleanupInterval = null;
+    }
+    await this.save();
+  },
+
+  getStatus() {
+    return {
+      startedAt,
+      lastError,
+      totalShares: shares.size,
+      cleanupRunning: Boolean(cleanupInterval)
+    };
   }
 };
 

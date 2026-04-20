@@ -87,8 +87,10 @@
       } else if (resizing && !win.maximized) {
         const dx = cx - startX;
         const dy = cy - startY;
-        localWidth = Math.max(300, localWidth + dx);
-        localHeight = Math.max(200, localHeight + dy);
+        const minWidth = Number.isFinite(Number(win.window?.minWidth)) ? Number(win.window.minWidth) : 300;
+        const minHeight = Number.isFinite(Number(win.window?.minHeight)) ? Number(win.window.minHeight) : 200;
+        localWidth = Math.max(minWidth, localWidth + dx);
+        localHeight = Math.max(minHeight, localHeight + dy);
         win.width = localWidth;
         win.height = localHeight;
         startX = cx;

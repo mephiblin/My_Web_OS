@@ -1,0 +1,76 @@
+{
+  "server": {
+    "port": 3000,
+    "nodeEnv": "development",
+    "corsOrigin": "*",
+    "rateLimitWindowMs": 900000,
+    "rateLimitMax": 10000
+  },
+  "auth": {
+    "adminUsername": "admin"
+  },
+  "paths": {
+    "initialPath": "/",
+    "allowedRoots": [],
+    "indexDepth": 5
+  },
+  "systemState": {
+    "settings": {
+      "blurIntensity": 20,
+      "transparency": 0.05,
+      "accentColor": "#58a6ff",
+      "wallpaperType": "css",
+      "wallpaper": "linear-gradient(135deg, #1e2a3a 0%, #0d1117 100%)",
+      "wallpaperId": "default",
+      "wallpaperFit": "cover"
+    },
+    "windows": {
+      "windows": [],
+      "active": null
+    },
+    "widgets": [
+      {
+        "id": "widget-clock",
+        "type": "preset",
+        "source": "clock",
+        "title": "Clock",
+        "x": 20,
+        "y": 30,
+        "w": 200,
+        "h": 200,
+        "locked": true
+      },
+      {
+        "id": "widget-monitor",
+        "type": "system",
+        "source": "sys-cpu",
+        "title": "CPU Monitor",
+        "x": 20,
+        "y": 250,
+        "w": 220,
+        "h": 200,
+        "locked": true
+      }
+    ],
+    "shortcuts": {
+      "shortcuts": []
+    },
+    "desktops": {
+      "desktops": [
+        {
+          "id": 1,
+          "name": "Desktop 1"
+        },
+        {
+          "id": 2,
+          "name": "Desktop 2"
+        },
+        {
+          "id": 3,
+          "name": "Desktop 3"
+        }
+      ],
+      "currentDesktopId": 1
+    }
+  }
+}
