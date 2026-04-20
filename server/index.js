@@ -5,34 +5,18 @@ const cors = require('cors');
 const helmet = require('helmet');
 const dotenv = require('dotenv');
 const rateLimit = require('express-rate-limit');
-const path = require('path');
+const serverConfig = require('./config/serverConfig');
+const ServiceManager = require('./services/serviceManager');
+
+dotenv.config();
 
 
 const { initTerminalService } = require('./services/terminal');
 
-dotenv.config();
-
 const indexService = require('./services/indexService');
 const trashService = require('./services/trashService');
 const shareService = require('./services/shareService');
-
-// Initialize Services
-indexService.init();
-trashService.init();
-shareService.init();
-
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
-});
-
-// Initialize Terminal Service
-initTerminalService(io);
-
+const auditService = require('./services/auditService');
 
 const fsRouter = require('./routes/fs');
 const sysRouter = require('./routes/system');
@@ -42,90 +26,138 @@ const settingsRouter = require('./routes/settings');
 const cloudRouter = require('./routes/cloud');
 const mediaRouter = require('./routes/media');
 const logsRouter = require('./routes/logs');
+const packagesRouter = require('./routes/packages');
 const shareRouter = require('./routes/share');
+const servicesRouter = require('./routes/services');
+const sandboxRouter = require('./routes/sandbox');
 
-// Middleware
-// app.use(helmet());
-app.use(cors());
-app.use(express.json());
-
-// Request Logger for Debugging
-app.use((req, res, next) => {
-  const start = Date.now();
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    console.log(`[REQ] ${req.method} ${req.url} - ${res.statusCode} (${duration}ms)`);
-  });
-  next();
-});
-
-// Rate Limiting (must be BEFORE routes to take effect)
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 10000
-});
-app.use('/api/', limiter);
-
-// Routes
-app.use('/api/fs', fsRouter);
-app.use('/api/system', sysRouter);
-app.use('/api/auth', authRouter);
-app.use('/api/docker', dockerRouter);
-app.use('/api/settings', settingsRouter);
-app.use('/api/cloud', cloudRouter);
-app.use('/api/media', mediaRouter);
-app.use('/api/logs', logsRouter);
-app.use('/api/share', shareRouter);
-
-// Static files for Inventory
-app.use('/api/inventory-files', express.static(path.join(__dirname, 'storage/inventory')));
-
-// Basic Route
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
-});
-
-// Socket.io connection
-io.on('connection', (socket) => {
-  console.log('A user connected:', socket.id);
-  
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-  });
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Web OS Server running on port ${PORT}`);
-});
-
-// Graceful Shutdown
-async function shutdown() {
-  console.log('\n[SERVER] Shutting down gracefully...');
-  
-  // Stop background services
-  await indexService.close();
-  
-  // Kill all terminal sessions
-  const { getActiveSessions } = require('./services/terminal');
-  if (getActiveSessions) {
-    const sessions = getActiveSessions();
-    for (const [id, pty] of sessions) {
-      pty.kill();
-      console.log(`[TERMINAL] Killed session ${id}`);
-    }
+async function bootstrap() {
+  const config = await serverConfig.getAll();
+  const validation = await serverConfig.validate({ strict: false });
+  if (!validation.ok) {
+    console.warn(`[CONFIG] Missing required keys: ${validation.missing.join(', ')}`);
   }
-  
-  server.close(() => {
-    console.log('[SERVER] Closed');
-    process.exit(0);
+
+  const serviceManager = new ServiceManager();
+  serviceManager.register(indexService);
+  serviceManager.register(trashService);
+  serviceManager.register(shareService);
+  serviceManager.register(auditService);
+  await serviceManager.startAll();
+
+  const app = express();
+  const server = http.createServer(app);
+  const io = new Server(server, {
+    cors: {
+      origin: config.server.corsOrigin,
+      methods: ['GET', 'POST']
+    }
   });
 
-  setTimeout(() => {
-    console.error('[SERVER] Could not close in time, forcing shutdown');
-    process.exit(1);
-  }, 5000);
+  // Initialize Terminal Service
+  initTerminalService(io);
+
+  // Middleware
+  // app.use(helmet());
+  app.use(cors({ origin: config.server.corsOrigin }));
+  app.use(express.json());
+
+  // Request Logger for Debugging
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      console.log(`[REQ] ${req.method} ${req.url} - ${res.statusCode} (${duration}ms)`);
+    });
+    next();
+  });
+
+  // Rate Limiting (must be BEFORE routes to take effect)
+  const limiter = rateLimit({
+    windowMs: config.server.rateLimitWindowMs,
+    max: config.server.rateLimitMax
+  });
+  app.use('/api/', limiter);
+
+  // Routes
+  app.use('/api/fs', fsRouter);
+  app.use('/api/system', sysRouter);
+  app.use('/api/auth', authRouter);
+  app.use('/api/docker', dockerRouter);
+  app.use('/api/settings', settingsRouter);
+  app.use('/api/cloud', cloudRouter);
+  app.use('/api/media', mediaRouter);
+  app.use('/api/logs', logsRouter);
+  app.use('/api/packages', packagesRouter);
+  app.use('/api/share', shareRouter);
+  app.use('/api/services', servicesRouter);
+  app.use('/api/sandbox', sandboxRouter);
+
+  app.set('serviceManager', serviceManager);
+
+  // Static files for Inventory
+  app.use('/api/inventory-files', express.static(config.paths.inventoryRoot));
+
+  // Basic Route
+  app.get('/health', (req, res) => {
+    res.json({
+      status: 'ok',
+      uptime: process.uptime(),
+      services: serviceManager.getStatusSnapshot()
+    });
+  });
+
+  // Socket.io connection
+  io.on('connection', (socket) => {
+    console.log('A user connected:', socket.id);
+
+    socket.on('disconnect', () => {
+      console.log('User disconnected:', socket.id);
+    });
+  });
+
+  const port = config.server.port;
+  server.listen(port, () => {
+    console.log(`Web OS Server running on port ${port}`);
+  });
+
+  // Graceful Shutdown
+  async function shutdown() {
+    console.log('\n[SERVER] Shutting down gracefully...');
+
+    // Stop managed services first
+    try {
+      await serviceManager.stopAll();
+    } catch (err) {
+      console.error('[SERVER] Service shutdown reported errors:', err.details || err.message);
+    }
+
+    // Kill all terminal sessions
+    const { getActiveSessions } = require('./services/terminal');
+    if (getActiveSessions) {
+      const sessions = getActiveSessions();
+      for (const [id, pty] of sessions) {
+        pty.kill();
+        console.log(`[TERMINAL] Killed session ${id}`);
+      }
+    }
+
+    server.close(() => {
+      console.log('[SERVER] Closed');
+      process.exit(0);
+    });
+
+    setTimeout(() => {
+      console.error('[SERVER] Could not close in time, forcing shutdown');
+      process.exit(1);
+    }, 5000);
+  }
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+bootstrap().catch((err) => {
+  console.error('[SERVER] Bootstrap failed:', err);
+  process.exit(1);
+});

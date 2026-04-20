@@ -2,3 +2,5 @@
 !*/
 !.gitignore
 !.gitkeep
+!apps/hello-sandbox/
+!apps/hello-sandbox/**

@@ -45,6 +45,12 @@
     "singleton": true
   },
   {
+    "id": "package-center",
+    "title": "Package Center",
+    "icon": "LayoutGrid",
+    "singleton": true
+  },
+  {
     "id": "widget-store",
     "title": "Widgets",
     "icon": "LayoutGrid",

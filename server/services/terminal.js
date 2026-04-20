@@ -1,5 +1,11 @@
 const os = require('os');
-const pty = require('node-pty');
+
+let pty = null;
+try {
+  pty = require('node-pty');
+} catch (_err) {
+  pty = null;
+}
 
 const sessions = new Map();
 
@@ -10,6 +16,12 @@ const sessions = new Map();
 function initTerminalService(io) {
   io.on('connection', (socket) => {
     socket.on('terminal:init', ({ cols, rows }) => {
+      if (!pty) {
+        socket.emit('terminal:output', 'Terminal service is running in fallback mode because node-pty is unavailable.\r\n');
+        socket.emit('terminal:exit', { exitCode: 0, signal: null });
+        return;
+      }
+
       const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
       
       const ptyProcess = pty.spawn(shell, [], {

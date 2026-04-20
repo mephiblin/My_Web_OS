@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hello Sandbox</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1220;
+        --panel: rgba(15, 23, 36, 0.9);
+        --panel-border: rgba(148, 163, 184, 0.2);
+        --accent: #38bdf8;
+        --accent-strong: #0ea5e9;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --success: #34d399;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Segoe UI", "Pretendard", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top right, rgba(14, 165, 233, 0.22), transparent 32%),
+          linear-gradient(160deg, #071019 0%, #0b1220 55%, #111827 100%);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        min-height: 100vh;
+      }
+
+      .sidebar,
+      .main {
+        padding: 24px;
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--panel-border);
+        background: rgba(8, 15, 28, 0.58);
+      }
+
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 8px;
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-size: 28px;
+        line-height: 1.05;
+      }
+
+      p {
+        margin: 0 0 14px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .actions,
+      .quick-actions {
+        display: grid;
+        gap: 10px;
+      }
+
+      button {
+        border: 1px solid rgba(56, 189, 248, 0.2);
+        background: rgba(15, 23, 36, 0.86);
+        color: var(--text);
+        border-radius: 14px;
+        padding: 12px 14px;
+        text-align: left;
+        cursor: pointer;
+        transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(56, 189, 248, 0.5);
+        background: rgba(14, 165, 233, 0.14);
+      }
+
+      .main {
+        display: grid;
+        gap: 18px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 20px 45px rgba(0, 0, 0, 0.28);
+      }
+
+      .panel h2 {
+        margin: 0 0 12px;
+        font-size: 16px;
+      }
+
+      textarea,
+      pre {
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        background: rgba(4, 9, 18, 0.72);
+        color: var(--text);
+        padding: 14px;
+      }
+
+      textarea {
+        min-height: 180px;
+        resize: vertical;
+        font: inherit;
+      }
+
+      pre {
+        min-height: 120px;
+        overflow: auto;
+        margin: 0;
+      }
+
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .status {
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(52, 211, 153, 0.12);
+        border: 1px solid rgba(52, 211, 153, 0.24);
+        color: var(--success);
+        font-size: 13px;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      @media (max-width: 840px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          border-right: none;
+          border-bottom: 1px solid var(--panel-border);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="eyebrow">Sandbox Runtime</div>
+        <h1 id="title">Hello Sandbox</h1>
+        <p>
+          This package proves the first sandbox path: iframe loading, OS bridge messaging,
+          and app-scoped data persistence.
+        </p>
+        <div class="actions">
+          <button id="notify-btn">Send a desktop notification</button>
+          <button id="open-files-btn">Open File Station from the sandbox</button>
+          <button id="system-info-btn">Read current system overview</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="panel stack">
+          <h2>App Data</h2>
+          <p class="muted">This note is saved into your app-only data volume.</p>
+          <textarea id="editor"># Hello from the sandbox
+
+This file lives in inventory/data/hello-sandbox/notes/welcome.md.</textarea>
+          <div class="quick-actions">
+            <button id="save-btn">Save note</button>
+            <button id="load-btn">Load note</button>
+            <button id="list-btn">List app files</button>
+          </div>
+          <div id="status" class="status">Bridge not ready yet.</div>
+        </section>
+
+        <section class="panel stack">
+          <h2>Live Output</h2>
+          <pre id="output">Waiting for sandbox bridge...</pre>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const state = {
+        requestId: 0,
+        pending: new Map(),
+        app: null
+      };
+      const parentOriginParam = new URLSearchParams(window.location.search).get('parentOrigin');
+      const parentOrigin = parentOriginParam && parentOriginParam.trim() ? parentOriginParam : '*';
+
+      const titleEl = document.getElementById('title');
+      const outputEl = document.getElementById('output');
+      const statusEl = document.getElementById('status');
+      const editorEl = document.getElementById('editor');
+
+      function setStatus(message, isError = false) {
+        statusEl.textContent = message;
+        statusEl.style.background = isError ? 'rgba(248, 113, 113, 0.15)' : 'rgba(52, 211, 153, 0.12)';
+        statusEl.style.borderColor = isError ? 'rgba(248, 113, 113, 0.35)' : 'rgba(52, 211, 153, 0.24)';
+        statusEl.style.color = isError ? '#fecaca' : '#34d399';
+      }
+
+      function log(value) {
+        outputEl.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      }
+
+      function request(method, params = {}) {
+        const requestId = `req-${Date.now()}-${state.requestId++}`;
+        return new Promise((resolve, reject) => {
+          state.pending.set(requestId, { resolve, reject });
+          window.parent.postMessage({
+            type: 'webos:request',
+            requestId,
+            method,
+            params
+          }, parentOrigin);
+        });
+      }
+
+      async function saveNote() {
+        try {
+          setStatus('Saving note...');
+          await request('app.data.write', {
+            path: 'notes/welcome.md',
+            content: editorEl.value
+          });
+          setStatus('Saved note to app data volume.');
+          log({ saved: true, path: 'notes/welcome.md' });
+        } catch (error) {
+          setStatus(error.message, true);
+          log(error);
+        }
+      }
+
+      async function loadNote() {
+        try {
+          setStatus('Loading note...');
+          const result = await request('app.data.read', { path: 'notes/welcome.md' });
+          editorEl.value = result.content || '';
+          setStatus('Loaded note from app data volume.');
+          log(result);
+        } catch (error) {
+          setStatus(error.message, true);
+          log(error);
+        }
+      }
+
+      async function listFiles() {
+        try {
+          setStatus('Listing app files...');
+          const result = await request('app.data.list', { path: '' });
+          setStatus('Listed app data directory.');
+          log(result);
+        } catch (error) {
+          setStatus(error.message, true);
+          log(error);
+        }
+      }
+
+      async function notify() {
+        try {
+          await request('ui.notification', {
+            title: 'Hello Sandbox',
+            message: 'The sandbox bridge delivered a notification.',
+            type: 'success'
+          });
+          setStatus('Notification delivered.');
+        } catch (error) {
+          setStatus(error.message, true);
+          log(error);
+        }
+      }
+
+      async function openFiles() {
+        try {
+          await request('window.open', { appId: 'files' });
+          setStatus('Requested File Station window.');
+        } catch (error) {
+          setStatus(error.message, true);
+          log(error);
+        }
+      }
+
+      async function readSystemInfo() {
+        try {
+          setStatus('Reading live system info...');
+          const result = await request('system.info');
+          setStatus('Loaded current system overview.');
+          log({
+            cpu: result.cpu,
+            memory: result.memory,
+            os: result.os
+          });
+        } catch (error) {
+          setStatus(error.message, true);
+          log(error);
+        }
+      }
+
+      document.getElementById('save-btn').addEventListener('click', saveNote);
+      document.getElementById('load-btn').addEventListener('click', loadNote);
+      document.getElementById('list-btn').addEventListener('click', listFiles);
+      document.getElementById('notify-btn').addEventListener('click', notify);
+      document.getElementById('open-files-btn').addEventListener('click', openFiles);
+      document.getElementById('system-info-btn').addEventListener('click', readSystemInfo);
+
+      window.addEventListener('message', (event) => {
+        if (parentOrigin !== '*' && event.origin !== parentOrigin) return;
+        const payload = event.data || {};
+
+        if (payload.type === 'webos:context') {
+          state.app = payload.app || null;
+          if (state.app && state.app.title) {
+            titleEl.textContent = state.app.title;
+          }
+          setStatus('Bridge ready. You can now use sandbox APIs.');
+          return;
+        }
+
+        if (payload.type !== 'webos:response' || !payload.requestId) return;
+
+        const pending = state.pending.get(payload.requestId);
+        if (!pending) return;
+
+        state.pending.delete(payload.requestId);
+
+        if (payload.ok) {
+          pending.resolve(payload.result);
+        } else {
+          const error = new Error(payload.error && payload.error.message ? payload.error.message : 'Sandbox request failed.');
+          error.code = payload.error && payload.error.code ? payload.error.code : 'SANDBOX_REQUEST_FAILED';
+          pending.reject(error);
+        }
+      });
+
+      window.parent.postMessage({ type: 'webos:ready' }, parentOrigin);
+    </script>
+  </body>
+</html>

@@ -1,70 +1,55 @@
 const express = require('express');
 const router = express.Router();
-const fs = require('fs').promises;
-const path = require('path');
 const auth = require('../middleware/auth');
+const serverConfig = require('../config/serverConfig');
 
-const ENV_PATH = path.join(__dirname, '../../.env');
-
-// Parse .env file
-async function readEnv() {
-  try {
-    const raw = await fs.readFile(ENV_PATH, 'utf-8');
-    const lines = raw.split('\n');
-    const env = {};
-    for (const line of lines) {
-      if (!line || line.startsWith('#')) continue;
-      const [key, ...valParts] = line.split('=');
-      if (key) {
-        env[key.trim()] = valParts.join('=').trim();
-      }
-    }
-    return env;
-  } catch (err) {
-    if (err.code === 'ENOENT') return {};
-    throw err;
-  }
-}
-
-// Write .env file
-async function writeEnv(envObj) {
-  const lines = [];
-  for (const [key, val] of Object.entries(envObj)) {
-    lines.push(`${key}=${val}`);
-  }
-  await fs.writeFile(ENV_PATH, lines.join('\n'));
-}
-
-const SENSITIVE_KEYS = ['JWT_SECRET', 'ADMIN_PASSWORD'];
+const MUTABLE_KEYS = [
+  'PORT',
+  'NODE_ENV',
+  'JWT_SECRET',
+  'ALLOWED_ROOTS',
+  'INITIAL_PATH',
+  'INDEX_DEPTH',
+  'ADMIN_USERNAME',
+  'ADMIN_PASSWORD',
+  'CORS_ORIGIN',
+  'RATE_LIMIT_WINDOW_MS',
+  'RATE_LIMIT_MAX'
+];
 
 router.get('/', auth, async (req, res) => {
   try {
-    const env = await readEnv();
-    // Security: Strip sensitive keys from response
-    const safe = { ...env };
-    SENSITIVE_KEYS.forEach(k => { if (safe[k]) safe[k] = '********'; });
-    res.json({ success: true, settings: safe });
+    const settings = await serverConfig.getPublicSettings();
+    res.json({ success: true, settings });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: true, message: error.message });
   }
 });
 
 router.put('/', auth, async (req, res) => {
   try {
-    const updates = req.body; // e.g. { ADMIN_USERNAME: 'newadmin', PORT: 3000 }
-    const current = await readEnv();
-    
-    const merged = { ...current, ...updates };
-    await writeEnv(merged);
+    const updates = req.body && typeof req.body === 'object' ? req.body : {};
+    const invalidKeys = Object.keys(updates).filter((key) => !MUTABLE_KEYS.includes(key));
 
-    // Some vars are cached in process.env, let's update them
-    for (const [key, val] of Object.entries(updates)) {
-      process.env[key] = val;
+    if (invalidKeys.length > 0) {
+      return res.status(400).json({
+        error: true,
+        code: 'CONFIG_UPDATE_REJECTED',
+        message: `Unsupported settings keys: ${invalidKeys.join(', ')}`,
+        details: { invalidKeys }
+      });
     }
 
-    res.json({ success: true, message: 'Settings saved successfully' });
+    const result = await serverConfig.update(updates, { mutableKeys: MUTABLE_KEYS });
+
+    res.json({
+      success: true,
+      message: 'Settings saved successfully',
+      updatedKeys: result.updatedKeys,
+      restartRequired: true
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: true, message: error.message });
   }
 });
 
