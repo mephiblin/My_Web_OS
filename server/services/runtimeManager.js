@@ -6,8 +6,10 @@ const ProcessSupervisor = require('./processSupervisor');
 const runtimeStateStore = require('./runtimeStateStore');
 const serverConfig = require('../config/serverConfig');
 const appPaths = require('../utils/appPaths');
+const inventoryPaths = require('../utils/inventoryPaths');
 const {
   normalizeRuntimeProfile,
+  assertValidRuntimeProfile,
   getRuntimeCommand,
   isManagedRuntime,
   sanitizeProfileForClient
@@ -22,17 +24,31 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function toNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 class RuntimeManager {
   constructor() {
     this.name = 'runtimeManager';
     this.supervisor = new ProcessSupervisor();
     this.appStates = new Map();
     this.logBuffers = new Map();
+    this.eventBuffers = new Map();
+    this.logWriteQueues = new Map();
     this.restartTimers = new Map();
+    this.healthcheckTimers = new Map();
+    this.healthFailures = new Map();
+    this.runtimeLogsDir = '';
     this.runtimeConfig = {
       allowedCommands: ['node', 'python', 'python3'],
       logBufferLines: 500,
-      stopTimeoutMs: 5000
+      eventBufferSize: 300,
+      stopTimeoutMs: 5000,
+      logFileMaxBytes: 10 * 1024 * 1024,
+      logFileMaxFiles: 5,
+      healthcheckFailureThreshold: 3
     };
 
     this.supervisor.on('log', (event) => {
@@ -45,8 +61,18 @@ class RuntimeManager {
       current.pid = event.pid || null;
       current.lastStartedAt = event.timestamp || nowIso();
       current.lastError = '';
+      current.healthStatus = 'unknown';
       current.updatedAt = nowIso();
+
       this.appendLog(event.appId, 'system', `Process started (pid=${event.pid || 'n/a'})`);
+      this.appendEvent(event.appId, 'runtime.start', 'info', 'Runtime process started.', {
+        pid: event.pid || null,
+        command: event.command,
+        args: event.args,
+        cwd: event.cwd
+      });
+
+      this.scheduleHealthcheck(event.appId).catch(() => {});
       this.persistState(event.appId).catch(() => {});
     });
 
@@ -56,6 +82,7 @@ class RuntimeManager {
       current.lastError = event.message || 'Unknown runtime error';
       current.updatedAt = nowIso();
       this.appendLog(event.appId, 'system', current.lastError, event.timestamp);
+      this.appendEvent(event.appId, 'runtime.error', 'error', current.lastError);
       this.persistState(event.appId).catch(() => {});
     });
 
@@ -80,6 +107,8 @@ class RuntimeManager {
       lastExitSignal: null,
       lastStartedAt: null,
       lastError: '',
+      healthStatus: 'unknown',
+      lastHealthAt: null,
       updatedAt: nowIso()
     };
     this.appStates.set(appId, initial);
@@ -100,24 +129,141 @@ class RuntimeManager {
       lastExitCode: state.lastExitCode,
       lastExitSignal: state.lastExitSignal,
       lastError: state.lastError || '',
+      healthStatus: state.healthStatus || 'unknown',
+      lastHealthAt: state.lastHealthAt || null,
       updatedAt: state.updatedAt,
       service: app.runtimeProfile?.service || null,
       healthcheck: app.runtimeProfile?.healthcheck || null
     };
   }
 
+  async ensureRuntimeLogsDir() {
+    if (this.runtimeLogsDir) return this.runtimeLogsDir;
+    const roots = await inventoryPaths.ensureInventoryStructure();
+    this.runtimeLogsDir = path.join(roots.systemDir, 'runtime-logs');
+    await fs.ensureDir(this.runtimeLogsDir);
+    return this.runtimeLogsDir;
+  }
+
+  getLogFilePath(appId) {
+    return path.join(this.runtimeLogsDir, `${appId}.log`);
+  }
+
+  appendEvent(appId, type, level, message, payload = {}, timestamp = nowIso()) {
+    const maxEvents = Math.max(50, toNumber(this.runtimeConfig.eventBufferSize, 300));
+    const current = this.eventBuffers.get(appId) || [];
+    current.push({
+      timestamp,
+      type,
+      level,
+      message: String(message || ''),
+      payload: payload && typeof payload === 'object' ? payload : {}
+    });
+    if (current.length > maxEvents) {
+      current.splice(0, current.length - maxEvents);
+    }
+    this.eventBuffers.set(appId, current);
+  }
+
+  enqueueLogWrite(appId, line) {
+    const previous = this.logWriteQueues.get(appId) || Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(() => this.appendLogToFile(appId, line));
+    this.logWriteQueues.set(appId, next);
+    next.finally(() => {
+      if (this.logWriteQueues.get(appId) === next) {
+        this.logWriteQueues.delete(appId);
+      }
+    });
+  }
+
+  async rotateLogFileIfNeeded(logFilePath, incomingBytes) {
+    const maxBytes = Math.max(1024, toNumber(this.runtimeConfig.logFileMaxBytes, 10 * 1024 * 1024));
+    const maxFiles = Math.max(1, toNumber(this.runtimeConfig.logFileMaxFiles, 5));
+
+    const exists = await fs.pathExists(logFilePath);
+    if (!exists) return;
+
+    const stats = await fs.stat(logFilePath).catch(() => null);
+    if (!stats) return;
+    if (stats.size + incomingBytes < maxBytes) return;
+
+    if (maxFiles <= 1) {
+      await fs.remove(logFilePath).catch(() => {});
+      return;
+    }
+
+    for (let index = maxFiles - 1; index >= 1; index -= 1) {
+      const source = `${logFilePath}.${index}`;
+      const target = `${logFilePath}.${index + 1}`;
+      if (await fs.pathExists(source)) {
+        await fs.remove(target).catch(() => {});
+        await fs.move(source, target, { overwrite: true }).catch(() => {});
+      }
+    }
+
+    await fs.move(logFilePath, `${logFilePath}.1`, { overwrite: true }).catch(() => {});
+  }
+
+  async appendLogToFile(appId, line) {
+    await this.ensureRuntimeLogsDir();
+    const logFilePath = this.getLogFilePath(appId);
+    const bytes = Buffer.byteLength(line, 'utf8');
+    await this.rotateLogFileIfNeeded(logFilePath, bytes);
+    await fs.appendFile(logFilePath, line, 'utf8');
+  }
+
   appendLog(appId, stream, message, timestamp = nowIso()) {
     const maxLines = Math.max(50, Number(this.runtimeConfig.logBufferLines) || 500);
+    const normalizedMessage = String(message || '');
     const current = this.logBuffers.get(appId) || [];
     current.push({
       timestamp,
       stream,
-      message: String(message || '')
+      message: normalizedMessage
     });
     if (current.length > maxLines) {
       current.splice(0, current.length - maxLines);
     }
     this.logBuffers.set(appId, current);
+
+    const line = `[${timestamp}] [${stream}] ${normalizedMessage}\n`;
+    this.enqueueLogWrite(appId, line);
+  }
+
+  buildCursorResult(items, options = {}) {
+    const limit = Math.max(1, toNumber(options.limit, 200));
+    const total = items.length;
+
+    let start;
+    if (options.cursor !== undefined && options.cursor !== null && String(options.cursor).trim() !== '') {
+      start = Math.max(0, toNumber(options.cursor, 0));
+    } else {
+      start = Math.max(0, total - limit);
+    }
+
+    const end = Math.min(total, start + limit);
+    const slice = items.slice(start, end);
+
+    return {
+      items: slice,
+      cursor: {
+        next: end < total ? end : null,
+        hasMore: end < total,
+        total
+      }
+    };
+  }
+
+  getLogs(appId, options = {}) {
+    const logs = this.logBuffers.get(appId) || [];
+    return this.buildCursorResult(logs, options);
+  }
+
+  getEvents(appId, options = {}) {
+    const events = this.eventBuffers.get(appId) || [];
+    return this.buildCursorResult(events, options);
   }
 
   async persistState(appId) {
@@ -134,11 +280,15 @@ class RuntimeManager {
       err.code = 'RUNTIME_APP_NOT_FOUND';
       throw err;
     }
+
     const manifest = await fs.readJson(manifestFile);
+    const profile = normalizeRuntimeProfile(manifest);
+    assertValidRuntimeProfile(manifest, profile);
+
     return {
       appRoot,
       manifest,
-      profile: normalizeRuntimeProfile(manifest)
+      profile
     };
   }
 
@@ -223,6 +373,118 @@ class RuntimeManager {
     }
   }
 
+  clearHealthcheck(appId) {
+    const timer = this.healthcheckTimers.get(appId);
+    if (timer) {
+      clearInterval(timer);
+      this.healthcheckTimers.delete(appId);
+    }
+    this.healthFailures.delete(appId);
+  }
+
+  async performHealthcheck(appId, profile) {
+    const state = this.ensureState(appId);
+    if (!this.supervisor.isRunning(appId)) {
+      return;
+    }
+
+    const healthType = profile.healthcheck?.type || 'none';
+    if (healthType === 'none') {
+      return;
+    }
+
+    let healthy = false;
+    let reason = '';
+
+    if (healthType === 'process') {
+      healthy = this.supervisor.isRunning(appId);
+      reason = healthy ? '' : 'Process is not running.';
+    } else if (healthType === 'http') {
+      const rawPath = String(profile.healthcheck?.path || '').trim();
+      const target = /^https?:\/\//i.test(rawPath)
+        ? rawPath
+        : `http://127.0.0.1${rawPath.startsWith('/') ? rawPath : `/${rawPath}`}`;
+
+      try {
+        const response = await fetch(target, {
+          method: 'GET',
+          signal: AbortSignal.timeout(Math.max(100, toNumber(profile.healthcheck?.timeoutMs, 2000)))
+        });
+        healthy = response.ok;
+        if (!healthy) {
+          reason = `Health endpoint returned ${response.status}.`;
+        }
+      } catch (error) {
+        healthy = false;
+        reason = error.message || 'HTTP healthcheck failed.';
+      }
+    }
+
+    const failureThreshold = Math.max(1, toNumber(this.runtimeConfig.healthcheckFailureThreshold, 3));
+    const now = nowIso();
+    state.lastHealthAt = now;
+
+    if (healthy) {
+      const previousFailures = this.healthFailures.get(appId) || 0;
+      if (previousFailures >= failureThreshold || state.healthStatus === 'unhealthy') {
+        this.appendEvent(appId, 'runtime.health.recovered', 'info', 'Healthcheck recovered.');
+      }
+      this.healthFailures.set(appId, 0);
+      state.healthStatus = 'healthy';
+      if (state.status === 'degraded') {
+        state.status = 'running';
+      }
+      state.updatedAt = now;
+      await this.persistState(appId);
+      return;
+    }
+
+    const failures = (this.healthFailures.get(appId) || 0) + 1;
+    this.healthFailures.set(appId, failures);
+
+    if (failures >= failureThreshold) {
+      state.healthStatus = 'unhealthy';
+      if (state.status === 'running') {
+        state.status = 'degraded';
+      }
+      state.lastError = reason || 'Healthcheck failed.';
+      state.updatedAt = now;
+      this.appendEvent(appId, 'runtime.health.failed', 'warn', state.lastError, {
+        failures,
+        threshold: failureThreshold
+      });
+      this.appendLog(appId, 'system', `Healthcheck failed (${failures}/${failureThreshold}): ${state.lastError}`);
+      await this.persistState(appId);
+    }
+  }
+
+  async scheduleHealthcheck(appId, profileInput = null) {
+    this.clearHealthcheck(appId);
+
+    let profile = profileInput;
+    if (!profile) {
+      try {
+        profile = (await this.loadManifest(appId)).profile;
+      } catch (_err) {
+        return;
+      }
+    }
+
+    const healthType = profile.healthcheck?.type || 'none';
+    if (healthType === 'none') {
+      return;
+    }
+
+    const intervalMs = Math.max(250, toNumber(profile.healthcheck?.intervalMs, 10000));
+    const run = () => {
+      this.performHealthcheck(appId, profile).catch(() => {});
+    };
+
+    run();
+    const timer = setInterval(run, intervalMs);
+    this.healthcheckTimers.set(appId, timer);
+  }
+
   async handleExit(event) {
     const { appId, code, signal, timestamp } = event;
     const state = this.ensureState(appId);
@@ -230,6 +492,8 @@ class RuntimeManager {
     state.lastExitCode = code;
     state.lastExitSignal = signal;
     state.updatedAt = timestamp || nowIso();
+
+    this.clearHealthcheck(appId);
 
     let profile;
     try {
@@ -241,9 +505,15 @@ class RuntimeManager {
     const wasStopping = state.status === 'stopping';
     if (wasStopping) {
       state.status = 'stopped';
+      this.appendEvent(appId, 'runtime.stop', 'info', 'Runtime process stopped.');
       await this.persistState(appId);
       return;
     }
+
+    this.appendEvent(appId, 'runtime.exit', Number(code) === 0 ? 'info' : 'warn', 'Runtime process exited.', {
+      code: Number.isFinite(Number(code)) ? Number(code) : null,
+      signal: signal || null
+    });
 
     const shouldRestart = Boolean(
       profile &&
@@ -264,6 +534,9 @@ class RuntimeManager {
     if (state.restartCount >= maxRetries) {
       state.status = 'error';
       state.lastError = `Restart limit exceeded (${maxRetries}).`;
+      this.appendEvent(appId, 'runtime.restart.limit', 'error', state.lastError, {
+        maxRetries
+      });
       await this.persistState(appId);
       return;
     }
@@ -274,6 +547,10 @@ class RuntimeManager {
     state.status = 'degraded';
     state.restartCount += 1;
     this.appendLog(appId, 'system', `Process exited. Scheduling restart #${state.restartCount} in ${delayMs}ms.`, timestamp);
+    this.appendEvent(appId, 'runtime.restart.scheduled', 'warn', 'Automatic restart scheduled.', {
+      restartCount: state.restartCount,
+      delayMs
+    });
     await this.persistState(appId);
 
     this.cancelRestart(appId);
@@ -285,6 +562,7 @@ class RuntimeManager {
         current.lastError = err.message || 'Auto-restart failed.';
         current.updatedAt = nowIso();
         this.appendLog(appId, 'system', current.lastError);
+        this.appendEvent(appId, 'runtime.restart.failed', 'error', current.lastError);
         this.persistState(appId).catch(() => {});
       });
     }, delayMs);
@@ -295,13 +573,15 @@ class RuntimeManager {
     const config = await serverConfig.getAll();
     const runtimeDefaults = config.defaults?.runtime || {};
     this.runtimeConfig.allowedCommands = normalizeCommandList(runtimeDefaults.allowedCommands, ['node', 'python', 'python3']);
-    this.runtimeConfig.logBufferLines = Number.isFinite(Number(runtimeDefaults.logBufferLines))
-      ? Number(runtimeDefaults.logBufferLines)
-      : 500;
-    this.runtimeConfig.stopTimeoutMs = Number.isFinite(Number(runtimeDefaults.stopTimeoutMs))
-      ? Number(runtimeDefaults.stopTimeoutMs)
-      : 5000;
+    this.runtimeConfig.logBufferLines = Math.max(50, toNumber(runtimeDefaults.logBufferLines, 500));
+    this.runtimeConfig.eventBufferSize = Math.max(50, toNumber(runtimeDefaults.eventBufferSize, 300));
+    this.runtimeConfig.stopTimeoutMs = Math.max(100, toNumber(runtimeDefaults.stopTimeoutMs, 5000));
+    this.runtimeConfig.logFileMaxBytes = Math.max(1024, toNumber(runtimeDefaults.logFileMaxBytes, 10 * 1024 * 1024));
+    this.runtimeConfig.logFileMaxFiles = Math.max(1, toNumber(runtimeDefaults.logFileMaxFiles, 5));
+    this.runtimeConfig.healthcheckFailureThreshold = Math.max(1, toNumber(runtimeDefaults.healthcheckFailureThreshold, 3));
+
     this.supervisor.stopTimeoutMs = this.runtimeConfig.stopTimeoutMs;
+    await this.ensureRuntimeLogsDir();
 
     const snapshot = await runtimeStateStore.readAll();
     for (const [appId, raw] of Object.entries(snapshot.apps || {})) {
@@ -309,31 +589,60 @@ class RuntimeManager {
       Object.assign(next, raw || {});
       next.status = 'stopped';
       next.pid = null;
+      next.healthStatus = 'unknown';
+      next.lastHealthAt = null;
       next.updatedAt = nowIso();
     }
+
     await runtimeStateStore.writeAll({
       ...snapshot,
       apps: Object.fromEntries(this.appStates.entries())
     });
+
+    const apps = await packageRegistryService.listSandboxApps();
+    for (const app of apps) {
+      const profile = app.runtimeProfile;
+      if (!profile || !isManagedRuntime(profile)) continue;
+      if (!profile.service?.autoStart) continue;
+
+      this.appendEvent(app.id, 'runtime.autostart', 'info', 'Auto-start requested by runtime policy.');
+      this.startApp(app.id, { isAutoStart: true }).catch((err) => {
+        const state = this.ensureState(app.id);
+        state.status = 'error';
+        state.lastError = err.message || 'Auto-start failed.';
+        state.updatedAt = nowIso();
+        this.appendEvent(app.id, 'runtime.autostart.failed', 'error', state.lastError);
+        this.persistState(app.id).catch(() => {});
+      });
+    }
   }
 
   async close() {
     for (const appId of Array.from(this.restartTimers.keys())) {
       this.cancelRestart(appId);
     }
+    for (const appId of Array.from(this.healthcheckTimers.keys())) {
+      this.clearHealthcheck(appId);
+    }
+
     for (const appId of Array.from(this.appStates.keys())) {
       const state = this.ensureState(appId);
       if (state.status === 'running' || state.status === 'starting' || state.status === 'degraded') {
         state.status = 'stopping';
       }
     }
+
     await this.supervisor.stopAll();
+
     for (const appId of Array.from(this.appStates.keys())) {
       const state = this.ensureState(appId);
       state.status = 'stopped';
       state.pid = null;
+      state.healthStatus = 'unknown';
+      state.lastHealthAt = null;
       state.updatedAt = nowIso();
     }
+
     await runtimeStateStore.writeAll({
       version: 1,
       updatedAt: nowIso(),
@@ -370,6 +679,7 @@ class RuntimeManager {
       err.code = 'RUNTIME_APP_NOT_FOUND';
       throw err;
     }
+
     const state = this.ensureState(app.id);
     state.runtimeType = app.runtimeProfile?.runtimeType || state.runtimeType;
     state.appType = app.appType || state.appType;
@@ -399,15 +709,28 @@ class RuntimeManager {
     }
 
     this.cancelRestart(appId);
+    this.clearHealthcheck(appId);
+
     state.status = 'starting';
     state.runtimeType = plan.profile.runtimeType;
     state.appType = plan.profile.appType;
     state.updatedAt = nowIso();
     state.lastError = '';
+    state.healthStatus = 'unknown';
+    state.lastHealthAt = null;
     if (!options.isAutoRestart) {
       state.restartCount = 0;
     }
+
     this.appendLog(appId, 'system', `Starting process: ${plan.command} ${plan.args.join(' ')}`.trim());
+    this.appendEvent(appId, 'runtime.start.requested', 'info', 'Runtime start requested.', {
+      command: plan.command,
+      args: plan.args,
+      cwd: plan.cwd,
+      autoRestart: Boolean(options.isAutoRestart),
+      autoStart: Boolean(options.isAutoStart)
+    });
+
     await this.persistState(appId);
 
     await this.supervisor.start(appId, {
@@ -415,42 +738,175 @@ class RuntimeManager {
       args: plan.args,
       cwd: plan.cwd
     });
+
     return this.getApp(appId);
   }
 
   async stopApp(appId) {
+    const app = await packageRegistryService.getSandboxApp(appId);
+    if (!app) {
+      const err = new Error('App not found.');
+      err.code = 'RUNTIME_APP_NOT_FOUND';
+      throw err;
+    }
+
     const state = this.ensureState(appId);
     this.cancelRestart(appId);
+    this.clearHealthcheck(appId);
+
     if (!this.supervisor.isRunning(appId)) {
       state.status = 'stopped';
       state.pid = null;
       state.updatedAt = nowIso();
+      this.appendEvent(appId, 'runtime.stop', 'info', 'Runtime already stopped.');
       await this.persistState(appId);
       return this.getApp(appId);
     }
 
     state.status = 'stopping';
     state.updatedAt = nowIso();
+    this.appendEvent(appId, 'runtime.stop.requested', 'info', 'Runtime stop requested.');
     await this.persistState(appId);
+
     await this.supervisor.stop(appId, { timeoutMs: this.runtimeConfig.stopTimeoutMs });
+
     state.status = 'stopped';
     state.pid = null;
+    state.healthStatus = 'unknown';
+    state.lastHealthAt = null;
     state.updatedAt = nowIso();
     await this.persistState(appId);
     return this.getApp(appId);
   }
 
   async restartApp(appId) {
+    const app = await packageRegistryService.getSandboxApp(appId);
+    if (!app) {
+      const err = new Error('App not found.');
+      err.code = 'RUNTIME_APP_NOT_FOUND';
+      throw err;
+    }
+
+    this.appendEvent(appId, 'runtime.restart.requested', 'info', 'Runtime restart requested.');
     await this.stopApp(appId);
     return this.startApp(appId);
   }
 
-  getLogs(appId, options = {}) {
-    const limit = Number.isFinite(Number(options.limit)) ? Number(options.limit) : 200;
-    const logs = this.logBuffers.get(appId) || [];
-    if (limit <= 0) return [];
-    if (logs.length <= limit) return [...logs];
-    return logs.slice(logs.length - limit);
+  async validateApp(appId) {
+    const app = await packageRegistryService.getSandboxApp(appId);
+    if (!app) {
+      const err = new Error('App not found.');
+      err.code = 'RUNTIME_APP_NOT_FOUND';
+      throw err;
+    }
+
+    const checks = [];
+    let profile = null;
+    let plan = null;
+
+    try {
+      const loaded = await this.loadManifest(appId);
+      profile = loaded.profile;
+      checks.push({
+        id: 'manifest.runtime-profile',
+        level: 'pass',
+        message: 'Runtime profile is valid.'
+      });
+    } catch (err) {
+      checks.push({
+        id: 'manifest.runtime-profile',
+        level: 'fail',
+        code: err.code || 'RUNTIME_PROFILE_INVALID',
+        message: err.message
+      });
+      return {
+        appId,
+        valid: false,
+        checks,
+        plan: null
+      };
+    }
+
+    if (isManagedRuntime(profile)) {
+      try {
+        plan = await this.resolveExecutionPlan(appId);
+        checks.push({
+          id: 'runtime.execution-plan',
+          level: 'pass',
+          message: 'Runtime execution plan is resolvable.',
+          command: plan.command,
+          args: plan.args,
+          cwd: plan.cwd
+        });
+      } catch (err) {
+        checks.push({
+          id: 'runtime.execution-plan',
+          level: 'fail',
+          code: err.code || 'RUNTIME_EXECUTION_PLAN_INVALID',
+          message: err.message
+        });
+      }
+    } else {
+      checks.push({
+        id: 'runtime.execution-plan',
+        level: 'pass',
+        message: 'Sandbox runtime does not require process execution plan.'
+      });
+    }
+
+    const valid = checks.every((check) => check.level !== 'fail');
+    return {
+      appId,
+      valid,
+      checks,
+      plan: plan
+        ? {
+          command: plan.command,
+          args: plan.args,
+          cwd: plan.cwd
+        }
+        : null
+    };
+  }
+
+  async recoverApp(appId) {
+    const app = await packageRegistryService.getSandboxApp(appId);
+    if (!app) {
+      const err = new Error('App not found.');
+      err.code = 'RUNTIME_APP_NOT_FOUND';
+      throw err;
+    }
+    if (!isManagedRuntime(app.runtimeProfile)) {
+      const err = new Error('This app runtime cannot be recovered via runtime manager.');
+      err.code = 'RUNTIME_NOT_MANAGED';
+      throw err;
+    }
+
+    const state = this.ensureState(appId);
+    const running = this.supervisor.isRunning(appId);
+    let action = 'none';
+
+    if (!running) {
+      await this.startApp(appId, { isAutoRestart: true });
+      action = 'start';
+      this.appendEvent(appId, 'runtime.recovery.start', 'info', 'Recovery started a stopped runtime.');
+    } else if (
+      state.status === 'degraded' ||
+      state.status === 'error' ||
+      state.healthStatus === 'unhealthy'
+    ) {
+      await this.restartApp(appId);
+      action = 'restart';
+      this.appendEvent(appId, 'runtime.recovery.restart', 'warn', 'Recovery restarted degraded runtime.');
+    } else {
+      action = 'none';
+      this.appendEvent(appId, 'runtime.recovery.noop', 'info', 'Recovery skipped because runtime is healthy.');
+    }
+
+    return {
+      action,
+      app: await this.getApp(appId)
+    };
   }
 
   getRuntimeStatusMap() {
@@ -460,6 +916,8 @@ class RuntimeManager {
         status: state.status,
         pid: state.pid,
         lastError: state.lastError,
+        healthStatus: state.healthStatus || 'unknown',
+        lastHealthAt: state.lastHealthAt || null,
         updatedAt: state.updatedAt
       };
     }

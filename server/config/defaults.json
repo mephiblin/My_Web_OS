@@ -17,7 +17,11 @@
   "runtime": {
     "allowedCommands": ["node", "python", "python3"],
     "logBufferLines": 500,
-    "stopTimeoutMs": 5000
+    "eventBufferSize": 300,
+    "stopTimeoutMs": 5000,
+    "logFileMaxBytes": 10485760,
+    "logFileMaxFiles": 5,
+    "healthcheckFailureThreshold": 3
   },
   "systemState": {
     "settings": {

@@ -7,9 +7,10 @@ const AdmZip = require('adm-zip');
 const auth = require('../middleware/auth');
 const auditService = require('../services/auditService');
 const packageRegistryService = require('../services/packageRegistryService');
+const packageLifecycleService = require('../services/packageLifecycleService');
 const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
-const { normalizeRuntimeProfile, toManifestRuntimeFields } = require('../services/runtimeProfiles');
+const { normalizeRuntimeProfile, assertValidRuntimeProfile, toManifestRuntimeFields } = require('../services/runtimeProfiles');
 
 const router = express.Router();
 router.use(auth);
@@ -24,6 +25,7 @@ const DEFAULT_WINDOW = {
 const ICON_FILE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
 const REGISTRY_DOWNLOAD_TIMEOUT_MS = 15000;
 const REGISTRY_DOWNLOAD_MAX_BYTES = 80 * 1024 * 1024;
+const ECOSYSTEM_TEMPLATE_NAMESPACE = 'official';
 const CAPABILITY_CATALOG = [
   {
     id: 'app.data.list',
@@ -81,6 +83,47 @@ const upload = multer({
 });
 const REGISTRY_SOURCES_FILE = 'package-registries.json';
 const APP_ID_ROUTE = ':id';
+const ROOT_PACKAGE_JSON_PATH = path.join(__dirname, '../../package.json');
+let cachedServerVersion = '';
+
+const ECOSYSTEM_TEMPLATES = [
+  {
+    id: 'markdown-workspace',
+    title: 'Markdown Workspace',
+    category: 'productivity',
+    description: '문서 작성/노트용 1st-party 기본 앱 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['app.data.read', 'app.data.write', 'ui.notification']
+    }
+  },
+  {
+    id: 'ops-dashboard',
+    title: 'Ops Dashboard',
+    category: 'system',
+    description: '상태/이벤트 확인용 운영 대시보드 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['system.info', 'ui.notification']
+    }
+  },
+  {
+    id: 'service-probe',
+    title: 'Service Probe',
+    category: 'runtime',
+    description: '런타임 헬스 체크/복구 실험용 서비스 템플릿',
+    defaults: {
+      runtimeType: 'process-node',
+      appType: 'service',
+      entry: 'service.js',
+      permissions: []
+    }
+  }
+];
 
 function toPosixPath(value = '') {
   return String(value).split(path.sep).join('/');
@@ -98,6 +141,33 @@ function normalizeZipEntryPath(value = '') {
   return String(value || '')
     .replace(/\\/g, '/')
     .replace(/^\/+/, '');
+}
+
+function compareVersions(a, b) {
+  return packageLifecycleService.compareVersions(a, b);
+}
+
+function normalizeManifestChannel(value) {
+  const input = String(value || '').trim().toLowerCase();
+  if (packageLifecycleService.CHANNELS.includes(input)) {
+    return input;
+  }
+  return 'stable';
+}
+
+function normalizeManifestDependencies(value) {
+  return packageLifecycleService.normalizeDependencies(value);
+}
+
+function normalizeManifestCompatibility(value) {
+  return packageLifecycleService.normalizeCompatibility(value);
+}
+
+async function getServerVersion() {
+  if (cachedServerVersion) return cachedServerVersion;
+  const rootPackage = await fs.readJson(ROOT_PACKAGE_JSON_PATH).catch(() => null);
+  cachedServerVersion = String(rootPackage?.version || '0.0.0').trim() || '0.0.0';
+  return cachedServerVersion;
 }
 
 async function getManifestFilePath(appId) {
@@ -165,6 +235,36 @@ async function addDirectoryToZip(zip, rootPath, relativePath = '') {
     if (!entry.isFile()) continue;
     zip.addLocalFile(path.join(rootPath, childRelativePath), path.dirname(toPosixPath(childRelativePath)));
   }
+}
+
+function getManifestEntryFromZip(zip) {
+  const zipEntries = zip.getEntries();
+  const fileEntries = zipEntries.filter((entry) => !entry.isDirectory);
+  return (
+    fileEntries.find((entry) => normalizeZipEntryPath(entry.entryName) === 'manifest.json') ||
+    fileEntries.find((entry) => normalizeZipEntryPath(entry.entryName).endsWith('/manifest.json')) ||
+    null
+  );
+}
+
+async function readManifestFromZip(filePath) {
+  const zip = new AdmZip(filePath);
+  const manifestZipEntry = getManifestEntryFromZip(zip);
+  if (!manifestZipEntry) {
+    const err = new Error('manifest.json not found in package archive.');
+    err.code = 'PACKAGE_IMPORT_MANIFEST_MISSING';
+    throw err;
+  }
+
+  const manifestBuffer = zip.readFile(manifestZipEntry);
+  if (!manifestBuffer) {
+    const err = new Error('Could not read manifest.json from package archive.');
+    err.code = 'PACKAGE_IMPORT_MANIFEST_INVALID';
+    throw err;
+  }
+
+  const parsedManifest = JSON.parse(manifestBuffer.toString('utf8'));
+  return normalizeManifestInput(parsedManifest || {});
 }
 
 async function importZipPackageFromFile(filePath, options = {}) {
@@ -307,6 +407,18 @@ function normalizeRemotePackage(item = {}, source) {
   };
 }
 
+function listEcosystemTemplates() {
+  return ECOSYSTEM_TEMPLATES.map((template) => ({
+    ...template,
+    namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
+  }));
+}
+
+function getEcosystemTemplate(templateId) {
+  const key = String(templateId || '').trim();
+  return ECOSYSTEM_TEMPLATES.find((item) => item.id === key) || null;
+}
+
 async function fetchRegistryPackagesFromSource(source) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -429,6 +541,37 @@ function createDefaultHtmlTemplate({ appId, title }) {
 `;
 }
 
+function createDefaultServiceTemplate({ appId, runtimeType }) {
+  if (runtimeType === 'process-python') {
+    return `#!/usr/bin/env python3
+import time
+
+print("Service ${appId} started", flush=True)
+while True:
+    print("heartbeat", flush=True)
+    time.sleep(5)
+`;
+  }
+
+  if (runtimeType === 'binary') {
+    return `#!/usr/bin/env bash
+echo "Service ${appId} started"
+while true; do
+  echo "heartbeat"
+  sleep 5
+done
+`;
+  }
+
+  return `'use strict';
+
+console.log('Service ${appId} started');
+setInterval(() => {
+  console.log('heartbeat');
+}, 5000);
+`;
+}
+
 function normalizeManifestInput(input, fallbackAppId) {
   const appId = String(input?.id || fallbackAppId || '').trim();
   appPaths.assertSafeAppId(appId);
@@ -444,11 +587,6 @@ function normalizeManifestInput(input, fallbackAppId) {
     ? input.entry
     : (input?.entry && typeof input.entry.app === 'string' ? input.entry.app : DEFAULT_ENTRY);
   const entry = normalizeRelativePath(resolvedEntry || DEFAULT_ENTRY);
-  if (!entry) {
-    const err = new Error('Package entry is required.');
-    err.code = 'PACKAGE_ENTRY_REQUIRED';
-    throw err;
-  }
 
   let normalizedIcon = 'LayoutGrid';
   if (typeof input?.icon === 'string') {
@@ -479,7 +617,13 @@ function normalizeManifestInput(input, fallbackAppId) {
     id: appId,
     entry
   });
+  assertValidRuntimeProfile(input, runtimeProfile);
   const runtimeFields = toManifestRuntimeFields(runtimeProfile);
+  const dependencies = normalizeManifestDependencies(input?.dependencies);
+  const compatibility = normalizeManifestCompatibility(input?.compatibility);
+  const release = {
+    channel: normalizeManifestChannel(input?.release?.channel || input?.channel || 'stable')
+  };
 
   return {
     id: appId,
@@ -495,13 +639,16 @@ function normalizeManifestInput(input, fallbackAppId) {
     author: String(input?.author || '').trim(),
     repository: String(input?.repository || '').trim(),
     singleton: Boolean(input?.singleton),
-    entry,
+    entry: runtimeProfile.entry || entry,
     permissions: Array.isArray(input?.permissions)
       ? input.permissions.map((permission) => String(permission)).filter(Boolean)
       : [],
     capabilities: Array.isArray(input?.capabilities)
       ? input.capabilities.map((capability) => String(capability)).filter(Boolean)
       : [],
+    dependencies,
+    compatibility,
+    release,
     window: {
       width: Number.isFinite(Number(input?.window?.width)) ? Number(input.window.width) : DEFAULT_WINDOW.width,
       height: Number.isFinite(Number(input?.window?.height)) ? Number(input.window.height) : DEFAULT_WINDOW.height,
@@ -534,6 +681,185 @@ async function listDirectoryEntries(appId, relativePath = '') {
     type: entry.isDirectory() ? 'directory' : 'file',
     path: toPosixPath(path.join(basePath, entry.name))
   }));
+}
+
+async function computePackageHealthReport(appId, options = {}) {
+  const safeAppId = appPaths.assertSafeAppId(appId);
+  const runtimeManager = options.runtimeManager || null;
+  const manifest = await readManifestRaw(safeAppId);
+  if (!manifest) {
+    const err = new Error('Package not found.');
+    err.code = 'PACKAGE_NOT_FOUND';
+    throw err;
+  }
+
+  const checks = [];
+  let runtimeProfile = null;
+
+  try {
+    runtimeProfile = normalizeRuntimeProfile(manifest);
+    assertValidRuntimeProfile(manifest, runtimeProfile);
+    checks.push({
+      id: 'manifest.runtime',
+      level: 'pass',
+      message: 'Runtime profile is valid.'
+    });
+  } catch (err) {
+    checks.push({
+      id: 'manifest.runtime',
+      level: 'fail',
+      code: err.code || 'RUNTIME_PROFILE_INVALID',
+      message: err.message
+    });
+  }
+
+  if (runtimeProfile && runtimeProfile.appType !== 'service') {
+    const entryPath = await resolvePackagePath(safeAppId, runtimeProfile.entry || manifest.entry || DEFAULT_ENTRY).catch(() => '');
+    if (entryPath && (await fs.pathExists(entryPath))) {
+      checks.push({
+        id: 'package.entry',
+        level: 'pass',
+        message: 'UI entry file exists.'
+      });
+    } else {
+      checks.push({
+        id: 'package.entry',
+        level: 'fail',
+        code: 'PACKAGE_ENTRY_NOT_FOUND',
+        message: `Entry file "${runtimeProfile.entry || manifest.entry || DEFAULT_ENTRY}" was not found.`
+      });
+    }
+  }
+
+  const dependencies = normalizeManifestDependencies(manifest.dependencies);
+  if (dependencies.length > 0) {
+    const installed = await packageRegistryService.listSandboxApps();
+    const installedIds = new Set(installed.map((item) => item.id));
+
+    for (const dependency of dependencies) {
+      const exists = installedIds.has(dependency.id);
+      if (exists) {
+        checks.push({
+          id: `dependency.${dependency.id}`,
+          level: 'pass',
+          message: `Dependency "${dependency.id}" is installed.`,
+          versionRange: dependency.version
+        });
+      } else if (dependency.optional) {
+        checks.push({
+          id: `dependency.${dependency.id}`,
+          level: 'warn',
+          message: `Optional dependency "${dependency.id}" is not installed.`,
+          versionRange: dependency.version
+        });
+      } else {
+        checks.push({
+          id: `dependency.${dependency.id}`,
+          level: 'fail',
+          code: 'DEPENDENCY_MISSING',
+          message: `Required dependency "${dependency.id}" is not installed.`,
+          versionRange: dependency.version
+        });
+      }
+    }
+  } else {
+    checks.push({
+      id: 'dependencies',
+      level: 'pass',
+      message: 'No package dependencies declared.'
+    });
+  }
+
+  const compatibility = normalizeManifestCompatibility(manifest.compatibility);
+  const serverVersion = await getServerVersion();
+
+  if (compatibility.minServerVersion) {
+    if (compareVersions(serverVersion, compatibility.minServerVersion) < 0) {
+      checks.push({
+        id: 'compatibility.minServerVersion',
+        level: 'fail',
+        code: 'COMPATIBILITY_MIN_VERSION_MISMATCH',
+        message: `Server version ${serverVersion} is lower than required ${compatibility.minServerVersion}.`
+      });
+    } else {
+      checks.push({
+        id: 'compatibility.minServerVersion',
+        level: 'pass',
+        message: `Server version ${serverVersion} satisfies minimum ${compatibility.minServerVersion}.`
+      });
+    }
+  }
+
+  if (compatibility.maxServerVersion) {
+    if (compareVersions(serverVersion, compatibility.maxServerVersion) > 0) {
+      checks.push({
+        id: 'compatibility.maxServerVersion',
+        level: 'fail',
+        code: 'COMPATIBILITY_MAX_VERSION_MISMATCH',
+        message: `Server version ${serverVersion} exceeds maximum ${compatibility.maxServerVersion}.`
+      });
+    } else {
+      checks.push({
+        id: 'compatibility.maxServerVersion',
+        level: 'pass',
+        message: `Server version ${serverVersion} is below maximum ${compatibility.maxServerVersion}.`
+      });
+    }
+  }
+
+  if (compatibility.requiredRuntimeTypes.length > 0 && runtimeProfile) {
+    if (!compatibility.requiredRuntimeTypes.includes(runtimeProfile.runtimeType)) {
+      checks.push({
+        id: 'compatibility.runtimeType',
+        level: 'fail',
+        code: 'COMPATIBILITY_RUNTIME_TYPE_MISMATCH',
+        message: `Runtime type "${runtimeProfile.runtimeType}" is not in required list.`,
+        required: compatibility.requiredRuntimeTypes
+      });
+    } else {
+      checks.push({
+        id: 'compatibility.runtimeType',
+        level: 'pass',
+        message: `Runtime type "${runtimeProfile.runtimeType}" is compatible.`
+      });
+    }
+  }
+
+  if (runtimeManager && typeof runtimeManager.validateApp === 'function') {
+    const runtimeValidation = await runtimeManager.validateApp(safeAppId).catch((err) => ({
+      valid: false,
+      checks: [
+        {
+          id: 'runtime.validation',
+          level: 'fail',
+          code: err.code || 'RUNTIME_VALIDATION_FAILED',
+          message: err.message
+        }
+      ]
+    }));
+    for (const runtimeCheck of runtimeValidation.checks || []) {
+      checks.push({
+        ...runtimeCheck,
+        id: `runtime.${runtimeCheck.id || 'check'}`
+      });
+    }
+  }
+
+  const status = checks.some((check) => check.level === 'fail')
+    ? 'fail'
+    : checks.some((check) => check.level === 'warn')
+      ? 'warn'
+      : 'pass';
+
+  return {
+    appId: safeAppId,
+    status,
+    checkedAt: new Date().toISOString(),
+    serverVersion,
+    dependencies,
+    compatibility,
+    checks
+  };
 }
 
 router.get('/', async (req, res) => {
@@ -580,11 +906,28 @@ router.post('/', async (req, res) => {
 
     await fs.ensureDir(appRoot);
     await fs.writeJson(path.join(appRoot, 'manifest.json'), manifest, { spaces: 2 });
-    const entryPath = await resolvePackagePath(manifest.id, manifest.entry);
-    await fs.ensureDir(path.dirname(entryPath));
-    await fs.writeFile(entryPath, createDefaultHtmlTemplate({ appId: manifest.id, title: manifest.title }), 'utf8');
+    const runtimeProfile = normalizeRuntimeProfile(manifest);
+    const shouldCreateEntryFile = Boolean(manifest.entry);
+    if (shouldCreateEntryFile) {
+      const entryPath = await resolvePackagePath(manifest.id, manifest.entry);
+      await fs.ensureDir(path.dirname(entryPath));
+      if (runtimeProfile.appType === 'service') {
+        await fs.writeFile(
+          entryPath,
+          createDefaultServiceTemplate({ appId: manifest.id, runtimeType: runtimeProfile.runtimeType }),
+          'utf8'
+        );
+      } else {
+        await fs.writeFile(entryPath, createDefaultHtmlTemplate({ appId: manifest.id, title: manifest.title }), 'utf8');
+      }
+    }
 
     const created = await packageRegistryService.getSandboxApp(manifest.id);
+    await packageLifecycleService.recordInstall(manifest.id, {
+      manifest,
+      reason: 'create',
+      source: 'local:create'
+    });
     await auditService.log(
       'PACKAGES',
       `Create Package: ${manifest.id}`,
@@ -597,7 +940,7 @@ router.post('/', async (req, res) => {
       package: created
     });
   } catch (err) {
-    const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') ? 400 : 500;
+    const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') || err.code === 'RUNTIME_PROFILE_INVALID' ? 400 : 500;
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_CREATE_FAILED',
@@ -648,6 +991,11 @@ router.post(`/${APP_ID_ROUTE}/clone`, async (req, res) => {
 
     await fs.writeJson(await getManifestFilePath(targetId), clonedManifest, { spaces: 2 });
     const created = await packageRegistryService.getSandboxApp(targetId);
+    await packageLifecycleService.recordInstall(targetId, {
+      manifest: clonedManifest,
+      reason: 'clone',
+      source: `clone:${sourceId}`
+    });
 
     await auditService.log(
       'PACKAGES',
@@ -674,6 +1022,7 @@ router.delete(`/${APP_ID_ROUTE}`, async (req, res) => {
   try {
     const appId = appPaths.assertSafeAppId(req.params.id);
     const appRoot = await appPaths.getAppRoot(appId);
+    const runtimeManager = req.app.get('runtimeManager');
     if (!(await fs.pathExists(appRoot))) {
       return res.status(404).json({
         error: true,
@@ -682,7 +1031,9 @@ router.delete(`/${APP_ID_ROUTE}`, async (req, res) => {
       });
     }
 
+    await runtimeManager?.stopApp?.(appId).catch(() => {});
     await fs.remove(appRoot);
+    await fs.remove(await appPaths.getAppDataRoot(appId)).catch(() => {});
     await auditService.log(
       'PACKAGES',
       `Delete Package: ${appId}`,
@@ -757,11 +1108,49 @@ router.post('/import', upload.single('package'), async (req, res) => {
     }
 
     const overwrite = String(req.body?.overwrite || '').toLowerCase() === 'true';
-    const installed = await importZipPackageFromFile(req.file.path, { overwrite });
+    const runtimeManager = req.app.get('runtimeManager');
+    const incomingManifest = await readManifestFromZip(req.file.path);
+    const appId = incomingManifest.id;
+    const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
+    const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
+    const existing = await packageRegistryService.getSandboxApp(appId);
+
+    let backup = null;
+    if (overwrite && existing) {
+      await runtimeManager?.stopApp?.(appId).catch(() => {});
+      backup = await packageLifecycleService.createBackup(appId, {
+        note: 'Pre-import overwrite snapshot'
+      });
+    }
+
+    let installed;
+    try {
+      installed = await importZipPackageFromFile(req.file.path, { overwrite });
+    } catch (err) {
+      if (backup?.id) {
+        await packageLifecycleService.restoreBackup(appId, backup.id).catch(() => {});
+        if (wasRunning) {
+          await runtimeManager?.startApp?.(appId).catch(() => {});
+        }
+      }
+      throw err;
+    }
+
+    await packageLifecycleService.recordInstall(installed.id, {
+      manifest: incomingManifest,
+      reason: overwrite && existing ? 'import-overwrite' : 'import',
+      source: 'upload:zip',
+      backupId: backup?.id || null
+    });
+
+    if (wasRunning) {
+      await runtimeManager?.startApp?.(installed.id).catch(() => {});
+    }
+
     await auditService.log(
       'PACKAGES',
       `Import Package: ${installed.id}`,
-      { appId: installed.id, overwrite, user: req.user?.username },
+      { appId: installed.id, overwrite, backupId: backup?.id || null, user: req.user?.username },
       'INFO'
     );
 
@@ -771,10 +1160,9 @@ router.post('/import', upload.single('package'), async (req, res) => {
     });
   } catch (err) {
     const status =
-      err.code === 'PACKAGE_ALREADY_EXISTS' ||
-      err.code === 'PACKAGE_IMPORT_MANIFEST_MISSING' ||
-      err.code === 'PACKAGE_IMPORT_MANIFEST_INVALID' ||
-      err.code === 'PACKAGE_IMPORT_INVALID'
+      err.code === 'APP_ID_INVALID' ||
+      err.code?.startsWith('PACKAGE_') ||
+      err.code === 'RUNTIME_PROFILE_INVALID'
         ? 400
         : 500;
     return res.status(status).json({
@@ -964,12 +1352,56 @@ router.post('/registry/install', async (req, res) => {
     }
 
     tempZipFile = await downloadRegistryPackageZip(zipUrl);
-    const installed = await importZipPackageFromFile(tempZipFile, { overwrite });
+    const runtimeManager = req.app.get('runtimeManager');
+    const incomingManifest = await readManifestFromZip(tempZipFile);
+    const appId = incomingManifest.id;
+    const existing = await packageRegistryService.getSandboxApp(appId);
+    const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
+    const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
+
+    let backup = null;
+    if (overwrite && existing) {
+      await runtimeManager?.stopApp?.(appId).catch(() => {});
+      backup = await packageLifecycleService.createBackup(appId, {
+        note: 'Pre-registry overwrite snapshot'
+      });
+    }
+
+    let installed;
+    try {
+      installed = await importZipPackageFromFile(tempZipFile, { overwrite });
+    } catch (err) {
+      if (backup?.id) {
+        await packageLifecycleService.restoreBackup(appId, backup.id).catch(() => {});
+        if (wasRunning) {
+          await runtimeManager?.startApp?.(appId).catch(() => {});
+        }
+      }
+      throw err;
+    }
+
+    await packageLifecycleService.recordInstall(installed.id, {
+      manifest: incomingManifest,
+      reason: overwrite && existing ? 'upgrade-overwrite' : 'registry-install',
+      source: sourceId ? `registry:${sourceId}` : 'registry:direct-url',
+      backupId: backup?.id || null
+    });
+
+    if (wasRunning) {
+      await runtimeManager?.startApp?.(installed.id).catch(() => {});
+    }
 
     await auditService.log(
       'PACKAGES',
       `Install Registry Package: ${installed.id}`,
-      { appId: installed.id, sourceId: sourceId || 'direct-url', zipUrl, overwrite, user: req.user?.username },
+      {
+        appId: installed.id,
+        sourceId: sourceId || 'direct-url',
+        zipUrl,
+        overwrite,
+        backupId: backup?.id || null,
+        user: req.user?.username
+      },
       'INFO'
     );
 
@@ -979,14 +1411,13 @@ router.post('/registry/install', async (req, res) => {
     });
   } catch (err) {
     const status =
-      err.code === 'PACKAGE_ALREADY_EXISTS' ||
-      err.code === 'PACKAGE_IMPORT_MANIFEST_MISSING' ||
-      err.code === 'PACKAGE_IMPORT_MANIFEST_INVALID' ||
-      err.code === 'PACKAGE_IMPORT_INVALID' ||
+      err.code === 'APP_ID_INVALID' ||
+      err.code?.startsWith('PACKAGE_') ||
       err.code === 'REGISTRY_PACKAGE_TOO_LARGE' ||
       err.code === 'REGISTRY_PACKAGE_ZIP_URL_INVALID' ||
       err.code === 'REGISTRY_PACKAGE_DOWNLOAD_TIMEOUT' ||
-      err.code === 'REGISTRY_PACKAGE_DOWNLOAD_FAILED'
+      err.code === 'REGISTRY_PACKAGE_DOWNLOAD_FAILED' ||
+      err.code === 'RUNTIME_PROFILE_INVALID'
         ? 400
         : 500;
     return res.status(status).json({
@@ -998,6 +1429,286 @@ router.post('/registry/install', async (req, res) => {
     if (tempZipFile) {
       await fs.remove(tempZipFile).catch(() => {});
     }
+  }
+});
+
+router.get('/ecosystem/templates', async (_req, res) => {
+  return res.json({
+    success: true,
+    namespace: ECOSYSTEM_TEMPLATE_NAMESPACE,
+    templates: listEcosystemTemplates()
+  });
+});
+
+router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
+  try {
+    const template = getEcosystemTemplate(req.params.templateId);
+    if (!template) {
+      return res.status(404).json({
+        error: true,
+        code: 'ECOSYSTEM_TEMPLATE_NOT_FOUND',
+        message: 'Requested ecosystem template was not found.'
+      });
+    }
+
+    const requestedId = String(req.body?.appId || '').trim();
+    const appId = requestedId || `${template.id}-${Date.now()}`;
+    appPaths.assertSafeAppId(appId);
+
+    const manifest = normalizeManifestInput({
+      id: appId,
+      title: String(req.body?.title || `${template.title} (${appId})`).trim(),
+      description: String(req.body?.description || template.description || '').trim(),
+      version: String(req.body?.version || '0.1.0').trim() || '0.1.0',
+      type: template.defaults.appType,
+      runtime: {
+        type: template.defaults.runtimeType,
+        entry: template.defaults.entry
+      },
+      permissions: Array.isArray(req.body?.permissions)
+        ? req.body.permissions
+        : template.defaults.permissions
+    });
+
+    const appRoot = await appPaths.getAppRoot(manifest.id);
+    if (await fs.pathExists(appRoot)) {
+      return res.status(409).json({
+        error: true,
+        code: 'PACKAGE_ALREADY_EXISTS',
+        message: `Package "${manifest.id}" already exists.`
+      });
+    }
+
+    await fs.ensureDir(appRoot);
+    await fs.writeJson(path.join(appRoot, 'manifest.json'), manifest, { spaces: 2 });
+
+    const runtimeProfile = normalizeRuntimeProfile(manifest);
+    const entryPath = await resolvePackagePath(manifest.id, manifest.entry);
+    await fs.ensureDir(path.dirname(entryPath));
+    if (runtimeProfile.appType === 'service') {
+      await fs.writeFile(
+        entryPath,
+        createDefaultServiceTemplate({ appId: manifest.id, runtimeType: runtimeProfile.runtimeType }),
+        'utf8'
+      );
+    } else {
+      await fs.writeFile(entryPath, createDefaultHtmlTemplate({ appId: manifest.id, title: manifest.title }), 'utf8');
+    }
+
+    const readmePath = await resolvePackagePath(manifest.id, 'README.md');
+    await fs.writeFile(
+      readmePath,
+      `# ${manifest.title}\n\nGenerated from ecosystem template \`${template.id}\`.\n`,
+      'utf8'
+    );
+
+    await packageLifecycleService.recordInstall(manifest.id, {
+      manifest,
+      reason: 'ecosystem-scaffold',
+      source: `ecosystem:${template.id}`
+    });
+
+    await auditService.log(
+      'PACKAGES',
+      `Scaffold Ecosystem Template: ${template.id} -> ${manifest.id}`,
+      { templateId: template.id, appId: manifest.id, user: req.user?.username },
+      'INFO'
+    );
+
+    const created = await packageRegistryService.getSandboxApp(manifest.id);
+    return res.status(201).json({
+      success: true,
+      template: {
+        id: template.id,
+        namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
+      },
+      package: created
+    });
+  } catch (err) {
+    const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'ECOSYSTEM_TEMPLATE_SCAFFOLD_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.get(`/${APP_ID_ROUTE}/lifecycle`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const manifest = await readManifestRaw(appId);
+    if (!manifest) {
+      return res.status(404).json({
+        error: true,
+        code: 'PACKAGE_NOT_FOUND',
+        message: 'Package not found.'
+      });
+    }
+
+    const lifecycle = await packageLifecycleService.getLifecycle(appId, manifest);
+    return res.json({
+      success: true,
+      lifecycle
+    });
+  } catch (err) {
+    const status = err.code === 'APP_ID_INVALID' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_LIFECYCLE_READ_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.put(`/${APP_ID_ROUTE}/channel`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const manifest = await readManifestRaw(appId);
+    if (!manifest) {
+      return res.status(404).json({
+        error: true,
+        code: 'PACKAGE_NOT_FOUND',
+        message: 'Package not found.'
+      });
+    }
+
+    const channel = normalizeManifestChannel(req.body?.channel);
+    const lifecycle = await packageLifecycleService.setChannel(appId, channel);
+    manifest.release = {
+      ...(manifest.release && typeof manifest.release === 'object' ? manifest.release : {}),
+      channel
+    };
+    await fs.writeJson(await getManifestFilePath(appId), manifest, { spaces: 2 });
+
+    await auditService.log(
+      'PACKAGES',
+      `Set Package Channel: ${appId}`,
+      { appId, channel, user: req.user?.username },
+      'INFO'
+    );
+
+    return res.json({
+      success: true,
+      channel,
+      lifecycle
+    });
+  } catch (err) {
+    const status = err.code === 'APP_ID_INVALID' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_CHANNEL_UPDATE_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.post(`/${APP_ID_ROUTE}/backup`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const note = String(req.body?.note || '').trim();
+    const backup = await packageLifecycleService.createBackup(appId, {
+      note: note || 'Manual backup requested from API'
+    });
+
+    await auditService.log(
+      'PACKAGES',
+      `Create Package Backup: ${appId}`,
+      { appId, backupId: backup.id, user: req.user?.username },
+      'INFO'
+    );
+
+    return res.status(201).json({
+      success: true,
+      backup
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID' || err.code === 'PACKAGE_NOT_FOUND'
+        ? 400
+        : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_BACKUP_CREATE_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.post(`/${APP_ID_ROUTE}/rollback`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const backupId = String(req.body?.backupId || '').trim();
+    if (!backupId) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_BACKUP_ID_REQUIRED',
+        message: 'Body \"backupId\" is required.'
+      });
+    }
+
+    const runtimeManager = req.app.get('runtimeManager');
+    const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
+    const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
+    if (wasRunning) {
+      await runtimeManager?.stopApp?.(appId).catch(() => {});
+    }
+
+    const restored = await packageLifecycleService.restoreBackup(appId, backupId);
+    if (wasRunning) {
+      await runtimeManager?.startApp?.(appId).catch(() => {});
+    }
+
+    await auditService.log(
+      'PACKAGES',
+      `Rollback Package: ${appId}`,
+      { appId, backupId, user: req.user?.username },
+      'WARN'
+    );
+
+    return res.json({
+      success: true,
+      restored
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID' ||
+      err.code === 'PACKAGE_BACKUP_NOT_FOUND' ||
+      err.code === 'PACKAGE_BACKUP_FILE_NOT_FOUND' ||
+      err.code === 'PACKAGE_BACKUP_INVALID'
+        ? 400
+        : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_ROLLBACK_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.get(`/${APP_ID_ROUTE}/health`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const runtimeManager = req.app.get('runtimeManager');
+    const report = await computePackageHealthReport(appId, { runtimeManager });
+    await packageLifecycleService.recordQaReport(appId, {
+      checkedAt: report.checkedAt,
+      status: report.status,
+      summary: `Package health check finished with status: ${report.status}.`,
+      checks: report.checks
+    });
+
+    return res.json({
+      success: true,
+      report
+    });
+  } catch (err) {
+    const status = err.code === 'APP_ID_INVALID' || err.code === 'PACKAGE_NOT_FOUND' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_HEALTH_CHECK_FAILED',
+      message: err.message
+    });
   }
 });
 
@@ -1013,6 +1724,7 @@ router.get(`/${APP_ID_ROUTE}`, async (req, res) => {
     }
 
     const manifest = await readManifestRaw(req.params.id);
+    const lifecycle = await packageLifecycleService.getLifecycle(req.params.id, manifest || {});
     const runtimeManager = req.app.get('runtimeManager');
     const runtimeStatus = runtimeManager?.getRuntimeStatusMap
       ? runtimeManager.getRuntimeStatusMap()[req.params.id] || null
@@ -1022,6 +1734,7 @@ router.get(`/${APP_ID_ROUTE}`, async (req, res) => {
       success: true,
       package: pkg,
       runtimeStatus,
+      lifecycle,
       manifest
     });
   } catch (err) {
@@ -1080,7 +1793,9 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
       });
     }
 
+    const previousManifest = await readManifestRaw(routeAppId);
     const runtimeProfile = normalizeRuntimeProfile(manifest);
+    assertValidRuntimeProfile(manifest, runtimeProfile);
     const shouldValidateUiEntry = runtimeProfile.appType !== 'service';
     const entryPath = await resolvePackagePath(routeAppId, manifest.entry);
     if (shouldValidateUiEntry && !(await fs.pathExists(entryPath))) {
@@ -1092,6 +1807,15 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
     }
 
     await fs.writeJson(await getManifestFilePath(routeAppId), manifest, { spaces: 2 });
+    if (String(previousManifest?.version || '') !== String(manifest.version || '')) {
+      await packageLifecycleService.recordInstall(routeAppId, {
+        manifest,
+        reason: 'manifest-version-update',
+        source: 'manifest:update'
+      });
+    } else {
+      await packageLifecycleService.setChannel(routeAppId, manifest.release?.channel || 'stable');
+    }
     await auditService.log(
       'PACKAGES',
       `Update Manifest: ${routeAppId}`,
@@ -1106,7 +1830,7 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
       manifest
     });
   } catch (err) {
-    const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') ? 400 : 500;
+    const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') || err.code === 'RUNTIME_PROFILE_INVALID' ? 400 : 500;
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_MANIFEST_UPDATE_FAILED',

@@ -8,6 +8,7 @@ const RUNTIME_TYPE_MAP = {
 
 const APP_TYPES = new Set(['app', 'service', 'hybrid']);
 const RESTART_POLICIES = new Set(['never', 'on-failure', 'always']);
+const HEALTHCHECK_TYPES = new Set(['none', 'process', 'http']);
 
 function toPosixRelativePath(value = '') {
   return String(value || '')
@@ -19,6 +20,11 @@ function normalizeRuntimeType(value) {
   const key = String(value || '').trim().toLowerCase();
   if (!key) return 'sandbox-html';
   return RUNTIME_TYPE_MAP[key] || 'sandbox-html';
+}
+
+function hasRuntimeType(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return Boolean(key && RUNTIME_TYPE_MAP[key]);
 }
 
 function normalizeAppType(value, runtimeType) {
@@ -51,7 +57,15 @@ function normalizeRuntimeProfile(manifest = {}) {
   );
   const appType = normalizeAppType(manifest.type, runtimeType);
 
-  const entry = toPosixRelativePath(runtimeRaw.entry || manifest.entry || '');
+  const manifestEntry = manifest.entry;
+  const entryFromRuntime = runtimeRaw.entry;
+  const entryFromManifestString = typeof manifestEntry === 'string' ? manifestEntry : '';
+  const entryFromManifestApp = manifestEntry && typeof manifestEntry === 'object' ? manifestEntry.app : '';
+  const entryFromManifestService = manifestEntry && typeof manifestEntry === 'object' ? manifestEntry.service : '';
+  const defaultEntry = runtimeType === 'sandbox-html'
+    ? (entryFromManifestApp || entryFromManifestString || '')
+    : (entryFromManifestService || entryFromManifestString || entryFromManifestApp || '');
+  const entry = toPosixRelativePath(entryFromRuntime || defaultEntry || '');
   const runtimeCommand = String(runtimeRaw.command || '').trim();
   const runtimeCwd = toPosixRelativePath(runtimeRaw.cwd || '.');
   const args = normalizeStringArray(runtimeRaw.args);
@@ -97,6 +111,79 @@ function normalizeRuntimeProfile(manifest = {}) {
     healthcheck,
     resources
   };
+}
+
+function assertValidRuntimeProfile(manifest = {}, profile = normalizeRuntimeProfile(manifest)) {
+  const runtimeInput = manifest.runtime;
+  if (typeof runtimeInput === 'string' && runtimeInput.trim() && !hasRuntimeType(runtimeInput)) {
+    const err = new Error(`Unsupported runtime type: ${runtimeInput}`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (runtimeInput && typeof runtimeInput === 'object' && runtimeInput.type && !hasRuntimeType(runtimeInput.type)) {
+    const err = new Error(`Unsupported runtime type: ${runtimeInput.type}`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+
+  if (!APP_TYPES.has(profile.appType)) {
+    const err = new Error(`Unsupported app type: ${profile.appType}`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+
+  if (profile.appType !== 'service' && !profile.entry) {
+    const err = new Error('Runtime entry is required.');
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+
+  if (isManagedRuntime(profile)) {
+    if (!profile.entry && !profile.command) {
+      const err = new Error('Managed runtime requires entry or command.');
+      err.code = 'RUNTIME_PROFILE_INVALID';
+      throw err;
+    }
+  }
+
+  if (!RESTART_POLICIES.has(profile.service?.restartPolicy)) {
+    const err = new Error(`Unsupported restart policy: ${profile.service?.restartPolicy}`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (!Number.isFinite(Number(profile.service?.maxRetries)) || Number(profile.service.maxRetries) < 0) {
+    const err = new Error('service.maxRetries must be a non-negative number.');
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (!Number.isFinite(Number(profile.service?.restartDelayMs)) || Number(profile.service.restartDelayMs) < 0) {
+    const err = new Error('service.restartDelayMs must be a non-negative number.');
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+
+  if (!HEALTHCHECK_TYPES.has(profile.healthcheck?.type || 'none')) {
+    const err = new Error(`Unsupported healthcheck type: ${profile.healthcheck?.type}`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if ((profile.healthcheck?.type || 'none') === 'http' && !String(profile.healthcheck?.path || '').trim()) {
+    const err = new Error('healthcheck.path is required when healthcheck.type is "http".');
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (!Number.isFinite(Number(profile.healthcheck?.intervalMs)) || Number(profile.healthcheck.intervalMs) <= 0) {
+    const err = new Error('healthcheck.intervalMs must be greater than 0.');
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (!Number.isFinite(Number(profile.healthcheck?.timeoutMs)) || Number(profile.healthcheck.timeoutMs) <= 0) {
+    const err = new Error('healthcheck.timeoutMs must be greater than 0.');
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+
+  return profile;
 }
 
 function toManifestRuntimeFields(profile) {
@@ -164,6 +251,7 @@ function sanitizeProfileForClient(profile) {
 module.exports = {
   normalizeRuntimeType,
   normalizeRuntimeProfile,
+  assertValidRuntimeProfile,
   toManifestRuntimeFields,
   getRuntimeCommand,
   isManagedRuntime,

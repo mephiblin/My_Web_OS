@@ -21,12 +21,14 @@
 
   let registrySources = $state([]);
   let storePackages = $state([]);
+  let ecosystemTemplates = $state([]);
   let installedPackages = $state([]);
   let storeSourceErrors = $state([]);
   let runtimeStatusByApp = $state({});
   let runtimeLogsByApp = $state({});
   let runtimeActioning = $state('');
   let runtimeLogsLoading = $state('');
+  let scaffoldingTemplateId = $state('');
 
   let sourceForm = $state({
     id: '',
@@ -45,6 +47,24 @@
   function clearFeedback() {
     message = '';
     error = '';
+  }
+
+  async function withTimeout(promise, timeoutMs, timeoutMessage) {
+    let timer;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const err = new Error(timeoutMessage || '요청 시간이 초과되었습니다.');
+            err.code = 'REQUEST_TIMEOUT';
+            reject(err);
+          }, timeoutMs);
+        })
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   function normalizeRegistryUrl(url) {
@@ -203,6 +223,15 @@
     }
   }
 
+  async function loadEcosystemTemplates() {
+    try {
+      const response = await apiFetch('/api/packages/ecosystem/templates');
+      ecosystemTemplates = Array.isArray(response.templates) ? response.templates : [];
+    } catch (_err) {
+      ecosystemTemplates = [];
+    }
+  }
+
   async function saveStoreSource() {
     clearFeedback();
     const normalizedUrl = normalizeRegistryUrl(sourceForm.url);
@@ -256,6 +285,26 @@
     }
   }
 
+  async function scaffoldTemplate(template) {
+    scaffoldingTemplateId = template.id;
+    clearFeedback();
+    try {
+      const appId = `${template.id}-${Math.random().toString(36).slice(2, 8)}`;
+      const title = `${template.title} ${new Date().toLocaleTimeString('ko-KR', { hour12: false })}`;
+      await apiFetch(`/api/packages/ecosystem/templates/${encodeURIComponent(template.id)}/scaffold`, {
+        method: 'POST',
+        body: JSON.stringify({ appId, title })
+      });
+      message = `템플릿 "${template.title}"로 "${appId}" 생성 완료`;
+      await Promise.all([loadInstalledPackages(), loadRuntimeStatuses()]);
+      activeCategory = CATEGORY.INSTALLED;
+    } catch (err) {
+      error = err.message || '템플릿 생성에 실패했습니다.';
+    } finally {
+      scaffoldingTemplateId = '';
+    }
+  }
+
   async function installPackage(pkg) {
     installingPackageId = pkg.id;
     clearFeedback();
@@ -304,9 +353,13 @@
     runtimeActioning = `${pkg.id}:${action}`;
     clearFeedback();
     try {
-      await apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/${action}`, {
-        method: 'POST'
-      });
+      await withTimeout(
+        apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/${action}`, {
+          method: 'POST'
+        }),
+        15000,
+        '런타임 제어 요청이 지연되고 있습니다. 잠시 후 다시 시도하세요.'
+      );
       await loadRuntimeStatuses();
       message = `"${pkg.title}" ${action === 'start' ? '시작' : action === 'stop' ? '중지' : '재시작'} 완료`;
     } catch (err) {
@@ -325,7 +378,11 @@
     runtimeLogsLoading = pkg.id;
     clearFeedback();
     try {
-      const response = await apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/logs?limit=200`);
+      const response = await withTimeout(
+        apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/logs?limit=200`),
+        10000,
+        '로그 조회가 지연되고 있습니다.'
+      );
       runtimeLogsByApp = {
         ...runtimeLogsByApp,
         [pkg.id]: Array.isArray(response.logs) ? response.logs : []
@@ -358,8 +415,14 @@
     }
   }
 
-  onMount(async () => {
-    await Promise.all([loadRegistrySources(), loadStorePackages(), loadInstalledPackages(), loadRuntimeStatuses()]);
+  onMount(() => {
+    Promise.all([loadRegistrySources(), loadStorePackages(), loadEcosystemTemplates(), loadInstalledPackages(), loadRuntimeStatuses()]).catch(() => {});
+    const timer = setInterval(() => {
+      if (activeCategory === CATEGORY.INSTALLED) {
+        loadRuntimeStatuses().catch(() => {});
+      }
+    }, 5000);
+    return () => clearInterval(timer);
   });
 </script>
 
@@ -420,6 +483,31 @@
         <div class="block-head">
           <h3>Store 목록</h3>
         </div>
+
+        {#if ecosystemTemplates.length > 0}
+          <div class="ecosystem-templates">
+            <div class="section-title">공식 생태계 템플릿</div>
+            <div class="template-list">
+              {#each ecosystemTemplates as template}
+                <article class="template-card">
+                  <div class="template-top">
+                    <strong>{template.title}</strong>
+                    <span>{template.category}</span>
+                  </div>
+                  <p>{template.description}</p>
+                  <button
+                    class="btn tiny"
+                    onclick={() => scaffoldTemplate(template)}
+                    disabled={scaffoldingTemplateId === template.id}
+                  >
+                    {scaffoldingTemplateId === template.id ? '생성 중...' : '템플릿 생성'}
+                  </button>
+                </article>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
         <div class="store-categories">
           <button class="store-filter {activeStoreSource === 'all' ? 'active' : ''}" onclick={() => activeStoreSource = 'all'}>
             전체 ({storePackages.length})
@@ -710,6 +798,63 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 12px;
+  }
+
+  .ecosystem-templates {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    padding: 10px;
+    background: rgba(2, 6, 23, 0.35);
+    display: grid;
+    gap: 10px;
+  }
+
+  .section-title {
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #bae6fd;
+  }
+
+  .template-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+  }
+
+  .template-card {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 10px;
+    background: rgba(15, 23, 36, 0.7);
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .template-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .template-top strong {
+    font-size: 13px;
+  }
+
+  .template-top span {
+    font-size: 11px;
+    color: #93c5fd;
+    border: 1px solid rgba(96, 165, 250, 0.35);
+    border-radius: 999px;
+    padding: 2px 7px;
+  }
+
+  .template-card p {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1.4;
   }
 
   .store-categories {

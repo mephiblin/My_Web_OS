@@ -23,7 +23,8 @@ function handleError(res, err) {
       : err.code === 'RUNTIME_NOT_MANAGED' ||
           err.code === 'RUNTIME_COMMAND_REQUIRED' ||
           err.code === 'RUNTIME_COMMAND_NOT_ALLOWED' ||
-          err.code === 'RUNTIME_ENTRY_NOT_FOUND'
+          err.code === 'RUNTIME_ENTRY_NOT_FOUND' ||
+          err.code === 'RUNTIME_PROFILE_INVALID'
         ? 400
         : 500;
 
@@ -58,6 +59,21 @@ router.get('/apps/:id', async (req, res) => {
     return res.json({
       success: true,
       app
+    });
+  } catch (err) {
+    return handleError(res, err);
+  }
+});
+
+router.get('/apps/:id/validate', async (req, res) => {
+  const manager = getManager(req, res);
+  if (!manager) return;
+
+  try {
+    const validation = await manager.validateApp(req.params.id);
+    return res.json({
+      success: true,
+      validation
     });
   } catch (err) {
     return handleError(res, err);
@@ -109,6 +125,22 @@ router.post('/apps/:id/restart', async (req, res) => {
   }
 });
 
+router.post('/apps/:id/recover', async (req, res) => {
+  const manager = getManager(req, res);
+  if (!manager) return;
+
+  try {
+    const result = await manager.recoverApp(req.params.id);
+    return res.json({
+      success: true,
+      action: result.action,
+      app: result.app
+    });
+  } catch (err) {
+    return handleError(res, err);
+  }
+});
+
 router.get('/apps/:id/logs', async (req, res) => {
   const manager = getManager(req, res);
   if (!manager) return;
@@ -116,11 +148,33 @@ router.get('/apps/:id/logs', async (req, res) => {
   try {
     const app = await manager.getApp(req.params.id);
     const limit = Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : 200;
-    const logs = manager.getLogs(req.params.id, { limit });
+    const cursor = req.query.cursor;
+    const result = manager.getLogs(req.params.id, { limit, cursor });
     return res.json({
       success: true,
       app,
-      logs
+      logs: result.items,
+      cursor: result.cursor
+    });
+  } catch (err) {
+    return handleError(res, err);
+  }
+});
+
+router.get('/apps/:id/events', async (req, res) => {
+  const manager = getManager(req, res);
+  if (!manager) return;
+
+  try {
+    const app = await manager.getApp(req.params.id);
+    const limit = Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : 200;
+    const cursor = req.query.cursor;
+    const result = manager.getEvents(req.params.id, { limit, cursor });
+    return res.json({
+      success: true,
+      app,
+      events: result.items,
+      cursor: result.cursor
     });
   } catch (err) {
     return handleError(res, err);
