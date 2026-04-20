@@ -1,3 +1,4 @@
+const express = require('express');
 const router = express.Router();
 const auditService = require('../services/auditService');
 const si = require('systeminformation');
@@ -23,7 +24,7 @@ router.get('/overview', async (req, res) => {
       si.cpuTemperature()
     ]);
 
-    
+
     res.json({
       cpu: cpu.currentLoad.toFixed(2),
       cpuTemp: {
@@ -90,7 +91,7 @@ router.get('/network-ips', async (req, res) => {
     const netInterfaces = await si.networkInterfaces();
     // Filter for common ipv4 addresses, excluding internal loopback
     const local = netInterfaces.find(i => !i.internal && i.ip4 && i.operstate === 'up') || netInterfaces[0];
-    
+
     let external = 'Unknown';
     try {
       const response = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
@@ -193,7 +194,7 @@ router.get('/wallpapers/list', async (req, res) => {
 });
 
 const multer = require('multer');
-const uploadWP = multer({ 
+const uploadWP = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, path.join(__dirname, '../storage/inventory/wallpapers')),
     filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
@@ -237,7 +238,7 @@ router.get('/widget-library', async (req, res) => {
     await fs.ensureDir(widgetsDir);
     const files = await fs.readdir(widgetsDir);
     const library = [];
-    
+
     for (const file of files) {
       if (file.endsWith('.json')) {
         const data = await fs.readJson(path.join(widgetsDir, file));
