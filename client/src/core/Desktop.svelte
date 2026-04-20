@@ -40,6 +40,19 @@
     Shield, Monitor, Files, TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send
   };
 
+  function resolveIconComponent(iconName) {
+    return iconMap[iconName] || LayoutGrid;
+  }
+
+  function normalizeDesktopApp(app) {
+    const iconType = app?.iconType === 'image' && app?.iconUrl ? 'image' : 'lucide';
+    return {
+      ...app,
+      iconType,
+      iconComponent: resolveIconComponent(app?.icon || app?.iconName || 'LayoutGrid')
+    };
+  }
+
   const components = {
     files: FileExplorer,
     terminal: TerminalApp,
@@ -67,11 +80,7 @@
         return;
       }
 
-      // Map icon strings to components
-      apps = data.map(app => ({
-        ...app,
-        icon: iconMap[app.icon] || LayoutGrid
-      }));
+      apps = data.map((app) => normalizeDesktopApp(app));
     } catch (err) {
       console.error('Failed to load apps:', err);
     }
@@ -205,7 +214,11 @@
     {#each apps as app}
       <button class="app-icon" ondblclick={() => openWindow(app)}>
         <div class="icon-box glass-effect">
-          <svelte:component this={app.icon} size={32} />
+          {#if app.iconType === 'image' && app.iconUrl}
+            <img class="app-icon-image" src={app.iconUrl} alt={app.title} loading="lazy" />
+          {:else}
+            <svelte:component this={app.iconComponent} size={32} />
+          {/if}
         </div>
         <span>{app.title}</span>
       </button>
@@ -325,6 +338,12 @@
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  }
+  .app-icon-image {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+    border-radius: 8px;
   }
   .app-icon:hover .icon-box { 
     transform: scale(1.08) translateY(-2px); 

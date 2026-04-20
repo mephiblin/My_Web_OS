@@ -1,5 +1,5 @@
 <script>
-  import { Shield, Search, Settings, Bell } from 'lucide-svelte';
+  import { Shield, Search, Settings, Bell, LayoutGrid } from 'lucide-svelte';
   import { windows, activeWindowId, focusWindow, toggleMinimize } from '../stores/windowStore.js';
   import { desktops, currentDesktopId, switchDesktop } from '../stores/desktopStore.js';
   import { notifications } from '../stores/notificationStore.js';
@@ -9,6 +9,12 @@
 
   const visibleWindows = $derived($windows.filter(w => w.desktopId === $currentDesktopId));
   const unreadCount = $derived($notifications.filter(n => !n.read).length);
+
+  function resolveWindowIcon(win) {
+    if (win.iconComponent) return win.iconComponent;
+    if (typeof win.icon === 'function') return win.icon;
+    return LayoutGrid;
+  }
 </script>
 
 <div class="taskbar glass-effect">
@@ -45,7 +51,11 @@
           }
         }}
       >
-        <svelte:component this={win.icon} size={18} />
+        {#if win.iconType === 'image' && win.iconUrl}
+          <img class="task-icon-image" src={win.iconUrl} alt={win.title} loading="lazy" />
+        {:else}
+          <svelte:component this={resolveWindowIcon(win)} size={18} />
+        {/if}
       </button>
     {/each}
   </div>
@@ -148,6 +158,7 @@
   .task-item:hover { background: rgba(255,255,255,0.1); }
   .task-item.active { background: rgba(255,255,255,0.1); color: var(--accent-blue); }
   .task-item.active::after { content: ''; position: absolute; bottom: 4px; width: 4px; height: 4px; background: var(--accent-blue); border-radius: 50%; }
+  .task-icon-image { width: 18px; height: 18px; object-fit: contain; border-radius: 4px; }
 
   .system-tray { display: flex; align-items: center; gap: 4px; }
   .tray-btn { background: transparent; border: none; color: var(--text-dim); padding: 8px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; position: relative; }

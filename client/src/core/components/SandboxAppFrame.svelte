@@ -53,9 +53,11 @@
   }
 
   function normalizeAppForWindow(targetApp) {
+    const iconType = targetApp?.iconType === 'image' && targetApp?.iconUrl ? 'image' : 'lucide';
     return {
       ...targetApp,
-      icon: iconMap[targetApp.icon] || LayoutGrid
+      iconType,
+      iconComponent: iconMap[targetApp.icon] || LayoutGrid
     };
   }
 

@@ -1,5 +1,5 @@
 <script>
-  import { X, Minus, Square } from 'lucide-svelte';
+  import { X, Minus, Square, LayoutGrid } from 'lucide-svelte';
   import { closeWindow, focusWindow, toggleMinimize, toggleMaximize } from './stores/windowStore.js';
   import { setSnapGhost, hideSnapGhost } from './stores/snapStore.js';
 
@@ -18,6 +18,7 @@
   let localHeight = $state(win.height);
 
   let snapZone = $state(null); // 'left', 'right', 'top', null
+  const iconComponent = $derived(win.iconComponent || (typeof win.icon === 'function' ? win.icon : LayoutGrid));
 
   $effect(() => {
     if (!dragging && !resizing) {
@@ -142,7 +143,11 @@
 >
   <div class="title-bar" ondblclick={() => toggleMaximize(win.id)}>
     <div class="title">
-      <svelte:component this={win.icon} size={16} />
+      {#if win.iconType === 'image' && win.iconUrl}
+        <img class="title-icon-image" src={win.iconUrl} alt={win.title} loading="lazy" />
+      {:else}
+        <svelte:component this={iconComponent} size={16} />
+      {/if}
       <span>{win.title}</span>
     </div>
     <div class="controls">
@@ -233,6 +238,12 @@
     gap: 8px;
     font-size: 13px;
     font-weight: 500;
+  }
+  .title-icon-image {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+    border-radius: 4px;
   }
 
   .controls {

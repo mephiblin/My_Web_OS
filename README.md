@@ -79,19 +79,26 @@
     - **보안 로그**: 로그인/로그아웃 및 주요 시스템 변경 이력 추적.
     - **안전한 종료 (Graceful Shutdown)**: 서버 종료 시 리소스 누수를 방지하는 안전 프로세스.
 
-9.  **패키지 센터 (Package Center) - 신규**
-    - **설치된 패키지 탐색**: `server/storage/inventory/apps` 아래의 샌드박스 앱을 자동 스캔하여 패키지처럼 표시.
-    - **패키지 메타데이터 표시**: 앱 버전, 런타임, 엔트리 파일, 권한 정보 확인 가능.
-    - **즉시 실행**: 패키지 센터에서 선택한 앱을 데스크톱 창으로 바로 실행.
+9.  **패키지 센터 (Package Center)**
+    - **스토어/설치됨 분리 UI**: `Store`와 `설치됨` 카테고리 기반으로 앱 수명주기를 분리 관리.
+    - **스토어 소스 등록**: GitHub/Raw URL 입력으로 레지스트리 소스를 추가/제거하고 목록을 동기화.
+    - **스토어형 앱 목록**: 소스별 필터, 버전/설명/아이콘 표시, 원격 패키지 설치 지원.
+    - **설치 앱 제어**: 설치된 패키지에 대해 `열기`, `중지`, `제거` 동작 제공.
 
-10. **샌드박스 앱 런타임 (Sandbox Runtime) - 신규**
+10. **패키지 레지스트리 및 배포 파이프라인**
+    - **레지스트리 API**: `/api/packages/registry/sources`, `/api/packages/registry`, `/api/packages/registry/install` 지원.
+    - **설치 경로 통합**: source+package 기반 또는 직접 `zipUrl` 기반 설치를 공통 처리.
+    - **가져오기/내보내기**: 패키지 ZIP import/export 및 clone 기반 워크플로우 제공.
+    - **런타임 카탈로그**: `/api/packages/runtime/capabilities`로 샌드박스 권한/기능 기준 노출.
+
+11. **샌드박스 앱 런타임 (Sandbox Runtime)**
     - **매니페스트 기반 앱 등록**: `manifest.json`을 읽어 데스크톱 앱 목록에 동적으로 병합.
     - **격리된 정적 자산 제공**: `/api/sandbox/:appId/...` 라우트를 통해 앱별 엔트리 및 자산 서빙.
     - **권한 기반 데이터 접근**: `app.data.list`, `app.data.read`, `app.data.write` 권한에 따라 앱 데이터 접근 제어.
+    - **아이콘 메타 확장**: `iconType`/`iconUrl`을 통한 이미지 아이콘과 Lucide 아이콘 공통 처리.
     - **앱별 데이터 루트 분리**: 샌드박스 앱마다 독립된 데이터 저장 영역을 보유.
-    - **예제 앱 포함**: `hello-sandbox` 샘플 앱 제공.
 
-11. **서비스 및 설정 인프라 (Services & Config Foundation) - 신규**
+12. **서비스 및 설정 인프라 (Services & Config Foundation)**
     - **서비스 관리 API**: `/api/services`를 통해 내부 서비스 상태 조회 및 재시작 기반 제공.
     - **기본 설정 분리**: `server/config/defaults.json`으로 서버 및 시스템 기본값 분리 관리.
     - **설정 로더 모듈화**: `server/config/serverConfig.js`에서 환경 변수와 기본값을 통합 해석.
@@ -111,10 +118,12 @@
 - Svelte 기반 단일 앱에서 로그인 여부에 따라 `Login`과 `Desktop`을 분기합니다.
 - Desktop은 앱 런처, 창 관리자, 위젯 계층, Spotlight, 컨텍스트 메뉴, 태스크바를 총괄합니다.
 - 앱 컴포넌트를 ID 기반으로 동적 매핑하여 기본 앱 레지스트리와 샌드박스 앱을 같은 창 시스템으로 연결합니다.
+- Package Center는 스토어 소스 관리, 원격 패키지 설치, 설치 앱 제어(`열기/중지/제거`)를 단일 UI에서 제공합니다.
 
 ### **백엔드**
 - Express + Socket.io 구조로 HTTP API와 실시간 터미널/상태 스트림을 함께 제공합니다.
 - 서비스 초기화 후 라우터를 `/api/fs`, `/api/system`, `/api/auth`, `/api/packages`, `/api/sandbox`, `/api/services` 등으로 분리합니다.
+- `/api/packages`는 레지스트리 소스 관리, 원격 패키지 설치, import/export, manifest/파일 편집 API를 포함합니다.
 - 종료 시 인덱서, PTY 세션, 내부 서비스 상태를 정리하는 graceful shutdown 로직을 포함합니다.
 
 ### **저장소 레이어**
@@ -167,8 +176,11 @@ npm run dev
 - **주소**: `http://localhost:5173` (Vite 기본 포트)
 - **기본 관리자 계정**: `.env`에 설정한 `ADMIN_USERNAME` 및 `ADMIN_PASSWORD` 사용.
 
-### 4. 샌드박스 앱 추가 방법
-샌드박스 앱은 `server/storage/inventory/apps/<app-id>/` 아래에 앱 폴더를 만들고 `manifest.json`과 엔트리 파일을 배치하는 방식으로 추가할 수 있습니다.
+### 4. 앱 추가 및 설치 방법
+샌드박스 앱은 로컬 배치 방식과 스토어 설치 방식 둘 다 지원합니다.
+
+#### 4-1. 로컬 샌드박스 앱 배치
+`server/storage/inventory/apps/<app-id>/` 아래에 앱 폴더를 만들고 `manifest.json`과 엔트리 파일을 배치합니다.
 
 예시 `manifest.json`:
 ```json
@@ -177,11 +189,20 @@ npm run dev
   "title": "Hello Sandbox",
   "version": "1.0.0",
   "entry": "index.html",
+  "icon": {
+    "type": "image",
+    "src": "assets/icon.png"
+  },
   "permissions": ["app.data.list", "app.data.read", "app.data.write"]
 }
 ```
 
-앱이 정상적으로 배치되면 Package Center에서 자동으로 감지되며, 데스크톱 창 안에서 샌드박스 프레임으로 실행됩니다.
+앱이 정상 배치되면 Package Center의 `설치됨` 목록에서 자동 감지되며, 데스크톱 창 안에서 샌드박스 프레임으로 실행됩니다.
+
+#### 4-2. 스토어 소스 연결 후 설치
+1. Package Center의 `Store` 카테고리에서 GitHub URL 또는 raw 레지스트리 URL을 입력합니다.
+2. 저장 후 스토어 목록이 동기화되면 설치할 패키지를 선택해 `설치`를 실행합니다.
+3. 설치 완료된 앱은 `설치됨` 카테고리에서 `열기`, `중지`, `제거`로 관리할 수 있습니다.
 
 ---
 
@@ -195,6 +216,7 @@ npm run dev
 
 ### **유의점 및 기술 부채**
 - **보안 하드닝 필요**: `helmet`, CORS allowlist, rate limit 세분화 등 추가 보완 여지 존재.
+- **스토어 신뢰 정책 보강 필요**: 레지스트리 소스 allowlist/서명 검증/해시 검증 등 공급망 보안 고도화 필요.
 - **파일 기반 저장 구조 한계**: 동시성, 백업, 무결성, 검색성 측면에서 장기적으로 DB 전환 검토 필요.
 - **권한 모델 확장 필요**: 현재 관리자 중심 구조에서 향후 RBAC 및 다중 사용자 모델 확장이 필요.
 

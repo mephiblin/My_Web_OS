@@ -17,6 +17,7 @@ const indexService = require('./services/indexService');
 const trashService = require('./services/trashService');
 const shareService = require('./services/shareService');
 const auditService = require('./services/auditService');
+const runtimeManager = require('./services/runtimeManager');
 
 const fsRouter = require('./routes/fs');
 const sysRouter = require('./routes/system');
@@ -30,6 +31,7 @@ const packagesRouter = require('./routes/packages');
 const shareRouter = require('./routes/share');
 const servicesRouter = require('./routes/services');
 const sandboxRouter = require('./routes/sandbox');
+const runtimeRouter = require('./routes/runtime');
 
 async function bootstrap() {
   const config = await serverConfig.getAll();
@@ -43,6 +45,7 @@ async function bootstrap() {
   serviceManager.register(trashService);
   serviceManager.register(shareService);
   serviceManager.register(auditService);
+  serviceManager.register(runtimeManager);
   await serviceManager.startAll();
 
   const app = express();
@@ -92,8 +95,10 @@ async function bootstrap() {
   app.use('/api/share', shareRouter);
   app.use('/api/services', servicesRouter);
   app.use('/api/sandbox', sandboxRouter);
+  app.use('/api/runtime', runtimeRouter);
 
   app.set('serviceManager', serviceManager);
+  app.set('runtimeManager', runtimeManager);
 
   // Static files for Inventory
   app.use('/api/inventory-files', express.static(config.paths.inventoryRoot));

@@ -14,6 +14,11 @@
     "allowedRoots": [],
     "indexDepth": 5
   },
+  "runtime": {
+    "allowedCommands": ["node", "python", "python3"],
+    "logBufferLines": 500,
+    "stopTimeoutMs": 5000
+  },
   "systemState": {
     "settings": {
       "blurIntensity": 20,

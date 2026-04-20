@@ -2,6 +2,7 @@ const fs = require('fs-extra');
 
 const inventoryPaths = require('../utils/inventoryPaths');
 const appPaths = require('../utils/appPaths');
+const { normalizeRuntimeProfile, sanitizeProfileForClient } = require('./runtimeProfiles');
 
 const DEFAULT_WINDOW = {
   width: 960,
@@ -9,6 +10,105 @@ const DEFAULT_WINDOW = {
   minWidth: 480,
   minHeight: 320
 };
+const ICON_FILE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
+
+function normalizeBuiltinIcon(iconValue) {
+  if (typeof iconValue !== 'string') {
+    return {
+      icon: 'LayoutGrid',
+      iconType: 'lucide',
+      iconName: 'LayoutGrid',
+      iconUrl: ''
+    };
+  }
+
+  const value = iconValue.trim();
+  if (!value) {
+    return {
+      icon: 'LayoutGrid',
+      iconType: 'lucide',
+      iconName: 'LayoutGrid',
+      iconUrl: ''
+    };
+  }
+
+  if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value)) {
+    return {
+      icon: 'LayoutGrid',
+      iconType: 'image',
+      iconName: 'LayoutGrid',
+      iconUrl: value
+    };
+  }
+
+  return {
+    icon: value,
+    iconType: 'lucide',
+    iconName: value,
+    iconUrl: ''
+  };
+}
+
+function normalizeSandboxIcon(iconValue, appId) {
+  const fallback = {
+    icon: 'LayoutGrid',
+    iconType: 'lucide',
+    iconName: 'LayoutGrid',
+    iconUrl: '',
+    iconPath: null
+  };
+
+  if (!iconValue) return fallback;
+
+  if (typeof iconValue === 'object') {
+    if (iconValue.type === 'image' && typeof iconValue.src === 'string') {
+      iconValue = iconValue.src;
+    } else if (iconValue.type === 'lucide' && typeof iconValue.name === 'string') {
+      iconValue = iconValue.name;
+    } else {
+      return fallback;
+    }
+  }
+
+  if (typeof iconValue !== 'string') return fallback;
+
+  const value = iconValue.trim();
+  if (!value) return fallback;
+
+  if (/^https?:\/\//i.test(value) || /^data:image\//i.test(value)) {
+    return {
+      icon: 'LayoutGrid',
+      iconType: 'image',
+      iconName: 'LayoutGrid',
+      iconUrl: value,
+      iconPath: null
+    };
+  }
+
+  const normalizedPath = value.replace(/^[/\\]+/, '');
+  const looksLikeAssetPath =
+    normalizedPath.includes('/') ||
+    normalizedPath.includes('\\') ||
+    ICON_FILE_EXT_RE.test(normalizedPath);
+
+  if (looksLikeAssetPath) {
+    return {
+      icon: 'LayoutGrid',
+      iconType: 'image',
+      iconName: 'LayoutGrid',
+      iconUrl: `/api/sandbox/${encodeURIComponent(appId)}/${normalizedPath}`,
+      iconPath: normalizedPath
+    };
+  }
+
+  return {
+    icon: value,
+    iconType: 'lucide',
+    iconName: value,
+    iconUrl: '',
+    iconPath: null
+  };
+}
 
 async function readBuiltinRegistry() {
   await inventoryPaths.ensureInventoryStructure();
@@ -53,22 +153,30 @@ function normalizeWindow(value) {
 }
 
 function normalizeBuiltinApp(app) {
+  const iconMeta = normalizeBuiltinIcon(app.icon);
   return {
     ...app,
     runtime: 'builtin',
     source: 'system-registry',
     permissions: Array.isArray(app.permissions) ? app.permissions : [],
     singleton: Boolean(app.singleton),
-    icon: app.icon || 'LayoutGrid',
+    icon: iconMeta.icon,
+    iconType: iconMeta.iconType,
+    iconName: iconMeta.iconName,
+    iconUrl: iconMeta.iconUrl,
     window: normalizeWindow(app.window)
   };
 }
 
 function normalizeSandboxManifest(manifest) {
   if (!manifest || typeof manifest !== 'object') return null;
-  if (typeof manifest.id !== 'string' || typeof manifest.title !== 'string' || typeof manifest.entry !== 'string') {
+  const runtimeProfile = normalizeRuntimeProfile(manifest);
+  const resolvedEntry = runtimeProfile.entry;
+
+  if (typeof manifest.id !== 'string' || typeof manifest.title !== 'string') {
     return null;
   }
+  if (runtimeProfile.appType !== 'service' && (!resolvedEntry || !resolvedEntry.trim())) return null;
 
   try {
     appPaths.assertSafeAppId(manifest.id);
@@ -76,18 +184,28 @@ function normalizeSandboxManifest(manifest) {
     return null;
   }
 
+  const iconMeta = normalizeSandboxIcon(manifest.icon, manifest.id);
+
   return {
     id: manifest.id,
     title: manifest.title,
     description: manifest.description || '',
-    icon: manifest.icon || 'LayoutGrid',
+    icon: iconMeta.icon,
+    iconType: iconMeta.iconType,
+    iconName: iconMeta.iconName,
+    iconUrl: iconMeta.iconUrl,
+    iconPath: iconMeta.iconPath,
     version: manifest.version || '0.0.0',
-    type: manifest.type || 'app',
-    entry: manifest.entry,
-    runtime: 'sandbox',
+    type: runtimeProfile.appType,
+    appType: runtimeProfile.appType,
+    entry: resolvedEntry,
+    runtime: runtimeProfile.runtimeType === 'sandbox-html' ? 'sandbox' : runtimeProfile.runtimeType,
+    runtimeType: runtimeProfile.runtimeType,
+    runtimeProfile: sanitizeProfileForClient(runtimeProfile),
     source: 'inventory-package',
     singleton: Boolean(manifest.singleton),
     permissions: Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : [],
+    capabilities: Array.isArray(manifest.capabilities) ? manifest.capabilities.map(String).filter(Boolean) : [],
     author: manifest.author || '',
     repository: manifest.repository || '',
     window: normalizeWindow(manifest.window)
@@ -110,15 +228,34 @@ async function readSandboxManifest(appId) {
     return null;
   }
 
-  const entryFile = await appPaths.resolveAppAssetPath(appId, normalized.entry);
-  if (!(await fs.pathExists(entryFile))) {
-    return null;
+  if (normalized.appType !== 'service') {
+    const entryFile = await appPaths.resolveAppAssetPath(appId, normalized.entry);
+    if (!(await fs.pathExists(entryFile))) {
+      return null;
+    }
+  }
+
+  if (normalized.iconType === 'image' && normalized.iconPath) {
+    const iconFile = await appPaths.resolveAppAssetPath(appId, normalized.iconPath).catch(() => null);
+    if (!iconFile || !(await fs.pathExists(iconFile))) {
+      normalized.icon = 'LayoutGrid';
+      normalized.iconType = 'lucide';
+      normalized.iconName = 'LayoutGrid';
+      normalized.iconUrl = '';
+      normalized.iconPath = null;
+    }
   }
 
   await appPaths.ensureAppDataRoot(appId);
 
+  const { iconPath, ...safeNormalized } = normalized;
+
+  if (normalized.appType === 'service') {
+    return safeNormalized;
+  }
+
   return {
-    ...normalized,
+    ...safeNormalized,
     sandbox: {
       routeBase: `/api/sandbox/${encodeURIComponent(appId)}/`,
       entryUrl: `/api/sandbox/${encodeURIComponent(appId)}/${normalized.entry.replace(/^[/\\]+/, '')}`
@@ -159,6 +296,9 @@ const packageRegistryService = {
     }
 
     for (const sandboxApp of sandboxApps) {
+      if (sandboxApp.appType === 'service') {
+        continue;
+      }
       if (seen.has(sandboxApp.id)) {
         console.warn(`[PACKAGES] Skipping sandbox app "${sandboxApp.id}" because a builtin app already uses that id.`);
         continue;
