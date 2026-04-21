@@ -1,7 +1,7 @@
 <script>
   import { Shield, Search, Settings, Bell, LayoutGrid } from 'lucide-svelte';
   import { windows, activeWindowId, focusWindow, toggleMinimize } from '../stores/windowStore.js';
-  import { desktops, currentDesktopId, switchDesktop } from '../stores/desktopStore.js';
+  import { desktops, currentDesktopId, switchDesktop, layoutEditMode, toggleLayoutEditMode } from '../stores/desktopStore.js';
   import { notifications } from '../stores/notificationStore.js';
   import { openSpotlight } from '../stores/spotlightStore.js';
   import { taskbarSettings } from '../stores/taskbarStore.js';
@@ -60,6 +60,13 @@
         >
         </button>
       {/each}
+      <button
+        class="layout-edit-btn {$layoutEditMode ? 'active' : ''}"
+        onclick={toggleLayoutEditMode}
+        title="Desktop layout edit mode"
+      >
+        Edit
+      </button>
     </div>
   {/if}
 
@@ -176,6 +183,20 @@
     height: 8px;
     border-radius: 10px; 
     background: white; 
+  }
+  .layout-edit-btn {
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 10px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  .layout-edit-btn.active {
+    color: white;
+    border-color: rgba(88, 166, 255, 0.6);
+    background: rgba(88, 166, 255, 0.2);
   }
 
   .taskbar-search {

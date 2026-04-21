@@ -2,8 +2,8 @@
   import { onMount } from 'svelte';
   import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send, Folder, File, Trash2, ExternalLink } from 'lucide-svelte';
   import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize, initWindows } from './stores/windowStore.js';
-  import { contextMenu, openContextMenu, closeContextMenu } from './stores/contextMenuStore.js';
-  import { desktops, currentDesktopId, switchDesktop } from './stores/desktopStore.js';
+  import { contextMenu, openContextMenu, closeContextMenu, contextMenuSettings } from './stores/contextMenuStore.js';
+  import { currentDesktopId, initDesktops, layoutEditMode } from './stores/desktopStore.js';
   import { snapGhost } from './stores/snapStore.js';
   import { widgets } from './stores/widgetStore.js';
   import { shortcuts, initShortcuts, removeShortcut } from './stores/shortcutStore.js';
@@ -105,7 +105,9 @@
       agentStore.init(),
       systemSettings.init(),
       taskbarSettings.init(),
+      contextMenuSettings.init(),
       windowDefaultsSettings.init(),
+      initDesktops(),
       initWindows(),
       widgets.init(),
       widgetLibrary.init(),
@@ -158,6 +160,7 @@
   });
 
   function openShortcut(shortcut) {
+    if ($layoutEditMode) return;
     if (shortcut.isDirectory) {
       openWindow({ id: 'files', title: 'File Station', icon: Folder }, { path: shortcut.path });
     } else {
@@ -226,9 +229,12 @@
     {/each}
   </div>
 
-  <div class="app-grid" onclick={() => { closeContextMenu(); closeStartMenu(); }}>
+  <div class="app-grid {$layoutEditMode ? 'layout-edit-mode' : ''}" onclick={() => { closeContextMenu(); closeStartMenu(); }}>
+    {#if $layoutEditMode}
+      <div class="layout-edit-banner">Layout Edit Mode: app launch is temporarily disabled.</div>
+    {/if}
     {#each apps as app}
-      <button class="app-icon" ondblclick={() => openWindow(app)}>
+      <button class="app-icon" ondblclick={() => !$layoutEditMode && openWindow(app)}>
         <div class="icon-box glass-effect">
           {#if app.iconType === 'image' && app.iconUrl}
             <img class="app-icon-image" src={app.iconUrl} alt={app.title} loading="lazy" />
@@ -243,7 +249,7 @@
     {#each $shortcuts as shortcut (shortcut.id)}
       <button 
         class="app-icon shortcut" 
-        ondblclick={() => openShortcut(shortcut)}
+        ondblclick={() => !$layoutEditMode && openShortcut(shortcut)}
         oncontextmenu={(e) => handleShortcutContext(e, shortcut.id)}
       >
         <div class="icon-box glass-effect {shortcut.isDirectory ? 'dir' : 'file'}">
@@ -332,6 +338,25 @@
     gap: 8px;
     height: calc(100% - 100px);
     pointer-events: none;
+  }
+  .layout-edit-banner {
+    grid-column: 1 / -1;
+    border: 1px solid rgba(88, 166, 255, 0.4);
+    background: rgba(88, 166, 255, 0.12);
+    color: #c5ddff;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    margin-bottom: 6px;
+  }
+  .app-grid.layout-edit-mode .app-icon {
+    animation: wobble 0.35s ease-in-out 2;
+  }
+  @keyframes wobble {
+    0% { transform: rotate(0deg); }
+    25% { transform: rotate(-1deg); }
+    75% { transform: rotate(1deg); }
+    100% { transform: rotate(0deg); }
   }
   .app-icon { 
     background: transparent; 

@@ -7,6 +7,7 @@
     createPackageBackup,
     controlRuntimeApp,
     fetchInstalledOpsSummary,
+    fetchPackageFileEntries,
     fetchPackageManifest,
     fetchInstalledPackages,
     fetchRegistryInstallPreflight,
@@ -25,7 +26,7 @@
     wizardCreatePackage,
     wizardPreflightPackage
   } from './api.js';
-  import { openWindow, windows, closeWindow } from '../../core/stores/windowStore.js';
+  import { openWindow, windows, closeWindow, focusWindow, updateWindowData, updateWindowTitle } from '../../core/stores/windowStore.js';
 
   const CATEGORY = {
     STORE: 'store',
@@ -59,6 +60,9 @@
   let lifecycleActioning = $state('');
   let healthLoading = $state('');
   let manifestEditorByApp = $state({});
+  let packageFilesByApp = $state({});
+  let packageFilesLoadingByApp = $state({});
+  let packageFilesErrorByApp = $state({});
   let scaffoldingTemplateId = $state('');
   let backupNotesByApp = $state({});
   let selectedBackupByApp = $state({});
@@ -403,6 +407,105 @@
     return next;
   }
 
+  function normalizePackageDirectoryPath(pathValue) {
+    const raw = String(pathValue || '').trim().replace(/\\/g, '/');
+    if (!raw || raw === '.' || raw === '/') return '';
+    return raw.replace(/^\/+|\/+$/g, '');
+  }
+
+  function getPackageFilesState(appId) {
+    return packageFilesByApp[appId] || { path: '', entries: [] };
+  }
+
+  function getParentDirectory(pathValue) {
+    const normalized = normalizePackageDirectoryPath(pathValue);
+    if (!normalized) return '';
+    const segments = normalized.split('/').filter(Boolean);
+    segments.pop();
+    return segments.join('/');
+  }
+
+  async function loadPackageFiles(appId, relativePath = '') {
+    const targetPath = normalizePackageDirectoryPath(relativePath);
+    packageFilesLoadingByApp = {
+      ...packageFilesLoadingByApp,
+      [appId]: true
+    };
+    packageFilesErrorByApp = {
+      ...packageFilesErrorByApp,
+      [appId]: ''
+    };
+
+    try {
+      const response = await withTimeout(
+        fetchPackageFileEntries(appId, targetPath),
+        10000,
+        'Package files request timed out.'
+      );
+      const entries = Array.isArray(response?.entries) ? response.entries : [];
+      entries.sort((a, b) => {
+        if (a.type !== b.type) {
+          return a.type === 'directory' ? -1 : 1;
+        }
+        return String(a.name || '').localeCompare(String(b.name || ''), 'en');
+      });
+      packageFilesByApp = {
+        ...packageFilesByApp,
+        [appId]: {
+          path: targetPath,
+          entries
+        }
+      };
+    } catch (err) {
+      packageFilesErrorByApp = {
+        ...packageFilesErrorByApp,
+        [appId]: err.message || 'Failed to load package files.'
+      };
+    } finally {
+      packageFilesLoadingByApp = {
+        ...packageFilesLoadingByApp,
+        [appId]: false
+      };
+    }
+  }
+
+  async function openPackageDirectory(pkg, relativePath = '') {
+    await loadPackageFiles(pkg.id, relativePath);
+  }
+
+  async function refreshPackageDirectory(pkg) {
+    await loadPackageFiles(pkg.id, getPackageFilesState(pkg.id).path || '');
+  }
+
+  function openPackageFileEditor(appId, filePath) {
+    const normalizedPath = normalizePackageDirectoryPath(filePath);
+    if (!normalizedPath) return;
+
+    const title = `Editor - ${appId}/${normalizedPath}`;
+    const editorData = {
+      packageFile: {
+        appId,
+        path: normalizedPath
+      }
+    };
+    const existingEditor = get(windows).find((item) => item.appId === 'editor');
+    if (existingEditor) {
+      updateWindowData(existingEditor.id, editorData);
+      updateWindowTitle(existingEditor.id, title);
+      focusWindow(existingEditor.id);
+      return;
+    }
+
+    openWindow(
+      {
+        id: 'editor',
+        title,
+        iconComponent: LayoutGrid
+      },
+      editorData
+    );
+  }
+
   function getSourcePackageCount(sourceId) {
     return storePackages.filter((pkg) => pkg.source?.id === sourceId).length;
   }
@@ -503,7 +606,20 @@
     return fallback;
   }
 
-  function normalizeInstallPreflight(payload, pkg, overwrite, fallbackMessage = '') {
+  function dedupeReviewItems(items, excludedKeys = new Set()) {
+    const seen = new Set(excludedKeys);
+    const result = [];
+    for (const item of items || []) {
+      const key = `${String(item?.label || '').trim().toLowerCase()}|${String(item?.status || '').trim().toLowerCase()}|${String(item?.detail || '').trim().toLowerCase()}`;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      result.push(item);
+    }
+    return result;
+  }
+
+  function normalizeInstallPreflight(payload, pkg, overwrite, fallbackMessage = '', options = {}) {
+    const forceBlocked = options.forceBlocked === true;
     const raw = payload?.review || payload?.preflight || payload?.data || payload || {};
     const executionReadiness = readPreflightField(raw, ['executionReadiness'], null);
     const blockers = Array.isArray(executionReadiness?.blockers) ? executionReadiness.blockers : [];
@@ -534,7 +650,7 @@
         ['gate', 'blocked'],
         ['policy', 'blocked']
       ], false)
-    ) || decision === 'blocked' || hasBlockers || qualityGateStatus === 'fail' || dependencyStatus === 'fail';
+    ) || executionReadiness?.ready === false || decision === 'blocked' || hasBlockers || qualityGateStatus === 'fail' || dependencyStatus === 'fail' || forceBlocked;
 
     const summary = normalizeReviewText(
       readPreflightField(raw, [
@@ -566,7 +682,7 @@
       'quality'
     );
 
-    const dependencyChecks = normalizeReviewItems(
+    const dependencyChecksRaw = normalizeReviewItems(
       readPreflightField(raw, [
         ['dependencyCompatibility', 'checks'],
         'dependencyChecks',
@@ -577,16 +693,22 @@
       'dependency'
     );
 
-    const compatibilityChecks = normalizeReviewItems(
+    const compatibilityChecksRaw = normalizeReviewItems(
       readPreflightField(raw, [
-        ['dependencyCompatibility', 'checks'],
         'compatibilityChecks',
         'compatibility',
         ['runtimeCompatibility', 'checks'],
-        ['compatibilityReview', 'checks']
+        ['compatibilityReview', 'checks'],
+        ['dependencyCompatibility', 'compatibilityChecks'],
+        ['dependencyCompatibility', 'checks']
       ], []),
       'compatibility'
     );
+    const dependencyChecks = dedupeReviewItems(dependencyChecksRaw);
+    const dependencyKeys = new Set(
+      dependencyChecks.map((item) => `${String(item?.label || '').trim().toLowerCase()}|${String(item?.status || '').trim().toLowerCase()}|${String(item?.detail || '').trim().toLowerCase()}`)
+    );
+    const compatibilityChecks = dedupeReviewItems(compatibilityChecksRaw, dependencyKeys);
 
     const backupSummary = normalizeReviewText(
       readPreflightField(raw, [
@@ -732,7 +854,8 @@
         null,
         pkg,
         overwrite,
-        err.message || 'Preflight endpoint unavailable. Please verify details before continuing.'
+        err.message || 'Preflight endpoint unavailable. Please verify details before continuing.',
+        { forceBlocked: true }
       );
     }
   }
@@ -1383,7 +1506,10 @@
       return;
     }
 
-    await hydrateOpsConsole(pkg.id, { withLoading: true });
+    await Promise.all([
+      hydrateOpsConsole(pkg.id, { withLoading: true }),
+      loadPackageFiles(pkg.id, getPackageFilesState(pkg.id).path || '')
+    ]);
   }
 
   async function removeInstalledPackage(pkg) {
@@ -1408,6 +1534,21 @@
         const nextManifestEditorByApp = { ...manifestEditorByApp };
         delete nextManifestEditorByApp[pkg.id];
         manifestEditorByApp = nextManifestEditorByApp;
+      }
+      {
+        const nextPackageFilesByApp = { ...packageFilesByApp };
+        delete nextPackageFilesByApp[pkg.id];
+        packageFilesByApp = nextPackageFilesByApp;
+      }
+      {
+        const nextPackageFilesLoadingByApp = { ...packageFilesLoadingByApp };
+        delete nextPackageFilesLoadingByApp[pkg.id];
+        packageFilesLoadingByApp = nextPackageFilesLoadingByApp;
+      }
+      {
+        const nextPackageFilesErrorByApp = { ...packageFilesErrorByApp };
+        delete nextPackageFilesErrorByApp[pkg.id];
+        packageFilesErrorByApp = nextPackageFilesErrorByApp;
       }
       await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
     } catch (err) {
@@ -2063,6 +2204,54 @@
                       </div>
                     </div>
 
+                    <div class="ops-row">
+                      <div class="ops-group">
+                        <label>Package Files</label>
+                        <div class="ops-inline">
+                          <button
+                            class="btn tiny ghost"
+                            onclick={() => openPackageDirectory(pkg, getParentDirectory(getPackageFilesState(pkg.id).path))}
+                            disabled={Boolean(packageFilesLoadingByApp[pkg.id]) || !getPackageFilesState(pkg.id).path}
+                          >
+                            Up
+                          </button>
+                          <button
+                            class="btn tiny ghost"
+                            onclick={() => refreshPackageDirectory(pkg)}
+                            disabled={Boolean(packageFilesLoadingByApp[pkg.id])}
+                          >
+                            {packageFilesLoadingByApp[pkg.id] ? 'Loading...' : 'Reload'}
+                          </button>
+                          <span class="package-files-path">/{getPackageFilesState(pkg.id).path || ''}</span>
+                        </div>
+
+                        {#if packageFilesErrorByApp[pkg.id]}
+                          <div class="preflight-blocked-reason">{packageFilesErrorByApp[pkg.id]}</div>
+                        {:else if packageFilesLoadingByApp[pkg.id]}
+                          <div class="runtime-log-empty">Loading package files...</div>
+                        {:else if getPackageFilesState(pkg.id).entries.length === 0}
+                          <div class="runtime-log-empty">No files in this directory.</div>
+                        {:else}
+                          <div class="package-files-list">
+                            {#each getPackageFilesState(pkg.id).entries as entry}
+                              <div class="package-file-row">
+                                <span class="package-file-name {entry.type}">
+                                  {entry.type === 'directory' ? '[DIR]' : '[FILE]'} {entry.name}
+                                </span>
+                                <div class="package-file-actions">
+                                  {#if entry.type === 'directory'}
+                                    <button class="btn tiny ghost" onclick={() => openPackageDirectory(pkg, entry.path)}>Enter</button>
+                                  {:else}
+                                    <button class="btn tiny ghost" onclick={() => openPackageFileEditor(pkg.id, entry.path)}>Edit</button>
+                                  {/if}
+                                </div>
+                              </div>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+
                     <div class="ops-row split">
                       <div class="ops-panel">
                         <div class="ops-panel-title">Lifecycle Summary</div>
@@ -2636,6 +2825,59 @@
     font-size: 12px;
   }
 
+  .package-files-path {
+    font-size: 11px;
+    color: var(--text-dim);
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .package-files-list {
+    max-height: 220px;
+    overflow: auto;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.62);
+    padding: 6px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .package-file-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 8px;
+    background: rgba(15, 23, 36, 0.45);
+    padding: 6px 8px;
+  }
+
+  .package-file-name {
+    font-size: 12px;
+    color: #e2e8f0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .package-file-name.directory {
+    color: #bae6fd;
+  }
+
+  .package-file-name.file {
+    color: #e2e8f0;
+  }
+
+  .package-file-actions {
+    display: inline-flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
   .ops-panel {
     border: 1px solid rgba(148, 163, 184, 0.2);
     border-radius: 10px;
@@ -2934,4 +3176,3 @@
     color: var(--text-dim);
   }
 </style>
-

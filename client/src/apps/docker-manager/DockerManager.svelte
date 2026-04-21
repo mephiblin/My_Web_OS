@@ -1,10 +1,15 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { Play, Square, RotateCcw, Trash2, Container, AlertCircle } from 'lucide-svelte';
+  import { Play, Square, RotateCcw, Trash2, Container, AlertCircle, FileText, HardDrive, Layers } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
   import * as dockerApi from './api.js';
 
   let containers = $state([]);
+  let volumes = $state([]);
+  let composeProjects = $state([]);
+  let selectedLogContainerId = $state('');
+  let logLines = $state([]);
+  let logsLoading = $state(false);
   let loading = $state(true);
   let error = $state('');
   let interval;
@@ -27,6 +32,37 @@
     }
   }
 
+  async function fetchVolumes() {
+    try {
+      const data = await dockerApi.listVolumes();
+      volumes = Array.isArray(data?.volumes) ? data.volumes : [];
+    } catch (_err) {
+      volumes = [];
+    }
+  }
+
+  async function fetchComposeProjects() {
+    try {
+      const data = await dockerApi.listComposeProjects();
+      composeProjects = Array.isArray(data?.projects) ? data.projects : [];
+    } catch (_err) {
+      composeProjects = [];
+    }
+  }
+
+  async function openLogs(container) {
+    selectedLogContainerId = container.ID;
+    logsLoading = true;
+    try {
+      const data = await dockerApi.fetchContainerLogs(container.ID, 300);
+      logLines = Array.isArray(data?.lines) ? data.lines : [];
+    } catch (err) {
+      logLines = [`Failed to load logs: ${err.message}`];
+    } finally {
+      logsLoading = false;
+    }
+  }
+
   async function handleAction(action, container) {
     const id = container.ID;
     try {
@@ -40,7 +76,10 @@
       }
       if (result?.success) {
         addToast(result.message, 'success');
-        await fetchContainers();
+        await Promise.all([fetchContainers(), fetchVolumes(), fetchComposeProjects()]);
+        if (selectedLogContainerId === id) {
+          await openLogs(container);
+        }
       } else {
         addToast(result?.message || 'Action failed', 'error');
       }
@@ -56,8 +95,12 @@
   }
 
   onMount(() => {
-    fetchContainers();
-    interval = setInterval(fetchContainers, 5000);
+    Promise.all([fetchContainers(), fetchVolumes(), fetchComposeProjects()]);
+    interval = setInterval(() => {
+      fetchContainers();
+      fetchVolumes();
+      fetchComposeProjects();
+    }, 5000);
   });
 
   onDestroy(() => clearInterval(interval));
@@ -66,7 +109,7 @@
 <div class="docker-manager">
   <div class="header">
     <h2><Container size={20} /> Docker Containers</h2>
-    <button class="refresh-btn" onclick={fetchContainers}><RotateCcw size={14} /> Refresh</button>
+    <button class="refresh-btn" onclick={() => Promise.all([fetchContainers(), fetchVolumes(), fetchComposeProjects()])}><RotateCcw size={14} /> Refresh</button>
   </div>
 
   {#if loading}
@@ -94,6 +137,7 @@
             <div class="status" style="color: {getStatusColor(c.Status)}">● {c.Status}</div>
           </div>
           <div class="actions">
+            <button title="Logs" onclick={() => openLogs(c)}><FileText size={14} /></button>
             {#if c.State === 'running'}
               <button title="Stop" class="stop" onclick={() => handleAction('stop', c)}><Square size={14} /></button>
               <button title="Restart" class="restart" onclick={() => handleAction('restart', c)}><RotateCcw size={14} /></button>
@@ -104,6 +148,63 @@
           </div>
         </div>
       {/each}
+    </div>
+
+    <div class="info-panels">
+      <div class="info-panel glass-effect">
+        <div class="panel-head">
+          <h3><HardDrive size={15} /> Volumes</h3>
+        </div>
+        {#if volumes.length === 0}
+          <div class="runtime-empty">No volumes found.</div>
+        {:else}
+          <div class="simple-list">
+            {#each volumes as volume}
+              <div class="simple-row">
+                <span>{volume.Name || volume.Driver || 'volume'}</span>
+                <span>{volume.Driver || '-'}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="info-panel glass-effect">
+        <div class="panel-head">
+          <h3><Layers size={15} /> Compose Projects</h3>
+        </div>
+        {#if composeProjects.length === 0}
+          <div class="runtime-empty">No compose projects.</div>
+        {:else}
+          <div class="simple-list">
+            {#each composeProjects as project}
+              <div class="simple-row">
+                <span>{project.Name || project.Project || '-'}</span>
+                <span>{project.Status || '-'}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
+
+    <div class="log-panel glass-effect">
+      <div class="panel-head">
+        <h3><FileText size={15} /> Logs {selectedLogContainerId ? `(${selectedLogContainerId})` : ''}</h3>
+      </div>
+      {#if !selectedLogContainerId}
+        <div class="runtime-empty">Select a container and click Logs.</div>
+      {:else if logsLoading}
+        <div class="runtime-empty">Loading logs...</div>
+      {:else if logLines.length === 0}
+        <div class="runtime-empty">No log lines.</div>
+      {:else}
+        <div class="log-lines">
+          {#each logLines as line}
+            <div class="log-line">{line}</div>
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -141,4 +242,69 @@
   .actions button.danger:hover { background: rgba(255, 85, 85, 0.2); box-shadow: 0 0 12px rgba(255, 85, 85, 0.3); }
   
   .actions button:active { transform: scale(0.92); }
+  .info-panels {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+  }
+  .info-panel {
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+  }
+  .panel-head h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .runtime-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .simple-list {
+    display: grid;
+    gap: 6px;
+    max-height: 160px;
+    overflow: auto;
+  }
+  .simple-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    padding: 6px 8px;
+    background: rgba(0, 0, 0, 0.2);
+  }
+  .log-panel {
+    margin-top: 12px;
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+  }
+  .log-lines {
+    max-height: 220px;
+    overflow: auto;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.35);
+    font-family: monospace;
+    font-size: 11px;
+    display: grid;
+    gap: 4px;
+  }
+  .log-line {
+    color: #c9d4df;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
 </style>

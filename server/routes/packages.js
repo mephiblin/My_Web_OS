@@ -3114,6 +3114,15 @@ router.put(`/${APP_ID_ROUTE}/file`, async (req, res) => {
       });
     }
 
+    const normalizedPath = normalizeRelativePath(requestedPath);
+    if (normalizedPath === 'manifest.json') {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_MANIFEST_WRITE_FORBIDDEN',
+        message: 'manifest.json cannot be edited with this endpoint.'
+      });
+    }
+
     const targetFile = await resolvePackagePath(appId, requestedPath);
     await fs.ensureDir(path.dirname(targetFile));
     await fs.writeFile(targetFile, String(body.content || ''), 'utf8');
@@ -3121,14 +3130,14 @@ router.put(`/${APP_ID_ROUTE}/file`, async (req, res) => {
     await auditService.log(
       'PACKAGES',
       `Write Package File: ${appId}`,
-      { appId, path: normalizeRelativePath(requestedPath), user: req.user?.username },
+      { appId, path: normalizedPath, user: req.user?.username },
       'INFO'
     );
 
     return res.json({
       success: true,
       file: {
-        path: normalizeRelativePath(requestedPath)
+        path: normalizedPath
       }
     });
   } catch (err) {
@@ -3156,6 +3165,15 @@ router.post(`/${APP_ID_ROUTE}/file`, async (req, res) => {
       });
     }
 
+    const normalizedPath = normalizeRelativePath(requestedPath);
+    if (createType === 'file' && normalizedPath === 'manifest.json') {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_MANIFEST_CREATE_FORBIDDEN',
+        message: 'manifest.json cannot be created with this endpoint.'
+      });
+    }
+
     const targetPath = await resolvePackagePath(appId, requestedPath);
     if (await fs.pathExists(targetPath)) {
       return res.status(409).json({
@@ -3175,14 +3193,14 @@ router.post(`/${APP_ID_ROUTE}/file`, async (req, res) => {
     await auditService.log(
       'PACKAGES',
       `Create Package Path: ${appId}`,
-      { appId, path: normalizeRelativePath(requestedPath), type: createType, user: req.user?.username },
+      { appId, path: normalizedPath, type: createType, user: req.user?.username },
       'INFO'
     );
 
     return res.status(201).json({
       success: true,
       type: createType,
-      path: normalizeRelativePath(requestedPath)
+      path: normalizedPath
     });
   } catch (err) {
     const status = err.code === 'APP_ID_INVALID' || err.code === 'APP_PATH_OUTSIDE_ROOT' ? 400 : 500;

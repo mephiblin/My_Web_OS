@@ -1,8 +1,10 @@
 <script>
   import { onMount } from 'svelte';
-  import { Settings, Image as ImageIcon, Palette, Info, Monitor, Shield, Heart, Folder, Upload, Play, Check, ExternalLink } from 'lucide-svelte';
+  import { Settings, Image as ImageIcon, Palette, Info, Monitor, Shield, Heart, Folder, Upload, Play, Check, ExternalLink, Save, Trash2 } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
   import { systemSettings } from '../../core/stores/systemStore.js';
+  import { themePresets } from '../../core/stores/themePresetStore.js';
+  import { contextMenuSettings } from '../../core/stores/contextMenuStore.js';
   import { taskbarSettings } from '../../core/stores/taskbarStore.js';
   import { windowDefaultsSettings } from '../../core/stores/windowDefaultsStore.js';
   import FilePicker from '../../core/components/FilePicker.svelte';
@@ -11,6 +13,9 @@
   let wallpaperList = $state([]);
   let isLoadingList = $state(false);
   let showFilePicker = $state(false);
+  let newPresetName = $state('');
+  let appBackgroundTarget = $state('files');
+  let appBackgroundValue = $state('rgba(10, 14, 22, 0.82)');
   let fileInput;
   
   const tabs = [
@@ -74,8 +79,72 @@
     addToast('Wallpaper applied from Inventory', 'success');
   }
 
+  function buildThemeSettingsSnapshot() {
+    return {
+      blurIntensity: Number($systemSettings.blurIntensity),
+      transparency: Number($systemSettings.transparency),
+      accentColor: String($systemSettings.accentColor || '#58a6ff'),
+      wallpaperType: String($systemSettings.wallpaperType || 'css'),
+      wallpaper: String($systemSettings.wallpaper || ''),
+      wallpaperId: String($systemSettings.wallpaperId || ''),
+      wallpaperFit: String($systemSettings.wallpaperFit || 'cover')
+    };
+  }
+
+  function saveCurrentAsThemePreset() {
+    const name = String(newPresetName || '').trim();
+    if (!name) {
+      addToast('Preset name is required', 'error');
+      return;
+    }
+    const created = themePresets.addPreset(name, buildThemeSettingsSnapshot());
+    if (!created) {
+      addToast('Failed to save preset', 'error');
+      return;
+    }
+    newPresetName = '';
+    addToast(`Theme preset "${created.name}" saved`, 'success');
+  }
+
+  function applyThemePreset(preset) {
+    if (!preset?.settings) return;
+    systemSettings.updateSettings({
+      blurIntensity: Number(preset.settings.blurIntensity),
+      transparency: Number(preset.settings.transparency),
+      accentColor: String(preset.settings.accentColor || '#58a6ff'),
+      wallpaperType: String(preset.settings.wallpaperType || 'css'),
+      wallpaper: String(preset.settings.wallpaper || ''),
+      wallpaperId: String(preset.settings.wallpaperId || ''),
+      wallpaperFit: String(preset.settings.wallpaperFit || 'cover')
+    });
+    addToast(`Applied "${preset.name}"`, 'success');
+  }
+
+  function removeThemePreset(preset) {
+    if (!preset?.id) return;
+    themePresets.removePreset(preset.id);
+    addToast(`Deleted "${preset.name}"`, 'info');
+  }
+
+  function applyAppWindowBackground() {
+    const appId = String(appBackgroundTarget || '').trim();
+    const background = String(appBackgroundValue || '').trim();
+    if (!appId || !background) {
+      addToast('App id and background are required', 'error');
+      return;
+    }
+    windowDefaultsSettings.setAppBackground(appId, background);
+    addToast(`Window background set for "${appId}"`, 'success');
+  }
+
+  function removeAppWindowBackground(appId) {
+    windowDefaultsSettings.removeAppBackground(appId);
+    addToast(`Window background removed for "${appId}"`, 'info');
+  }
+
   onMount(() => {
     fetchWallpapers();
+    themePresets.init();
   });
 
   const gradientPresets = [
@@ -84,6 +153,7 @@
     { id: 'nature', name: 'Deep Forest', color: 'linear-gradient(135deg, #1e3a2a 0%, #0d1117 100%)' },
     { id: 'sunset', name: 'Golden Hour', color: 'linear-gradient(135deg, #3a2a1e 0%, #0d1117 100%)' }
   ];
+  const windowBackgroundAppOptions = ['files', 'terminal', 'monitor', 'editor', 'docker', 'settings', 'control-panel', 'package-center', 'logs'];
 </script>
 
 <div class="control-panel">
@@ -247,6 +317,45 @@
           </div>
         </div>
 
+        <div class="setting-group">
+          <label>Theme Presets</label>
+          <div class="taskbar-settings glass-effect theme-preset-panel">
+            <div class="theme-preset-create">
+              <input
+                type="text"
+                placeholder="Preset name"
+                value={newPresetName}
+                oninput={(e) => newPresetName = e.target.value}
+              />
+              <button class="btn-save-preset" onclick={saveCurrentAsThemePreset}>
+                <Save size={14} />
+                Save Current
+              </button>
+            </div>
+            {#if $themePresets.length === 0}
+              <div class="theme-preset-empty">No saved presets.</div>
+            {:else}
+              <div class="theme-preset-list">
+                {#each $themePresets as preset}
+                  <div class="theme-preset-row">
+                    <div class="theme-preset-meta">
+                      <strong>{preset.name}</strong>
+                      <span>{new Date(preset.createdAt || Date.now()).toLocaleString()}</span>
+                    </div>
+                    <div class="theme-preset-actions">
+                      <button class="pill-btn active" onclick={() => applyThemePreset(preset)}>Apply</button>
+                      <button class="pill-btn danger" onclick={() => removeThemePreset(preset)}>
+                        <Trash2 size={12} />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+
         <div class="setting-divider"></div>
 
         <div class="setting-group">
@@ -399,6 +508,102 @@
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label>Context Menu</label>
+          <div class="taskbar-settings glass-effect">
+            <div class="taskbar-row">
+              <span>Show icons</span>
+              <button
+                class="toggle-btn {$contextMenuSettings.showIcons ? 'active' : ''}"
+                onclick={() => contextMenuSettings.updateSettings({ showIcons: !$contextMenuSettings.showIcons })}
+              >
+                {$contextMenuSettings.showIcons ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            <div class="taskbar-row">
+              <span>Confirm dangerous actions</span>
+              <button
+                class="toggle-btn {$contextMenuSettings.confirmDanger ? 'active' : ''}"
+                onclick={() => contextMenuSettings.updateSettings({ confirmDanger: !$contextMenuSettings.confirmDanger })}
+              >
+                {$contextMenuSettings.confirmDanger ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            <div class="taskbar-row">
+              <span>Density</span>
+              <div class="size-segment">
+                <button
+                  class:active={$contextMenuSettings.density === 'compact'}
+                  onclick={() => contextMenuSettings.updateSettings({ density: 'compact' })}
+                >
+                  Compact
+                </button>
+                <button
+                  class:active={$contextMenuSettings.density === 'cozy'}
+                  onclick={() => contextMenuSettings.updateSettings({ density: 'cozy' })}
+                >
+                  Cozy
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label>App-specific Window Backgrounds</label>
+          <div class="taskbar-settings glass-effect">
+            <div class="taskbar-row wrap">
+              <span>Target app</span>
+              <div class="ops-inline">
+                <select value={appBackgroundTarget} onchange={(e) => appBackgroundTarget = e.currentTarget.value}>
+                  {#each windowBackgroundAppOptions as appId}
+                    <option value={appId}>{appId}</option>
+                  {/each}
+                </select>
+                <input
+                  type="text"
+                  value={appBackgroundValue}
+                  placeholder="rgba(...) or linear-gradient(...)"
+                  oninput={(e) => appBackgroundValue = e.currentTarget.value}
+                />
+                <button class="btn-save-preset" onclick={applyAppWindowBackground}>Apply</button>
+              </div>
+            </div>
+
+            {#if Object.keys($windowDefaultsSettings.appBackgrounds || {}).length === 0}
+              <div class="theme-preset-empty">No app-specific backgrounds.</div>
+            {:else}
+              <div class="theme-preset-list">
+                {#each Object.entries($windowDefaultsSettings.appBackgrounds || {}) as [appId, background]}
+                  <div class="theme-preset-row">
+                    <div class="theme-preset-meta">
+                      <strong>{appId}</strong>
+                      <span>{background}</span>
+                    </div>
+                    <div class="theme-preset-actions">
+                      <button
+                        class="pill-btn"
+                        onclick={() => {
+                          appBackgroundTarget = appId;
+                          appBackgroundValue = background;
+                        }}
+                      >
+                        Load
+                      </button>
+                      <button class="pill-btn danger" onclick={() => removeAppWindowBackground(appId)}>
+                        <Trash2 size={12} />
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         </div>
       </section>
@@ -622,6 +827,99 @@
     border-radius: 6px;
     padding: 5px 8px;
     font-size: 12px;
+  }
+  .ops-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .ops-inline select,
+  .ops-inline input {
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--glass-border);
+    color: white;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    min-width: 140px;
+  }
+  .theme-preset-panel {
+    gap: 12px;
+  }
+  .theme-preset-create {
+    display: flex;
+    gap: 8px;
+  }
+  .theme-preset-create input {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--glass-border);
+    color: white;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .btn-save-preset {
+    border: 1px solid rgba(88, 166, 255, 0.55);
+    background: rgba(88, 166, 255, 0.2);
+    color: white;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .theme-preset-empty {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .theme-preset-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .theme-preset-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .theme-preset-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .theme-preset-meta strong {
+    font-size: 12px;
+    color: white;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .theme-preset-meta span {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .theme-preset-actions {
+    display: inline-flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .pill-btn.danger {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-color: rgba(248, 81, 73, 0.4);
+    color: #fca5a5;
   }
 
   /* Custom Scrollbar */

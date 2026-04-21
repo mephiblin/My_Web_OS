@@ -22,6 +22,7 @@
   let snapZone = $state(null); // 'left', 'right', 'top', null
   const iconComponent = $derived(win.iconComponent || (typeof win.icon === 'function' ? win.icon : LayoutGrid));
   const taskbarHeight = $derived($taskbarSettings.compactMode ? 42 : 48);
+  const appBackground = $derived($windowDefaultsSettings.appBackgrounds?.[win.appId] || '');
   const titleBarHeight = $derived(
     Number.isFinite(Number(win.window?.titleBarHeight))
       ? Number(win.window.titleBarHeight)
@@ -167,7 +168,7 @@
     </div>
   </div>
 
-  <div class="content">
+  <div class="content" style:background={appBackground || undefined}>
     {@render children()}
     {#if dragging || resizing}
       <div class="drag-overlay"></div>

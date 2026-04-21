@@ -34,6 +34,15 @@ export async function fetchPackageManifest(appId) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/manifest`);
 }
 
+export async function fetchPackageFileEntries(appId, relativePath = '') {
+  const params = new URLSearchParams();
+  if (relativePath) {
+    params.set('path', String(relativePath));
+  }
+  const query = params.toString();
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/files${query ? `?${query}` : ''}`);
+}
+
 export async function preflightPackageManifestUpdate(appId, manifest) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/manifest/preflight`, {
     method: 'POST',

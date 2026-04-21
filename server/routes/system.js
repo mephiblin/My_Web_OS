@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const crypto = require('crypto');
 const fs = require('fs-extra');
 const si = require('systeminformation');
 
@@ -9,6 +10,8 @@ const auditService = require('../services/auditService');
 const packageRegistryService = require('../services/packageRegistryService');
 const storageService = require('../services/storageService');
 const stateStore = require('../services/stateStore');
+const serverConfig = require('../config/serverConfig');
+const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath } = require('../utils/pathPolicy');
 const inventoryPaths = require('../utils/inventoryPaths');
 
 const router = express.Router();
@@ -23,6 +26,104 @@ function handleStateKeyError(res, err) {
     });
   }
   return res.status(500).json({ error: true, message: err.message });
+}
+
+function createBackupError(status, code, message, details = null) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  err.details = details;
+  return err;
+}
+
+function sendBackupError(res, err) {
+  return res.status(err.status || 500).json({
+    error: true,
+    code: err.code || 'BACKUP_JOB_INTERNAL_ERROR',
+    message: err.message || 'Backup job operation failed.',
+    details: err.details || null
+  });
+}
+
+function toSafeTrimmedString(value, maxLength = 4096) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.slice(0, maxLength);
+}
+
+function toBool(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  return fallback;
+}
+
+function formatTimestamp(value) {
+  const date = new Date(value);
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+function withTimestampName(baseName, timestamp) {
+  const parsed = path.parse(baseName);
+  if (!parsed.ext) return `${baseName}-${timestamp}`;
+  return `${parsed.name}-${timestamp}${parsed.ext}`;
+}
+
+async function resolveAndValidateBackupPath(rawPath, fieldName) {
+  const pathValue = toSafeTrimmedString(rawPath);
+  if (!pathValue) {
+    throw createBackupError(
+      400,
+      `BACKUP_JOB_INVALID_${fieldName.toUpperCase()}`,
+      `${fieldName} is required.`
+    );
+  }
+
+  let absolutePath;
+  try {
+    absolutePath = resolveSafePath(pathValue);
+  } catch (err) {
+    throw createBackupError(
+      400,
+      `BACKUP_JOB_INVALID_${fieldName.toUpperCase()}`,
+      err.message || `${fieldName} is invalid.`,
+      { path: pathValue }
+    );
+  }
+
+  const { allowedRoots, inventoryRoot } = await serverConfig.getPaths();
+  if (!isWithinAllowedRoots(absolutePath, allowedRoots)) {
+    throw createBackupError(
+      403,
+      `BACKUP_JOB_${fieldName.toUpperCase()}_FORBIDDEN`,
+      `${fieldName} must be inside allowed roots.`,
+      { path: absolutePath }
+    );
+  }
+
+  if (isProtectedSystemPath(absolutePath, [inventoryRoot])) {
+    throw createBackupError(
+      403,
+      `BACKUP_JOB_${fieldName.toUpperCase()}_SYSTEM_PROTECTED`,
+      `${fieldName} cannot target protected system inventory paths.`,
+      { path: absolutePath }
+    );
+  }
+
+  return absolutePath;
+}
+
+async function loadBackupJobsState() {
+  return stateStore.readState('backupJobs');
+}
+
+async function saveBackupJobsState(nextState) {
+  return stateStore.writeState('backupJobs', nextState);
 }
 
 const uploadWP = multer({
@@ -241,6 +342,248 @@ router.post('/state/:key', async (req, res) => {
     res.json({ success: true, data: savedState });
   } catch (err) {
     handleStateKeyError(res, err);
+  }
+});
+
+/**
+ * GET /api/system/backup-jobs
+ * Read backup job manager state
+ */
+router.get('/backup-jobs', async (_req, res) => {
+  try {
+    const data = await loadBackupJobsState();
+    res.json({ success: true, data });
+  } catch (err) {
+    sendBackupError(res, createBackupError(500, 'BACKUP_JOB_READ_FAILED', err.message));
+  }
+});
+
+/**
+ * POST /api/system/backup-jobs
+ * Create backup job
+ */
+router.post('/backup-jobs', async (req, res) => {
+  try {
+    const name = toSafeTrimmedString(req.body?.name, 200);
+    const sourcePath = await resolveAndValidateBackupPath(req.body?.sourcePath, 'sourcePath');
+    const destinationRoot = await resolveAndValidateBackupPath(req.body?.destinationRoot, 'destinationRoot');
+
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    const fallbackName = `Backup ${path.basename(sourcePath) || id.slice(0, 8)}`;
+    const nextJob = {
+      id,
+      name: name || fallbackName,
+      sourcePath,
+      destinationRoot,
+      includeTimestamp: toBool(req.body?.includeTimestamp, true),
+      createdAt: now,
+      lastRunAt: null,
+      lastStatus: null,
+      lastOutputPath: null,
+      lastError: null
+    };
+
+    const state = await loadBackupJobsState();
+    const nextState = {
+      ...state,
+      jobs: [...state.jobs, nextJob]
+    };
+    const saved = await saveBackupJobsState(nextState);
+    const created = saved.jobs.find((job) => job.id === id) || nextJob;
+
+    await auditService.log('SYSTEM', 'Create Backup Job', { user: req.user?.username, id, name: created.name }, 'INFO');
+    res.status(201).json({ success: true, data: created });
+  } catch (err) {
+    sendBackupError(res, err);
+  }
+});
+
+/**
+ * DELETE /api/system/backup-jobs/:id
+ * Remove backup job
+ */
+router.delete('/backup-jobs/:id', async (req, res) => {
+  try {
+    const id = toSafeTrimmedString(req.params.id, 128);
+    if (!id) {
+      throw createBackupError(400, 'BACKUP_JOB_INVALID_ID', 'Backup job id is required.');
+    }
+
+    const state = await loadBackupJobsState();
+    const exists = state.jobs.some((job) => job.id === id);
+    if (!exists) {
+      throw createBackupError(404, 'BACKUP_JOB_NOT_FOUND', 'Backup job not found.', { id });
+    }
+
+    const nextState = {
+      ...state,
+      jobs: state.jobs.filter((job) => job.id !== id),
+      history: state.history.filter((entry) => entry.jobId !== id)
+    };
+    await saveBackupJobsState(nextState);
+
+    await auditService.log('SYSTEM', 'Delete Backup Job', { user: req.user?.username, id }, 'INFO');
+    res.json({ success: true, data: { removedId: id } });
+  } catch (err) {
+    sendBackupError(res, err);
+  }
+});
+
+/**
+ * POST /api/system/backup-jobs/:id/run
+ * Execute backup job immediately
+ */
+router.post('/backup-jobs/:id/run', async (req, res) => {
+  const id = toSafeTrimmedString(req.params.id, 128);
+  const startedAt = Date.now();
+
+  try {
+    if (!id) {
+      throw createBackupError(400, 'BACKUP_JOB_INVALID_ID', 'Backup job id is required.');
+    }
+
+    const state = await loadBackupJobsState();
+    const targetJob = state.jobs.find((job) => job.id === id);
+    if (!targetJob) {
+      throw createBackupError(404, 'BACKUP_JOB_NOT_FOUND', 'Backup job not found.', { id });
+    }
+
+    const sourcePath = await resolveAndValidateBackupPath(targetJob.sourcePath, 'sourcePath');
+    const destinationRoot = await resolveAndValidateBackupPath(targetJob.destinationRoot, 'destinationRoot');
+
+    const sourceExists = await fs.pathExists(sourcePath);
+    if (!sourceExists) {
+      throw createBackupError(
+        400,
+        'BACKUP_JOB_SOURCE_NOT_FOUND',
+        'Backup source path does not exist.',
+        { sourcePath }
+      );
+    }
+
+    const sourceStats = await fs.stat(sourcePath);
+    if (!(await fs.pathExists(destinationRoot))) {
+      throw createBackupError(
+        400,
+        'BACKUP_JOB_DESTINATION_NOT_FOUND',
+        'Backup destination root does not exist.',
+        { destinationRoot }
+      );
+    }
+    const destinationStats = await fs.stat(destinationRoot);
+    if (!destinationStats.isDirectory()) {
+      throw createBackupError(
+        400,
+        'BACKUP_JOB_DESTINATION_NOT_DIRECTORY',
+        'Backup destination root must be a directory.',
+        { destinationRoot }
+      );
+    }
+
+    const now = Date.now();
+    const timeSuffix = formatTimestamp(now);
+    const sourceName = path.basename(sourcePath);
+    const outputName = targetJob.includeTimestamp
+      ? withTimestampName(sourceName, timeSuffix)
+      : sourceName;
+    const outputPath = path.join(destinationRoot, outputName);
+
+    if (await fs.pathExists(outputPath)) {
+      throw createBackupError(
+        409,
+        'BACKUP_JOB_OUTPUT_ALREADY_EXISTS',
+        'Backup output path already exists.',
+        { outputPath }
+      );
+    }
+
+    if (!sourceStats.isFile() && !sourceStats.isDirectory()) {
+      throw createBackupError(
+        400,
+        'BACKUP_JOB_SOURCE_UNSUPPORTED_TYPE',
+        'Only file and directory sources are supported for backup.',
+        { sourcePath }
+      );
+    }
+
+    await fs.copy(sourcePath, outputPath, {
+      overwrite: false,
+      errorOnExist: true,
+      dereference: false,
+      preserveTimestamps: true
+    });
+
+    const finishedAt = Date.now();
+    const historyEntry = {
+      id: crypto.randomUUID(),
+      jobId: id,
+      startedAt,
+      finishedAt,
+      status: 'success',
+      outputPath,
+      error: null
+    };
+
+    const nextJobs = state.jobs.map((job) => (job.id === id
+      ? {
+          ...job,
+          lastRunAt: finishedAt,
+          lastStatus: 'success',
+          lastOutputPath: outputPath,
+          lastError: null
+        }
+      : job));
+    const nextHistory = [...state.history, historyEntry].slice(-500);
+    const saved = await saveBackupJobsState({ ...state, jobs: nextJobs, history: nextHistory });
+    const updatedJob = saved.jobs.find((job) => job.id === id);
+
+    await auditService.log('SYSTEM', 'Run Backup Job', { user: req.user?.username, id, outputPath }, 'INFO');
+    res.json({
+      success: true,
+      data: {
+        job: updatedJob,
+        run: historyEntry
+      }
+    });
+  } catch (err) {
+    if (!id) {
+      return sendBackupError(res, err);
+    }
+
+    let latestState;
+    try {
+      latestState = await loadBackupJobsState();
+      const targetJob = latestState.jobs.find((job) => job.id === id);
+      if (targetJob) {
+        const finishedAt = Date.now();
+        const failEntry = {
+          id: crypto.randomUUID(),
+          jobId: id,
+          startedAt,
+          finishedAt,
+          status: 'error',
+          outputPath: null,
+          error: err.message || 'Backup job run failed.'
+        };
+
+        const nextJobs = latestState.jobs.map((job) => (job.id === id
+          ? {
+              ...job,
+              lastRunAt: finishedAt,
+              lastStatus: 'error',
+              lastOutputPath: null,
+              lastError: failEntry.error
+            }
+          : job));
+        const nextHistory = [...latestState.history, failEntry].slice(-500);
+        await saveBackupJobsState({ ...latestState, jobs: nextJobs, history: nextHistory });
+      }
+    } catch (_persistErr) {
+      // Ignore persistence failure in error path and return original run error.
+    }
+
+    return sendBackupError(res, err);
   }
 });
 

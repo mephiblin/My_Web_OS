@@ -12,11 +12,44 @@ if (!fsSync.existsSync(THUMBNAIL_DIR)) fsSync.mkdirSync(THUMBNAIL_DIR, { recursi
 
 // Auth required for all media routes
 router.use(auth);
+router.use(pathGuard);
+
+function sendMediaError(res, err, fallbackCode = 'MEDIA_OPERATION_FAILED', fallbackMessage = 'Media operation failed.') {
+  const status = err?.status || 500;
+  return res.status(status).json({
+    error: true,
+    code: err?.code || fallbackCode,
+    message: err?.message || fallbackMessage,
+    details: err?.details || null,
+  });
+}
+
+// Get same-folder media playlist
+router.get('/playlist', async (req, res) => {
+  const { path: requestedPath, kind = 'all' } = req.query;
+  if (!requestedPath) {
+    return res.status(400).json({
+      error: true,
+      code: 'MEDIA_PLAYLIST_INVALID_PATH',
+      message: 'Path is required.',
+      details: null,
+    });
+  }
+
+  try {
+    const currentPath = req.safePath || requestedPath;
+    const playlist = await mediaService.buildPlaylist(currentPath, kind);
+    res.json(playlist);
+  } catch (err) {
+    sendMediaError(res, err, 'MEDIA_PLAYLIST_FETCH_FAILED', 'Failed to build media playlist.');
+  }
+});
 
 // Get media metadata
 router.get('/info', async (req, res) => {
-  const { path: filePath } = req.query;
-  if (!filePath) return res.status(400).json({ error: 'Path is required' });
+  const { path: requestedPath } = req.query;
+  if (!requestedPath) return res.status(400).json({ error: 'Path is required' });
+  const filePath = req.safePath || requestedPath;
 
   try {
     const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(filePath);
@@ -40,8 +73,9 @@ router.get('/info', async (req, res) => {
 
 // Get or generate thumbnail
 router.get('/thumbnail', async (req, res) => {
-  const { path: filePath } = req.query;
-  if (!filePath) return res.status(400).json({ error: 'Path is required' });
+  const { path: requestedPath } = req.query;
+  if (!requestedPath) return res.status(400).json({ error: 'Path is required' });
+  const filePath = req.safePath || requestedPath;
 
   try {
     const thumbPath = await mediaService.generateThumbnail(filePath, THUMBNAIL_DIR);
@@ -53,8 +87,9 @@ router.get('/thumbnail', async (req, res) => {
 
 // Find matching subtitles
 router.get('/subtitles', async (req, res) => {
-  const { path: filePath } = req.query;
-  if (!filePath) return res.status(400).json({ error: 'Path is required' });
+  const { path: requestedPath } = req.query;
+  if (!requestedPath) return res.status(400).json({ error: 'Path is required' });
+  const filePath = req.safePath || requestedPath;
 
   try {
     const dir = path.dirname(filePath);
@@ -78,8 +113,9 @@ router.get('/subtitles', async (req, res) => {
 
 // Get neighboring files for navigation (previous/next)
 router.get('/neighbors', async (req, res) => {
-  const { path: filePath, type } = req.query;
-  if (!filePath) return res.status(400).json({ error: 'Path is required' });
+  const { path: requestedPath, type } = req.query;
+  if (!requestedPath) return res.status(400).json({ error: 'Path is required' });
+  const filePath = req.safePath || requestedPath;
 
   try {
     const dir = path.dirname(filePath);
@@ -105,4 +141,3 @@ router.get('/neighbors', async (req, res) => {
 });
 
 module.exports = router;
-

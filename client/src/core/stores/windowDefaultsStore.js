@@ -7,7 +7,8 @@ const DEFAULT_WINDOW_DEFAULTS = {
   minHeight: 320,
   titleBarHeight: 40,
   rememberLastSize: true,
-  rememberLastPosition: true
+  rememberLastPosition: true,
+  appBackgrounds: {}
 };
 
 function normalizeWindowDefaults(value = {}) {
@@ -30,7 +31,15 @@ function normalizeWindowDefaults(value = {}) {
     minHeight: clamp(value?.minHeight, DEFAULT_WINDOW_DEFAULTS.minHeight, 180, 1080),
     titleBarHeight: clamp(value?.titleBarHeight, DEFAULT_WINDOW_DEFAULTS.titleBarHeight, 28, 72),
     rememberLastSize: typeof value?.rememberLastSize === 'boolean' ? value.rememberLastSize : DEFAULT_WINDOW_DEFAULTS.rememberLastSize,
-    rememberLastPosition: typeof value?.rememberLastPosition === 'boolean' ? value.rememberLastPosition : DEFAULT_WINDOW_DEFAULTS.rememberLastPosition
+    rememberLastPosition: typeof value?.rememberLastPosition === 'boolean' ? value.rememberLastPosition : DEFAULT_WINDOW_DEFAULTS.rememberLastPosition,
+    appBackgrounds: value?.appBackgrounds && typeof value.appBackgrounds === 'object'
+      ? Object.fromEntries(
+        Object.entries(value.appBackgrounds)
+          .map(([appId, bg]) => [String(appId || '').trim(), String(bg || '').trim()])
+          .filter(([appId, bg]) => appId && bg)
+          .slice(0, 64)
+      )
+      : {}
   };
 }
 
@@ -80,6 +89,30 @@ const createWindowDefaultsStore = () => {
     init,
     updateSettings: (nextSettings) =>
       update((current) => normalizeWindowDefaults({ ...current, ...nextSettings })),
+    setAppBackground: (appId, background) =>
+      update((current) => {
+        const key = String(appId || '').trim();
+        const value = String(background || '').trim();
+        if (!key || !value) return current;
+        return normalizeWindowDefaults({
+          ...current,
+          appBackgrounds: {
+            ...(current.appBackgrounds || {}),
+            [key]: value
+          }
+        });
+      }),
+    removeAppBackground: (appId) =>
+      update((current) => {
+        const key = String(appId || '').trim();
+        if (!key) return current;
+        const next = { ...(current.appBackgrounds || {}) };
+        delete next[key];
+        return normalizeWindowDefaults({
+          ...current,
+          appBackgrounds: next
+        });
+      }),
     reset: () => set(DEFAULT_WINDOW_DEFAULTS)
   };
 };

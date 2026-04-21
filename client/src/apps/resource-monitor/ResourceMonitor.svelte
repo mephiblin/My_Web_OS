@@ -3,7 +3,7 @@
   import { Line } from 'svelte-chartjs';
   import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler } from 'chart.js';
   import { RotateCcw } from 'lucide-svelte';
-  import { fetchSystemOverview } from './api.js';
+  import { fetchSystemOverview, fetchServiceStatus, fetchRuntimeApps, fetchInstalledPackages } from './api.js';
   import { apiFetch } from '../../utils/api.js';
 
   ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler);
@@ -18,6 +18,10 @@
   let processes = $state([]);
   let connections = $state([]);
   let refreshingIps = $state(false);
+  let loadingOps = $state(false);
+  let serviceSnapshot = $state({});
+  let runtimeApps = $state([]);
+  let installedPackages = $state([]);
   let interval;
 
   const tabs = [
@@ -29,6 +33,7 @@
     { id: 'network', label: 'Network' },
     { id: 'gpu', label: 'GPU' },
     { id: 'processes', label: 'Processes' },
+    { id: 'ops', label: 'Ops' },
   ];
 
   let storageDiagnostics = $state([]);
@@ -98,14 +103,56 @@
     }
   }
 
+  async function fetchOpsDashboard() {
+    loadingOps = true;
+    try {
+      const [servicesData, runtimeData, packagesData] = await Promise.all([
+        fetchServiceStatus(),
+        fetchRuntimeApps(),
+        fetchInstalledPackages()
+      ]);
+      serviceSnapshot = servicesData?.services || {};
+      runtimeApps = Array.isArray(runtimeData?.apps) ? runtimeData.apps : [];
+      installedPackages = Array.isArray(packagesData?.packages) ? packagesData.packages : [];
+    } catch (err) {
+      console.error(err);
+      serviceSnapshot = {};
+      runtimeApps = [];
+      installedPackages = [];
+    } finally {
+      loadingOps = false;
+    }
+  }
+
+  function summarizeServiceStatus() {
+    const values = Object.values(serviceSnapshot || {});
+    return {
+      total: values.length,
+      running: values.filter((item) => item?.status === 'running').length,
+      error: values.filter((item) => item?.status === 'error').length
+    };
+  }
+
+  function summarizeRuntimeStatus() {
+    return {
+      total: runtimeApps.length,
+      running: runtimeApps.filter((item) => item?.status === 'running').length,
+      error: runtimeApps.filter((item) => item?.status === 'error').length
+    };
+  }
+
   onMount(() => {
     fetchStats();
     fetchIps();
     fetchDiagnostics();
+    fetchOpsDashboard();
     interval = setInterval(() => {
       fetchStats();
       fetchProcesses();
       fetchConnections();
+      if (activeTab === 'ops' || activeTab === 'all') {
+        fetchOpsDashboard();
+      }
     }, 1000);
   });
 
@@ -437,6 +484,81 @@
           </tbody>
         </table>
       </div>
+
+    {:else if activeTab === 'ops'}
+      <div class="header-with-action">
+        <div class="section-title">Service / Runtime / Package Dashboard</div>
+        <button class="refresh-btn" onclick={fetchOpsDashboard} disabled={loadingOps}>
+          <RotateCcw size={14} class={loadingOps ? 'spin' : ''} />
+          <span>Refresh Ops</span>
+        </button>
+      </div>
+
+      {@const serviceSummary = summarizeServiceStatus()}
+      {@const runtimeSummary = summarizeRuntimeStatus()}
+      <div class="overview-grid">
+        <div class="card glass-effect">
+          <h3>Services</h3>
+          <div class="value">{serviceSummary.running}/{serviceSummary.total}</div>
+          <div class="stats">Errors: {serviceSummary.error}</div>
+        </div>
+        <div class="card glass-effect">
+          <h3>Runtime Apps</h3>
+          <div class="value">{runtimeSummary.running}/{runtimeSummary.total}</div>
+          <div class="stats">Errors: {runtimeSummary.error}</div>
+        </div>
+        <div class="card glass-effect">
+          <h3>Installed Packages</h3>
+          <div class="value">{installedPackages.length}</div>
+          <div class="stats">Lifecycle-managed inventory</div>
+        </div>
+      </div>
+
+      <div class="card glass-effect proc-card">
+        <table class="proc-table">
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>Status</th>
+              <th class="num">Uptime</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each Object.entries(serviceSnapshot) as [name, svc]}
+              <tr>
+                <td class="name">{name}</td>
+                <td><span class="status-badge {svc?.status || 'unknown'}">{svc?.status || 'unknown'}</span></td>
+                <td class="num">{Math.floor((svc?.uptimeMs || 0) / 1000)}s</td>
+              </tr>
+            {:else}
+              <tr><td colspan="3" style="text-align: center; color: var(--text-dim); padding: 20px;">No service data.</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card glass-effect proc-card">
+        <table class="proc-table">
+          <thead>
+            <tr>
+              <th>Runtime App</th>
+              <th>Status</th>
+              <th class="num">PID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each runtimeApps as app}
+              <tr>
+                <td class="name">{app?.appId || '-'}</td>
+                <td><span class="status-badge {app?.status || 'unknown'}">{app?.status || 'unknown'}</span></td>
+                <td class="num">{app?.pid || '-'}</td>
+              </tr>
+            {:else}
+              <tr><td colspan="3" style="text-align: center; color: var(--text-dim); padding: 20px;">No runtime app data.</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {/if}
   </div>
 </div>
@@ -481,6 +603,9 @@
   .status-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.1); }
   .healthy .status-badge { background: rgba(46, 160, 67, 0.2); color: #7ee787; }
   .warning .status-badge { background: rgba(219, 109, 40, 0.2); color: #ffa657; }
+  .status-badge.running { background: rgba(46, 160, 67, 0.2); color: #7ee787; }
+  .status-badge.error { background: rgba(219, 109, 40, 0.2); color: #ffa657; }
+  .status-badge.stopped { background: rgba(255,255,255,0.1); color: var(--text-dim); }
   
   .diag-metrics { display: flex; flex-direction: column; gap: 6px; }
   .metric { display: flex; justify-content: space-between; font-size: 12px; }

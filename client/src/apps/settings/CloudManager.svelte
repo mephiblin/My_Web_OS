@@ -2,6 +2,13 @@
   import { onMount } from 'svelte';
   import { Cloud, Plus, Trash2, ExternalLink, RefreshCw, AlertCircle } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
+  import {
+    fetchCloudProviders,
+    fetchCloudRemotes,
+    setupCloudRemote,
+    mountCloudRemote,
+    writeCloudFile
+  } from './api.js';
 
   let providers = $state([]);
   let remotes = $state([]);
@@ -10,16 +17,41 @@
   let selectedProvider = $state('');
   let newRemoteName = $state('');
   let settingUp = $state(false);
+  let refreshingRemotes = $state(false);
+  let selectedWriteRemote = $state('');
+  let writePath = $state('');
+  let writeContent = $state('');
+  let writing = $state(false);
+
+  function getMountState(remote) {
+    if (remote?.mountStatus) return remote.mountStatus;
+    if (remote?.mounted === true || remote?.mountUrl || remote?.url) return 'mounted';
+    if (remote?.mountError || remote?.error) return 'error';
+    return 'unmounted';
+  }
+
+  function getMountUrl(remote) {
+    return remote?.mountUrl || remote?.url || '';
+  }
+
+  async function fetchProviders() {
+    providers = await fetchCloudProviders();
+  }
+
+  async function fetchRemotes() {
+    remotes = await fetchCloudRemotes();
+    if (!selectedWriteRemote && remotes.length > 0) {
+      selectedWriteRemote = remotes[0].name;
+    }
+    if (selectedWriteRemote && !remotes.some((remote) => remote.name === selectedWriteRemote)) {
+      selectedWriteRemote = remotes[0]?.name || '';
+    }
+  }
 
   async function fetchCloudData() {
     try {
       loading = true;
-      const [provRes, remRes] = await Promise.all([
-        fetch('/api/cloud/providers').then(r => r.json()),
-        fetch('/api/cloud/remotes').then(r => r.json())
-      ]);
-      providers = provRes;
-      remotes = remRes;
+      await Promise.all([fetchProviders(), fetchRemotes()]);
     } catch (err) {
       addToast('Failed to fetch cloud data', 'error');
     } finally {
@@ -35,11 +67,7 @@
 
     try {
       settingUp = true;
-      const res = await fetch('/api/cloud/setup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newRemoteName, provider: selectedProvider })
-      }).then(r => r.json());
+      const res = await setupCloudRemote({ name: newRemoteName, provider: selectedProvider });
 
       if (res.success) {
         addToast(res.message || 'Cloud storage added successfully', 'success');
@@ -59,19 +87,53 @@
 
   async function handleMount(name) {
     try {
-      const res = await fetch('/api/cloud/mount', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      }).then(r => r.json());
+      const res = await mountCloudRemote(name);
 
       if (res.success) {
         addToast(`Mounted ${name} at ${res.url}`, 'success');
+        await refreshRemotes();
       } else {
         addToast(res.error || 'Mount failed', 'error');
       }
     } catch (err) {
       addToast('Error during mount', 'error');
+    }
+  }
+
+  async function refreshRemotes() {
+    try {
+      refreshingRemotes = true;
+      await fetchRemotes();
+      addToast('Remote status refreshed', 'success');
+    } catch (err) {
+      addToast('Failed to refresh remote status', 'error');
+    } finally {
+      refreshingRemotes = false;
+    }
+  }
+
+  async function handleWriteTest() {
+    if (!selectedWriteRemote || !writePath) {
+      addToast('Select a remote and enter a path', 'warning');
+      return;
+    }
+
+    try {
+      writing = true;
+      const result = await writeCloudFile({
+        remote: selectedWriteRemote,
+        path: writePath,
+        content: writeContent
+      });
+      if (result.success) {
+        addToast('Cloud write test succeeded', 'success');
+      } else {
+        addToast(result.error || result.message || 'Cloud write test failed', 'error');
+      }
+    } catch (err) {
+      addToast('Cloud write request failed', 'error');
+    } finally {
+      writing = false;
     }
   }
 
@@ -81,9 +143,14 @@
 <div class="cloud-manager">
   <div class="section-header">
     <h3>Cloud Storage</h3>
-    <button class="add-btn" onclick={() => showAddModal = true}>
-      <Plus size={16} /> Add Cloud
-    </button>
+    <div class="header-actions">
+      <button class="add-btn" onclick={refreshRemotes} disabled={refreshingRemotes || loading}>
+        <RefreshCw size={16} class={refreshingRemotes ? 'spin' : ''} /> Refresh
+      </button>
+      <button class="add-btn" onclick={() => showAddModal = true}>
+        <Plus size={16} /> Add Cloud
+      </button>
+    </div>
   </div>
 
   {#if loading}
@@ -105,14 +172,26 @@
             <Cloud size={24} />
             <div class="text">
               <span class="name">{remote.name}</span>
-              <span class="status {remote.connected ? 'active' : ''}">
-                {remote.connected ? 'Connected' : 'Disconnected'}
+              <span class="status {getMountState(remote)}">
+                {#if getMountState(remote) === 'mounted'}
+                  Mounted
+                {:else if getMountState(remote) === 'error'}
+                  Mount Error
+                {:else}
+                  Unmounted
+                {/if}
               </span>
+              {#if getMountUrl(remote)}
+                <span class="mount-url">{getMountUrl(remote)}</span>
+              {/if}
             </div>
           </div>
           <div class="actions">
             <button class="action-btn" onclick={() => handleMount(remote.name)}>
               <ExternalLink size={16} /> Mount
+            </button>
+            <button class="action-btn" onclick={refreshRemotes} disabled={refreshingRemotes}>
+              <RefreshCw size={16} class={refreshingRemotes ? 'spin' : ''} /> Status
             </button>
             <button class="action-btn danger">
               <Trash2 size={16} />
@@ -120,6 +199,37 @@
           </div>
         </div>
       {/each}
+    </div>
+
+    <div class="write-test glass-effect">
+      <div class="write-test-header">
+        <h4>Write Test</h4>
+        <span>POST /api/cloud/write</span>
+      </div>
+      <div class="write-fields">
+        <div class="form-group-inc">
+          <label for="writeRemote">Remote</label>
+          <select id="writeRemote" bind:value={selectedWriteRemote}>
+            <option value="">Select remote...</option>
+            {#each remotes as remote}
+              <option value={remote.name}>{remote.name}</option>
+            {/each}
+          </select>
+        </div>
+        <div class="form-group-inc">
+          <label for="writePath">Remote Path</label>
+          <input id="writePath" type="text" bind:value={writePath} placeholder="e.g. notes/health-check.txt" />
+        </div>
+      </div>
+      <div class="form-group-inc">
+        <label for="writeContent">Text Content</label>
+        <textarea id="writeContent" rows="5" bind:value={writeContent} placeholder="Write test payload..."></textarea>
+      </div>
+      <div class="write-actions">
+        <button class="primary-btn" onclick={handleWriteTest} disabled={writing || !selectedWriteRemote || !writePath}>
+          {writing ? 'Saving...' : 'Save Test File'}
+        </button>
+      </div>
     </div>
   {/if}
 
@@ -164,9 +274,11 @@
   .cloud-manager { display: flex; flex-direction: column; gap: 20px; }
   .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .section-header h3 { font-size: 15px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin: 0; }
+  .header-actions { display: flex; gap: 8px; }
   
   .add-btn { background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border); color: white; padding: 6px 12px; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; transition: all 0.2s; }
   .add-btn:hover { background: var(--accent-blue); border-color: var(--accent-blue); }
+  .add-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .loading-state { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 40px; color: var(--text-dim); }
   .spin { animation: spin 2s linear infinite; }
@@ -181,12 +293,23 @@
   .remote-info .text { display: flex; flex-direction: column; }
   .remote-info .name { font-weight: 600; font-size: 15px; color: white; }
   .remote-info .status { font-size: 12px; color: var(--text-dim); }
-  .remote-info .status.active { color: #4ade80; }
+  .remote-info .status.mounted { color: #4ade80; }
+  .remote-info .status.unmounted { color: var(--text-dim); }
+  .remote-info .status.error { color: #fb7185; }
+  .mount-url { font-size: 11px; color: var(--accent-blue); word-break: break-all; }
 
   .actions { display: flex; gap: 8px; }
   .action-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); color: var(--text-dim); padding: 6px 10px; border-radius: 6px; font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer; transition: all 0.2s; }
   .action-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+  .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .action-btn.danger:hover { background: var(--accent-red); color: white; border-color: var(--accent-red); }
+
+  .write-test { border: 1px solid var(--glass-border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+  .write-test-header { display: flex; justify-content: space-between; align-items: center; }
+  .write-test-header h4 { margin: 0; font-size: 14px; color: white; }
+  .write-test-header span { font-size: 12px; color: var(--text-dim); }
+  .write-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .write-actions { display: flex; justify-content: flex-end; }
 
   .primary-btn { background: var(--accent-blue); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
   .primary-btn:hover:not(:disabled) { background: #6cb3ff; transform: translateY(-1px); }
@@ -200,10 +323,15 @@
   .form-group-inc { display: flex; flex-direction: column; gap: 8px; }
   .form-group-inc label { font-size: 13px; font-weight: 500; color: var(--text-dim); }
   .form-group-inc select, .form-group-inc input { background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: white; padding: 10px; border-radius: 8px; font-size: 14px; }
+  .form-group-inc textarea { background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: white; padding: 10px; border-radius: 8px; font-size: 14px; resize: vertical; min-height: 100px; font-family: inherit; }
 
   .info-box { display: flex; align-items: center; gap: 8px; background: rgba(88, 166, 255, 0.1); border: 1px solid rgba(88, 166, 255, 0.3); color: var(--accent-blue); padding: 10px; border-radius: 8px; font-size: 12px; }
 
   .modal-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 10px; }
   .cancel-btn { background: transparent; border: 1px solid var(--glass-border); color: var(--text-dim); padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; }
   .cancel-btn:hover { background: rgba(255,255,255,0.05); color: white; }
+
+  @media (max-width: 900px) {
+    .write-fields { grid-template-columns: 1fr; }
+  }
 </style>

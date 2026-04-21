@@ -1,14 +1,17 @@
 <script>
   import { agentStore } from '../stores/agentStore.js';
-  import { Bot, AlertTriangle, XCircle, CheckCircle, Loader } from 'lucide-svelte';
+  import { Bot, AlertTriangle, XCircle, CheckCircle, Loader, Terminal, Ear, Play } from 'lucide-svelte';
   import AgentChatPanel from './AgentChatPanel.svelte';
 
-  const emotionColors = {
+  const statusColors = {
     idle: 'var(--accent-blue)',
-    alert: '#f59e0b',
+    listening: '#38bdf8',
+    thinking: '#a78bfa',
+    executing: '#60a5fa',
+    success: '#10b981',
+    warning: '#f59e0b',
     error: '#ef4444',
-    happy: '#10b981',
-    processing: '#8b5cf6'
+    terminal: '#eab308'
   };
 
 </script>
@@ -27,23 +30,29 @@
 
     <button
       class="agent-avatar glass-effect" 
-      style="border-color: {emotionColors[$agentStore.emotion]}; box-shadow: 0 0 20px {emotionColors[$agentStore.emotion]}40;"
+      style="border-color: {statusColors[$agentStore.status] || statusColors.idle}; box-shadow: 0 0 20px {(statusColors[$agentStore.status] || statusColors.idle)}40;"
       type="button"
       onclick={() => agentStore.togglePanel()}
       aria-label="Toggle agent chat panel"
     >
       <!-- Placeholder for Inochi2D Canvas -->
       <div class="canvas-placeholder">
-        {#if $agentStore.emotion === 'alert'}
-          <AlertTriangle size={32} color={emotionColors.alert} />
-        {:else if $agentStore.emotion === 'error'}
-          <XCircle size={32} color={emotionColors.error} />
-        {:else if $agentStore.emotion === 'happy'}
-          <CheckCircle size={32} color={emotionColors.happy} />
-        {:else if $agentStore.emotion === 'processing'}
-          <Loader size={32} color={emotionColors.processing} class="spin" />
+        {#if $agentStore.status === 'listening'}
+          <Ear size={32} color={statusColors.listening} />
+        {:else if $agentStore.status === 'thinking'}
+          <Loader size={32} color={statusColors.thinking} class="spin" />
+        {:else if $agentStore.status === 'executing'}
+          <Play size={32} color={statusColors.executing} />
+        {:else if $agentStore.status === 'success'}
+          <CheckCircle size={32} color={statusColors.success} />
+        {:else if $agentStore.status === 'warning'}
+          <AlertTriangle size={32} color={statusColors.warning} />
+        {:else if $agentStore.status === 'error'}
+          <XCircle size={32} color={statusColors.error} />
+        {:else if $agentStore.status === 'terminal'}
+          <Terminal size={32} color={statusColors.terminal} />
         {:else}
-          <Bot size={32} color={emotionColors.idle} />
+          <Bot size={32} color={statusColors.idle} />
         {/if}
       </div>
     </button>

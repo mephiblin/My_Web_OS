@@ -1,9 +1,10 @@
 <script>
   import { onMount } from 'svelte';
-  import { Save, AlertCircle, Settings as SettingsIcon, User, Folder, Cloud, ServerCog, RefreshCw, RotateCw } from 'lucide-svelte';
+  import { Save, AlertCircle, Settings as SettingsIcon, User, Folder, Cloud, ServerCog, RefreshCw, RotateCw, HardDriveDownload } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
   import * as settingsApi from './api.js';
   import CloudManager from './CloudManager.svelte';
+  import BackupJobManager from './BackupJobManager.svelte';
 
   let settings = $state({
     PORT: '',
@@ -140,6 +141,9 @@
       <button class="tab-btn {activeTab === 'cloud' ? 'active' : ''}" onclick={() => activeTab = 'cloud'}>
         <Cloud size={18} /> <span>Cloud Storage</span>
       </button>
+      <button class="tab-btn {activeTab === 'backup-jobs' ? 'active' : ''}" onclick={() => activeTab = 'backup-jobs'}>
+        <HardDriveDownload size={18} /> <span>Backup Jobs</span>
+      </button>
     </aside>
 
     <main class="content-area">
@@ -226,6 +230,8 @@
             </div>
           {:else if activeTab === 'cloud'}
             <CloudManager />
+          {:else if activeTab === 'backup-jobs'}
+            <BackupJobManager />
           {/if}
         </div>
       {/if}

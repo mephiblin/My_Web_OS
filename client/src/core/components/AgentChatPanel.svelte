@@ -7,7 +7,10 @@
   }
 
   function send() {
-    agentStore.sendUserMessage();
+    const draft = String($agentStore.draft || '').trim();
+    if (!draft) return;
+    agentStore.sendUserMessage(draft);
+    agentStore.handleUserMessageFlow(draft);
   }
 
   function onDraftKeydown(event) {
@@ -15,6 +18,14 @@
       event.preventDefault();
       send();
     }
+  }
+
+  function onWrappedIntentInput(event) {
+    agentStore.setWrappedIntentDraft(event.currentTarget.value);
+  }
+
+  function addWrappedStep() {
+    agentStore.addWrappedPlannedAction($agentStore.wrappedMode?.intentDraft || '');
   }
 </script>
 
@@ -32,7 +43,34 @@
     {:else}
       {#each $agentStore.messages as message (message.id)}
         <div class="message-row {message.role}">
-          <div class="message-bubble">{message.content}</div>
+          <div class="message-bubble {message.kind === 'approval' ? 'approval' : ''}">
+            {#if message.content}
+              <div>{message.content}</div>
+            {/if}
+
+            {#if message.kind === 'approval' && message.approval}
+              <div class="approval-card">
+                <div class="approval-title">{message.approval.title}</div>
+                {#if message.approval.summary}
+                  <div class="approval-summary">{message.approval.summary}</div>
+                {/if}
+                <div class="approval-meta">Risk: {String(message.approval.risk || 'medium').toUpperCase()}</div>
+                <div class="approval-status {message.approval.status}">
+                  {String(message.approval.status || 'pending').toUpperCase()}
+                </div>
+                {#if message.approval.status === 'pending'}
+                  <div class="approval-actions">
+                    <button class="icon-btn send" type="button" onclick={() => agentStore.resolveApproval(message.id, 'approve')}>
+                      Approve
+                    </button>
+                    <button class="icon-btn" type="button" onclick={() => agentStore.resolveApproval(message.id, 'reject')}>
+                      Reject
+                    </button>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
         </div>
       {/each}
     {/if}
@@ -49,6 +87,48 @@
     <button class="icon-btn send" type="button" onclick={send} aria-label="Send message">
       <Send size={14} />
     </button>
+  </div>
+
+  <div class="wrapped-mode">
+    <div class="wrapped-head">
+      <strong>Wrapped Assistant Mode</strong>
+      <button class="icon-btn" type="button" onclick={() => agentStore.toggleWrappedMode()}>
+        {$agentStore.wrappedMode?.enabled ? 'On' : 'Off'}
+      </button>
+    </div>
+
+    {#if $agentStore.wrappedMode?.enabled}
+      <div class="wrapped-builder">
+        <input
+          type="text"
+          placeholder="Add planned action"
+          value={$agentStore.wrappedMode?.intentDraft || ''}
+          oninput={onWrappedIntentInput}
+          onkeydown={(event) => event.key === 'Enter' && (event.preventDefault(), addWrappedStep())}
+        />
+        <button class="icon-btn send" type="button" onclick={addWrappedStep}>Add</button>
+      </div>
+
+      {#if !$agentStore.wrappedMode?.plannedActions?.length}
+        <div class="empty">No planned actions yet.</div>
+      {:else}
+        <div class="wrapped-actions">
+          {#each $agentStore.wrappedMode?.plannedActions || [] as action}
+            <div class="wrapped-action-row">
+              <span>{action.label}</span>
+              <span class="approval-status pending">{String(action.status || 'pending').toUpperCase()}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="wrapped-buttons">
+        <button class="icon-btn" type="button" onclick={() => agentStore.clearWrappedPlan()}>Clear</button>
+        <button class="icon-btn send" type="button" onclick={() => agentStore.runWrappedPlanWithApprovals()}>
+          Run With Approvals
+        </button>
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -117,6 +197,58 @@
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.1);
   }
+  .message-bubble.approval {
+    width: 100%;
+  }
+  .approval-card {
+    margin-top: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    padding: 8px;
+    background: rgba(10, 14, 22, 0.5);
+    display: grid;
+    gap: 6px;
+  }
+  .approval-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #f8fafc;
+  }
+  .approval-summary {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.85);
+  }
+  .approval-meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.65);
+  }
+  .approval-status {
+    font-size: 11px;
+    font-weight: 700;
+    width: fit-content;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+  .approval-status.pending {
+    color: #facc15;
+    border-color: rgba(250, 204, 21, 0.45);
+    background: rgba(250, 204, 21, 0.14);
+  }
+  .approval-status.approved {
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.45);
+    background: rgba(74, 222, 128, 0.14);
+  }
+  .approval-status.rejected {
+    color: #fca5a5;
+    border-color: rgba(252, 165, 165, 0.4);
+    background: rgba(252, 165, 165, 0.12);
+  }
+  .approval-actions {
+    display: inline-flex;
+    gap: 8px;
+  }
 
   .message-row.user .message-bubble {
     background: rgba(88, 166, 255, 0.22);
@@ -134,6 +266,59 @@
     gap: 8px;
     padding: 10px;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .wrapped-mode {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .wrapped-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 12px;
+  }
+  .wrapped-builder {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+  }
+  .wrapped-builder input {
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(10, 14, 22, 0.75);
+    color: white;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    outline: none;
+  }
+  .wrapped-actions {
+    max-height: 110px;
+    overflow: auto;
+    display: grid;
+    gap: 6px;
+  }
+  .wrapped-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .wrapped-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   textarea {

@@ -10,25 +10,78 @@
   let editorContainer;
   let editor;
 
+  function getPackageFileContext() {
+    const ctx = data?.packageFile;
+    if (!ctx || typeof ctx !== 'object') return null;
+    const appId = String(ctx.appId || '').trim();
+    const path = String(ctx.path || '').trim();
+    if (!appId || !path) return null;
+    return { appId, path };
+  }
+
+  function getActiveTarget() {
+    const packageCtx = getPackageFileContext();
+    if (packageCtx) {
+      return {
+        mode: 'package',
+        appId: packageCtx.appId,
+        path: packageCtx.path
+      };
+    }
+
+    const path = String(data?.path || '').trim();
+    if (!path) return null;
+    return {
+      mode: 'host',
+      path
+    };
+  }
+
+  function applyLanguageByPath(path) {
+    if (!editor || !editor.getModel()) return;
+    const ext = String(path || '').split('.').pop();
+    const langMap = {
+      js: 'javascript',
+      py: 'python',
+      json: 'json',
+      html: 'html',
+      css: 'css',
+      md: 'markdown',
+      ts: 'typescript',
+      svelte: 'html'
+    };
+    monaco.editor.setModelLanguage(editor.getModel(), langMap[ext] || 'plaintext');
+  }
+
   async function loadFile() {
-    if (!data?.path || !editor) return;
+    if (!editor) return;
+    const target = getActiveTarget();
+    if (!target?.path) return;
+
     try {
-      const result = await editorApi.readFile(data.path);
-      if (result.content !== undefined) {
-        editor.setValue(result.content);
-        const ext = data.path.split('.').pop();
-        const langMap = { js: 'javascript', py: 'python', json: 'json', html: 'html', css: 'css', md: 'markdown', ts: 'typescript', svelte: 'html' };
-        monaco.editor.setModelLanguage(editor.getModel(), langMap[ext] || 'plaintext');
+      const result = target.mode === 'package'
+        ? await editorApi.readPackageFile(target.appId, target.path)
+        : await editorApi.readFile(target.path);
+      const content = target.mode === 'package' ? result?.file?.content : result?.content;
+      if (content !== undefined) {
+        editor.setValue(String(content));
+        applyLanguageByPath(target.path);
       }
     } catch (err) {
+      addToast(err?.message || 'Failed to load file', 'error');
       console.error(err);
     }
   }
 
   async function saveFile() {
-    if (!data?.path || !editor) return;
+    if (!editor) return;
+    const target = getActiveTarget();
+    if (!target?.path) return;
+
     try {
-      const result = await editorApi.saveFile(data.path, editor.getValue());
+      const result = target.mode === 'package'
+        ? await editorApi.savePackageFile(target.appId, target.path, editor.getValue())
+        : await editorApi.saveFile(target.path, editor.getValue());
       if (result.success || !result.error) {
         addToast('File saved successfully!', 'success');
       } else {
@@ -61,7 +114,10 @@
   });
 
   $effect(() => {
-    if (data?.path && editor) {
+    const hostPath = data?.path;
+    const packageAppId = data?.packageFile?.appId;
+    const packagePath = data?.packageFile?.path;
+    if ((hostPath || (packageAppId && packagePath)) && editor) {
       loadFile();
     }
   });
@@ -69,7 +125,13 @@
 
 <div class="editor-wrapper">
   <div class="toolbar">
-    <span class="file-path">{data?.path || ''}</span>
+    <span class="file-path">
+      {#if getActiveTarget()?.mode === 'package'}
+        [{getActiveTarget()?.appId}] {getActiveTarget()?.path}
+      {:else}
+        {getActiveTarget()?.path || ''}
+      {/if}
+    </span>
     <button onclick={saveFile} class="save-btn">
       <Save size={16} /> Save
     </button>

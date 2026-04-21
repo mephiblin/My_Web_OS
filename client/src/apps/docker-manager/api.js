@@ -31,3 +31,19 @@ export async function removeContainer(id) {
     body: JSON.stringify({ id })
   });
 }
+
+export async function fetchContainerLogs(id, tail = 200) {
+  const params = new URLSearchParams({
+    id: String(id || ''),
+    tail: String(tail)
+  });
+  return apiFetch(`/api/docker/logs?${params.toString()}`);
+}
+
+export async function listVolumes() {
+  return apiFetch('/api/docker/volumes');
+}
+
+export async function listComposeProjects() {
+  return apiFetch('/api/docker/compose/projects');
+}

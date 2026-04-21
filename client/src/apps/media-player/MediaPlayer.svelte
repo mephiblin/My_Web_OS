@@ -1,10 +1,25 @@
 <script>
   import { onMount } from 'svelte';
-  import { Play, Pause, Volume2, Maximize, Music, Video, Info, RefreshCw } from 'lucide-svelte';
+  import {
+    Play,
+    Pause,
+    Volume2,
+    Maximize,
+    Music,
+    Video,
+    Info,
+    RefreshCw,
+    Repeat,
+    Shuffle
+  } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
   import { activeWindowId, windows, updateWindowTitle } from '../../core/stores/windowStore.js';
-  import { apiFetch } from '../../utils/api.js';
-  import { API_BASE } from '../../utils/constants.js';
+  import {
+    fetchMediaInfo,
+    fetchMediaSubtitles,
+    fetchMediaNeighbors,
+    fetchMediaPlaylist
+  } from './api.js';
 
   let { data = {} } = $props();
   
@@ -21,6 +36,7 @@
   let audioEl = $state(null);
   let playing = $state(false);
   let progress = $state(0);
+  let currentTime = $state(0);
   let duration = $state(0);
   let volume = $state(1);
   let metadata = $state(null);
@@ -29,6 +45,23 @@
   let neighbors = $state({ prev: null, next: null });
   let zoomed = $state(false);
   let lastFetchedPath = $state('');
+  let playlist = $state([]);
+  let playlistLoading = $state(false);
+  let playlistError = $state('');
+  let shuffleEnabled = $state(false);
+  let repeatMode = $state('off');
+  let backgroundAudioEnabled = $state(true);
+  let pendingAutoplay = $state(false);
+
+  const currentWindow = $derived(
+    $windows.find((win) => win.appId === 'player' && win.data === data) || null
+  );
+  const currentWindowId = $derived(currentWindow?.id || null);
+  const isWindowActive = $derived(Boolean(currentWindow && $activeWindowId === currentWindow.id));
+  const isWindowMinimized = $derived(Boolean(currentWindow?.minimized));
+  const repeatLabel = $derived(
+    repeatMode === 'one' ? 'Repeat: One' : repeatMode === 'all' ? 'Repeat: All' : 'Repeat: Off'
+  );
 
   // Sync prop path to local state ONLY if it changes from outside (e.g. double click new file)
   $effect(() => {
@@ -40,26 +73,71 @@
 
   // Automatically focus the player when it becomes the active window
   $effect(() => {
-    if ($activeWindowId === 'player') {
+    if (isWindowActive) {
       const el = document.querySelector('.media-player-app');
       if (el) el.focus();
+    }
+  });
+
+  // Background audio policy
+  $effect(() => {
+    if (backgroundAudioEnabled || !(isVideo || isAudio)) return;
+    const el = isVideo ? videoEl : audioEl;
+    if (!el) return;
+    if ((!isWindowActive || isWindowMinimized) && !el.paused) {
+      el.pause();
+      playing = false;
     }
   });
 
   // Use relative URLs (proxied via Vite) with token auth
   let mediaUrl = $derived(mediaPath ? `/api/fs/raw?path=${encodeURIComponent(mediaPath)}&token=${localStorage.getItem('web_os_token')}` : '');
 
+  function parsePlaylistPayload(payload) {
+    const source = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+      ? payload.items
+      : Array.isArray(payload?.playlist)
+      ? payload.playlist
+      : [];
+
+    const normalized = source
+      .map((item) => {
+        if (typeof item === 'string') {
+          return { path: item, name: item.split('/').pop() || item };
+        }
+        const itemPath = item?.path || item?.filePath || item?.fullPath || '';
+        if (!itemPath) return null;
+        return {
+          path: itemPath,
+          name: item?.name || item?.filename || itemPath.split('/').pop() || itemPath
+        };
+      })
+      .filter(Boolean)
+      .filter((item) => /\.(mp4|webm|mkv|mov|avi|mp3|wav|ogg|flac|m4a)$/i.test(item.path));
+
+    if (!normalized.some((item) => item.path === mediaPath) && mediaPath) {
+      normalized.push({ path: mediaPath, name: mediaPath.split('/').pop() || mediaPath });
+    }
+
+    return normalized;
+  }
+
   async function fetchMetadata() {
     if (!mediaPath) return;
     try {
       loadingMeta = true;
+      playlistLoading = isVideo || isAudio;
+      playlistError = '';
       // Reset neighbors to ensure UI reflects loading state or current absence
       neighbors = { prev: null, next: null };
       
-      const [info, subs, neighborData] = await Promise.all([
-        apiFetch(`/api/media/info?path=${encodeURIComponent(mediaPath)}`),
-        isVideo ? apiFetch(`/api/media/subtitles?path=${encodeURIComponent(mediaPath)}`) : Promise.resolve(null),
-        apiFetch(`/api/media/neighbors?path=${encodeURIComponent(mediaPath)}&type=${isImage ? 'image' : 'media'}`)
+      const [info, subs, neighborData, playlistData] = await Promise.all([
+        fetchMediaInfo(mediaPath),
+        isVideo ? fetchMediaSubtitles(mediaPath) : Promise.resolve(null),
+        fetchMediaNeighbors(mediaPath, isImage ? 'image' : 'media'),
+        isVideo || isAudio ? fetchMediaPlaylist(mediaPath).catch(() => null) : Promise.resolve(null)
       ]);
       
       metadata = info;
@@ -69,15 +147,26 @@
         subtitleUrl = null;
       }
       neighbors = neighborData;
+      if (isVideo || isAudio) {
+        playlist = parsePlaylistPayload(playlistData);
+        if (!playlistData) {
+          playlistError = 'Playlist endpoint unavailable.';
+        }
+      } else {
+        playlist = [];
+      }
     } catch (err) {
       console.error('Failed to load metadata', err);
+      playlist = [];
+      playlistError = err?.message || 'Failed to load playlist.';
     } finally {
       loadingMeta = false;
+      playlistLoading = false;
     }
   }
 
   function handleKeydown(e) {
-    if ($activeWindowId !== 'player') return;
+    if (!isWindowActive) return;
 
     if (isVideo || isAudio) {
       const el = isVideo ? videoEl : audioEl;
@@ -112,7 +201,9 @@
     }
   }
 
-  function navigate(path) {
+  function navigate(path, options = {}) {
+    if (!path || path === currentPath) return;
+    pendingAutoplay = options.autoplay === true;
     currentPath = path;
     zoomed = false;
     // Keep focus after navigation
@@ -129,11 +220,21 @@
 
   function handleTimeUpdate(e) {
     const el = e.target;
+    currentTime = el.currentTime || 0;
     progress = (el.currentTime / (el.duration || 1)) * 100;
   }
 
   function handleLoadedMetadata(e) {
-    duration = e.target.duration;
+    duration = e.target.duration || 0;
+    if (pendingAutoplay) {
+      pendingAutoplay = false;
+      e.target.play().then(() => {
+        playing = true;
+      }).catch(() => {
+        playing = false;
+        addToast('Autoplay was blocked by the browser policy.', 'error');
+      });
+    }
   }
 
   function handleSeek(e) {
@@ -141,12 +242,75 @@
     if (!el) return;
     const seekTime = (e.target.value / 100) * el.duration;
     el.currentTime = seekTime;
+    currentTime = seekTime;
   }
 
   function toggleFullscreen() {
     if (videoEl && videoEl.requestFullscreen) {
       videoEl.requestFullscreen();
     }
+  }
+
+  function cycleRepeatMode() {
+    if (repeatMode === 'off') {
+      repeatMode = 'all';
+      return;
+    }
+    if (repeatMode === 'all') {
+      repeatMode = 'one';
+      return;
+    }
+    repeatMode = 'off';
+  }
+
+  function pickNextPath() {
+    if (repeatMode === 'one') {
+      return mediaPath;
+    }
+
+    const paths = playlist.map((item) => item.path).filter(Boolean);
+    if (!paths.length) {
+      return null;
+    }
+
+    const currentIndex = paths.indexOf(mediaPath);
+    const safeCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
+
+    if (shuffleEnabled) {
+      if (paths.length === 1) {
+        return repeatMode === 'all' ? paths[0] : null;
+      }
+      const candidates = paths.filter((path) => path !== mediaPath);
+      if (!candidates.length) return null;
+      return candidates[Math.floor(Math.random() * candidates.length)];
+    }
+
+    const nextIndex = safeCurrentIndex + 1;
+    if (nextIndex < paths.length) {
+      return paths[nextIndex];
+    }
+    if (repeatMode === 'all') {
+      return paths[0];
+    }
+    return null;
+  }
+
+  function handleMediaEnded() {
+    const nextPath = pickNextPath();
+    if (!nextPath) {
+      playing = false;
+      return;
+    }
+    if (nextPath === mediaPath) {
+      const el = isVideo ? videoEl : audioEl;
+      if (!el) return;
+      el.currentTime = 0;
+      el.play().catch(() => {
+        playing = false;
+      });
+      return;
+    }
+    navigate(nextPath, { autoplay: true });
   }
 
   onMount(() => {
@@ -162,10 +326,16 @@
   $effect(() => {
     if (mediaPath && mediaPath !== lastFetchedPath) {
       lastFetchedPath = mediaPath;
+      playing = false;
+      currentTime = 0;
+      progress = 0;
+      duration = 0;
       fetchMetadata();
       // Synchronize window title
       const fileName = mediaPath.split('/').pop();
-      updateWindowTitle('player', `Viewer - ${fileName}`);
+      if (currentWindowId) {
+        updateWindowTitle(currentWindowId, `Viewer - ${fileName}`);
+      }
     }
   });
 </script>
@@ -179,6 +349,7 @@
         src={mediaUrl}
         onplay={() => playing = true}
         onpause={() => playing = false}
+        onended={handleMediaEnded}
         ontimeupdate={handleTimeUpdate}
         onloadedmetadata={handleLoadedMetadata}
         onclick={togglePlay}
@@ -196,6 +367,7 @@
           src={mediaUrl}
           onplay={() => playing = true}
           onpause={() => playing = false}
+          onended={handleMediaEnded}
           ontimeupdate={handleTimeUpdate}
           onloadedmetadata={handleLoadedMetadata}
         ></audio>
@@ -249,12 +421,22 @@
               {#if playing} <Pause size={20} /> {:else} <Play size={20} /> {/if}
             </button>
             <div class="time-info">
-              {Math.floor((progress * (duration || 0)) / 100 / 60)}:{Math.floor(((progress * (duration || 0)) / 100) % 60).toString().padStart(2, '0')} / 
+              {Math.floor((currentTime || 0) / 60)}:{Math.floor((currentTime || 0) % 60).toString().padStart(2, '0')} /
               {Math.floor((duration || 0) / 60)}:{Math.floor((duration || 0) % 60).toString().padStart(2, '0')}
             </div>
           </div>
 
           <div class="right">
+            <button class="mode-btn {shuffleEnabled ? 'active' : ''}" onclick={() => shuffleEnabled = !shuffleEnabled} title="Shuffle">
+              <Shuffle size={16} />
+            </button>
+            <button class="mode-btn {repeatMode !== 'off' ? 'active' : ''}" onclick={cycleRepeatMode} title={repeatLabel}>
+              <Repeat size={16} />
+              <span>{repeatMode === 'one' ? '1' : ''}</span>
+            </button>
+            <button class="mode-btn {backgroundAudioEnabled ? 'active' : ''}" onclick={() => backgroundAudioEnabled = !backgroundAudioEnabled}>
+              BG Audio
+            </button>
             <div class="volume-control">
               <Volume2 size={18} />
               <input type="range" min="0" max="1" step="0.1" bind:value={volume} oninput={() => { if (videoEl) videoEl.volume = volume; if (audioEl) audioEl.volume = volume; }} />
@@ -289,6 +471,33 @@
     {:else}
       <p class="no-meta">Select a file to view properties.</p>
     {/if}
+
+    {#if isVideo || isAudio}
+      <div class="playlist-panel">
+        <div class="meta-header">Playlist</div>
+        {#if playlistLoading}
+          <div class="loading"><RefreshCw size={16} class="spin" /> Loading playlist...</div>
+        {:else if playlist.length > 0}
+          <div class="playlist-list">
+            {#each playlist as item, index (item.path)}
+              <button
+                class="playlist-item {item.path === mediaPath ? 'active' : ''}"
+                onclick={() => navigate(item.path, { autoplay: true })}
+                title={item.path}
+              >
+                <span class="playlist-index">{index + 1}</span>
+                <span class="playlist-name">{item.name}</span>
+                {#if item.path === mediaPath && playing}
+                  <span class="playlist-state">Playing</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {:else}
+          <p class="no-meta">{playlistError || 'No playlist entries found.'}</p>
+        {/if}
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -321,6 +530,27 @@
   .left, .right { display: flex; align-items: center; gap: 16px; }
   .icon-btn { background: transparent; border: none; color: white; cursor: pointer; display: flex; align-items: center; transition: transform 0.1s; }
   .icon-btn:hover { transform: scale(1.1); color: var(--accent-blue); }
+  .mode-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-dim);
+    border-radius: 999px;
+    height: 26px;
+    padding: 0 10px;
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .mode-btn.active {
+    color: white;
+    border-color: rgba(88, 166, 255, 0.75);
+    background: rgba(88, 166, 255, 0.26);
+  }
+  .mode-btn:hover { color: white; border-color: rgba(88, 166, 255, 0.7); }
 
   .time-info { font-size: 13px; font-family: monospace; color: var(--text-dim); }
   .volume-control { display: flex; align-items: center; gap: 8px; width: 120px; }
@@ -330,6 +560,56 @@
   .meta-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; }
   .meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-size: 12px; }
   .meta-item .label { color: var(--text-dim); margin-right: 4px; }
+  .playlist-panel { margin-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 12px; }
+  .playlist-list {
+    max-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-right: 2px;
+  }
+  .playlist-item {
+    display: grid;
+    grid-template-columns: 24px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-dim);
+    padding: 8px 10px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .playlist-item:hover {
+    border-color: rgba(255, 255, 255, 0.14);
+    color: white;
+  }
+  .playlist-item.active {
+    border-color: rgba(88, 166, 255, 0.8);
+    background: rgba(88, 166, 255, 0.17);
+    color: white;
+  }
+  .playlist-index {
+    opacity: 0.7;
+    font-size: 11px;
+    font-family: monospace;
+  }
+  .playlist-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  .playlist-state {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #8bd5ff;
+  }
   
   .spin { animation: spin 2s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

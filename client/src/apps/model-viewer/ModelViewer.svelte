@@ -5,7 +5,7 @@
   import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
   import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
   import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-  import { Box, Loader2, AlertCircle, Maximize2, RotateCcw, Play, Pause } from 'lucide-svelte';
+  import { Box, Loader2, AlertCircle, Maximize2, RotateCcw, Play, Pause, Camera, Grid3X3, ScanEye, Info } from 'lucide-svelte';
 
   let { data } = $props();
   let container = $state(null);
@@ -15,6 +15,14 @@
   let statusMessage = $state('Initializing Scene...');
   let hasAnimations = $state(false);
   let isPlaying = $state(true);
+  let wireframeEnabled = $state(false);
+  let axesEnabled = $state(true);
+  let showInspector = $state(true);
+  let meshCount = $state(0);
+  let triangleCount = $state(0);
+  let materialRows = $state([]);
+  let sceneAxes = $state(null);
+  let lastLoadedPath = $state('');
 
   let scene, camera, renderer, controls, model, mixer;
   let clock = new THREE.Clock();
@@ -42,6 +50,10 @@
     controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
 
+    sceneAxes = new THREE.AxesHelper(2.5);
+    sceneAxes.visible = axesEnabled;
+    scene.add(sceneAxes);
+
     // Lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambientLight);
@@ -56,6 +68,52 @@
     scene.add(hemiLight);
 
     animate();
+  }
+
+  function collectInspectionInfo(root) {
+    const materialSet = new Set();
+    let meshes = 0;
+    let triangles = 0;
+
+    root.traverse((node) => {
+      if (!node?.isMesh) return;
+      meshes += 1;
+
+      if (node.geometry?.index?.count) {
+        triangles += Math.floor(node.geometry.index.count / 3);
+      } else if (node.geometry?.attributes?.position?.count) {
+        triangles += Math.floor(node.geometry.attributes.position.count / 3);
+      }
+
+      const sourceMaterials = Array.isArray(node.material) ? node.material : [node.material];
+      sourceMaterials.filter(Boolean).forEach((material) => materialSet.add(material));
+    });
+
+    const rows = [...materialSet].map((material) => ({
+      id: material.uuid,
+      name: material.name || 'Unnamed',
+      type: material.type,
+      color: material.color?.getHexString ? `#${material.color.getHexString()}` : '-',
+      map: material.map ? 'yes' : 'no'
+    }));
+
+    meshCount = meshes;
+    triangleCount = triangles;
+    materialRows = rows;
+  }
+
+  function applyWireframe(root, enabled) {
+    if (!root) return;
+    root.traverse((node) => {
+      if (!node?.isMesh || !node.material) return;
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      materials.forEach((material) => {
+        if (material && 'wireframe' in material) {
+          material.wireframe = enabled;
+          material.needsUpdate = true;
+        }
+      });
+    });
   }
 
   function animate() {
@@ -81,6 +139,9 @@
     error = null;
     statusMessage = "Loading Model...";
     hasAnimations = false;
+    materialRows = [];
+    meshCount = 0;
+    triangleCount = 0;
 
     const extension = path.split('.').pop().toLowerCase();
     let loader;
@@ -125,6 +186,9 @@
       }
 
       if (loadedObject) {
+        if (model) {
+          scene.remove(model);
+        }
         model = loadedObject;
         
         // Setup animations
@@ -149,6 +213,8 @@
         model.position.z += (model.position.z - center.z);
         
         scene.add(model);
+        applyWireframe(model, wireframeEnabled);
+        collectInspectionInfo(model);
 
         // 2. Calculate optimal camera distance based on FOV and size
         const maxDim = Math.max(size.x, size.y, size.z) || 1;
@@ -198,6 +264,35 @@
     renderer.setSize(width, height);
   }
 
+  function toggleWireframe() {
+    wireframeEnabled = !wireframeEnabled;
+    applyWireframe(model, wireframeEnabled);
+  }
+
+  function toggleAxes() {
+    axesEnabled = !axesEnabled;
+    if (sceneAxes) {
+      sceneAxes.visible = axesEnabled;
+    }
+  }
+
+  function saveScreenshot() {
+    if (!renderer || !data?.path) return;
+    try {
+      renderer.render(scene, camera);
+      const image = renderer.domElement.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = image;
+      const baseName = data.path.split('/').pop()?.replace(/\.[^.]+$/, '') || 'model';
+      link.download = `${baseName}-snapshot.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      error = `Failed to save screenshot: ${err.message}`;
+    }
+  }
+
   onMount(() => {
     initScene();
     if (data?.path) {
@@ -212,6 +307,12 @@
     if (renderer) renderer.dispose();
     if (scene) scene.clear();
     if (mixer) mixer.stopAllAction();
+  });
+
+  $effect(() => {
+    if (!data?.path || data.path === lastLoadedPath) return;
+    lastLoadedPath = data.path;
+    loadModel(data.path);
   });
 </script>
 
@@ -249,10 +350,37 @@
         </button>
         <div class="separator"></div>
       {/if}
+      <button onclick={toggleWireframe} class:active={wireframeEnabled} title="Wireframe"><Grid3X3 size={16} /></button>
+      <button onclick={toggleAxes} class:active={axesEnabled} title="Axes"><ScanEye size={16} /></button>
+      <button onclick={() => showInspector = !showInspector} class:active={showInspector} title="Inspector"><Info size={16} /></button>
+      <button onclick={saveScreenshot} title="Save Screenshot"><Camera size={16} /></button>
       <button onclick={() => { if (controls) controls.reset(); }} title="Reset View"><RotateCcw size={16} /></button>
       <button onclick={handleResize} title="Fit to Screen"><Maximize2 size={16} /></button>
     </div>
   </div>
+
+  {#if showInspector}
+    <aside class="inspector-panel glass-effect">
+      <div class="inspector-header">Inspection</div>
+      <div class="inspector-grid">
+        <div class="metric"><span>Meshes</span><strong>{meshCount}</strong></div>
+        <div class="metric"><span>Triangles</span><strong>{triangleCount}</strong></div>
+        <div class="metric"><span>Materials</span><strong>{materialRows.length}</strong></div>
+      </div>
+      <div class="material-list">
+        {#if materialRows.length === 0}
+          <div class="empty-materials">No material data.</div>
+        {:else}
+          {#each materialRows as material (material.id)}
+            <div class="material-row">
+              <div class="name">{material.name}</div>
+              <div class="meta">{material.type} · Color {material.color} · Map {material.map}</div>
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </aside>
+  {/if}
 </div>
 
 <style>
@@ -337,6 +465,71 @@
     border: 1px solid rgba(255, 255, 255, 0.1);
     backdrop-filter: blur(12px);
   }
+  .inspector-panel {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    width: min(340px, calc(100% - 28px));
+    max-height: calc(100% - 110px);
+    overflow: auto;
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(18, 22, 30, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    z-index: 6;
+  }
+  .inspector-header {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.75);
+    margin-bottom: 8px;
+  }
+  .inspector-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .metric {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+  }
+  .metric strong {
+    font-size: 14px;
+    color: #d9e8ff;
+  }
+  .material-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .material-row {
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 8px;
+    padding: 8px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .material-row .name {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .material-row .meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.74);
+  }
+  .empty-materials {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.65);
+    padding: 8px;
+  }
 
   .file-info {
     display: flex;
@@ -375,6 +568,11 @@
   .actions button:hover {
     background: rgba(255, 255, 255, 0.1);
     color: white;
+  }
+  .actions button.active {
+    background: rgba(88, 166, 255, 0.2);
+    color: #d8ecff;
+    border: 1px solid rgba(88, 166, 255, 0.7);
   }
 
   .separator {

@@ -1,7 +1,7 @@
 const fs = require('fs-extra');
 const inventoryPaths = require('../utils/inventoryPaths');
 
-const STATE_KEYS = new Set(['settings', 'windows', 'widgets', 'shortcuts', 'desktops', 'startMenu', 'taskbar', 'windowDefaults', 'agentChat']);
+const STATE_KEYS = new Set(['settings', 'windows', 'widgets', 'shortcuts', 'desktops', 'startMenu', 'taskbar', 'windowDefaults', 'agentChat', 'themePresets', 'contextMenu', 'backupJobs']);
 
 const DEFAULT_SETTINGS = {
   blurIntensity: 20,
@@ -33,7 +33,8 @@ const DEFAULT_DESKTOPS = {
     { id: 2, name: 'Desktop 2' },
     { id: 3, name: 'Desktop 3' }
   ],
-  currentDesktopId: 1
+  currentDesktopId: 1,
+  layoutEditMode: false
 };
 
 const DEFAULT_START_MENU = {
@@ -59,20 +60,43 @@ const DEFAULT_WINDOW_DEFAULTS = {
   minHeight: 320,
   titleBarHeight: 40,
   rememberLastSize: true,
-  rememberLastPosition: true
+  rememberLastPosition: true,
+  appBackgrounds: {}
+};
+
+const DEFAULT_CONTEXT_MENU = {
+  showIcons: true,
+  confirmDanger: true,
+  density: 'cozy'
 };
 
 const DEFAULT_AGENT_CHAT = {
   isOpen: false,
   messages: [],
-  draft: ''
+  draft: '',
+  wrappedMode: {
+    enabled: false,
+    intentDraft: '',
+    plannedActions: []
+  }
+};
+
+const DEFAULT_THEME_PRESETS = [];
+const DEFAULT_BACKUP_JOBS = {
+  jobs: [],
+  history: []
 };
 
 const AGENT_CHAT_ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
+const AGENT_CHAT_ALLOWED_KINDS = new Set(['text', 'approval', 'result']);
+const AGENT_CHAT_ALLOWED_APPROVAL_STATUSES = new Set(['pending', 'approved', 'rejected']);
 const AGENT_CHAT_MAX_MESSAGE_COUNT = 200;
 const AGENT_CHAT_MAX_ID_LENGTH = 128;
 const AGENT_CHAT_MAX_CONTENT_LENGTH = 4000;
 const AGENT_CHAT_MAX_DRAFT_LENGTH = 2000;
+const AGENT_CHAT_MAX_APPROVAL_TITLE_LENGTH = 120;
+const AGENT_CHAT_MAX_APPROVAL_SUMMARY_LENGTH = 2000;
+const AGENT_CHAT_MAX_META_LENGTH = 2000;
 
 const DEFAULT_BY_KEY = {
   settings: DEFAULT_SETTINGS,
@@ -83,7 +107,10 @@ const DEFAULT_BY_KEY = {
   startMenu: DEFAULT_START_MENU,
   taskbar: DEFAULT_TASKBAR,
   windowDefaults: DEFAULT_WINDOW_DEFAULTS,
-  agentChat: DEFAULT_AGENT_CHAT
+  agentChat: DEFAULT_AGENT_CHAT,
+  themePresets: DEFAULT_THEME_PRESETS,
+  contextMenu: DEFAULT_CONTEXT_MENU,
+  backupJobs: DEFAULT_BACKUP_JOBS
 };
 
 function clone(value) {
@@ -245,7 +272,10 @@ function normalizeDesktops(value) {
 
   return {
     desktops: desktops.length > 0 ? desktops : clone(DEFAULT_DESKTOPS.desktops),
-    currentDesktopId: asNumber(value.currentDesktopId, 1)
+    currentDesktopId: asNumber(value.currentDesktopId, 1),
+    layoutEditMode: typeof value.layoutEditMode === 'boolean'
+      ? value.layoutEditMode
+      : DEFAULT_DESKTOPS.layoutEditMode
   };
 }
 
@@ -301,6 +331,15 @@ function normalizeWindowDefaults(value) {
     return clone(DEFAULT_WINDOW_DEFAULTS);
   }
 
+  const appBackgrounds = isObject(value.appBackgrounds)
+    ? Object.fromEntries(
+      Object.entries(value.appBackgrounds)
+        .map(([appId, bg]) => [String(appId || '').trim(), asTrimmedString(bg, '', 400)])
+        .filter(([appId, bg]) => appId && bg)
+        .slice(0, 64)
+    )
+    : {};
+
   return {
     defaultWidth: asNumberInRange(value.defaultWidth, DEFAULT_WINDOW_DEFAULTS.defaultWidth, 320, 3840),
     defaultHeight: asNumberInRange(value.defaultHeight, DEFAULT_WINDOW_DEFAULTS.defaultHeight, 240, 2160),
@@ -308,7 +347,19 @@ function normalizeWindowDefaults(value) {
     minHeight: asNumberInRange(value.minHeight, DEFAULT_WINDOW_DEFAULTS.minHeight, 180, 1080),
     titleBarHeight: asNumberInRange(value.titleBarHeight, DEFAULT_WINDOW_DEFAULTS.titleBarHeight, 28, 72),
     rememberLastSize: typeof value.rememberLastSize === 'boolean' ? value.rememberLastSize : DEFAULT_WINDOW_DEFAULTS.rememberLastSize,
-    rememberLastPosition: typeof value.rememberLastPosition === 'boolean' ? value.rememberLastPosition : DEFAULT_WINDOW_DEFAULTS.rememberLastPosition
+    rememberLastPosition: typeof value.rememberLastPosition === 'boolean' ? value.rememberLastPosition : DEFAULT_WINDOW_DEFAULTS.rememberLastPosition,
+    appBackgrounds
+  };
+}
+
+function normalizeContextMenu(value) {
+  if (!isObject(value)) {
+    return clone(DEFAULT_CONTEXT_MENU);
+  }
+  return {
+    showIcons: typeof value.showIcons === 'boolean' ? value.showIcons : DEFAULT_CONTEXT_MENU.showIcons,
+    confirmDanger: typeof value.confirmDanger === 'boolean' ? value.confirmDanger : DEFAULT_CONTEXT_MENU.confirmDanger,
+    density: ['compact', 'cozy'].includes(value.density) ? value.density : DEFAULT_CONTEXT_MENU.density
   };
 }
 
@@ -317,12 +368,36 @@ function normalizeAgentChatMessage(item, index) {
   if (!AGENT_CHAT_ALLOWED_ROLES.has(item.role)) return null;
 
   const content = asTrimmedString(item.content, '', AGENT_CHAT_MAX_CONTENT_LENGTH);
-  if (!content) return null;
+  const kind = AGENT_CHAT_ALLOWED_KINDS.has(item.kind) ? item.kind : 'text';
+  const approval = isObject(item.approval)
+    ? {
+        actionId: asTrimmedString(item.approval.actionId, '', AGENT_CHAT_MAX_ID_LENGTH),
+        title: asTrimmedString(item.approval.title, '', AGENT_CHAT_MAX_APPROVAL_TITLE_LENGTH),
+        summary: asTrimmedString(item.approval.summary, '', AGENT_CHAT_MAX_APPROVAL_SUMMARY_LENGTH),
+        actionLabel: asTrimmedString(item.approval.actionLabel, 'Approve', AGENT_CHAT_MAX_APPROVAL_TITLE_LENGTH),
+        risk: asTrimmedString(item.approval.risk, 'medium', 20),
+        status: AGENT_CHAT_ALLOWED_APPROVAL_STATUSES.has(item.approval.status)
+          ? item.approval.status
+          : 'pending',
+        resolvedAt: asNumberInRange(item.approval.resolvedAt, 0, 0, Number.MAX_SAFE_INTEGER) || null
+      }
+    : null;
+  const hasApproval = Boolean(approval?.actionId && approval?.title);
+  if (!content && !hasApproval) return null;
 
   return {
     id: asTrimmedString(item.id, `message-${index + 1}`, AGENT_CHAT_MAX_ID_LENGTH),
     role: item.role,
     content,
+    kind,
+    approval: hasApproval ? approval : null,
+    meta: isObject(item.meta)
+      ? {
+          sourceMessageId: asTrimmedString(item.meta.sourceMessageId, '', AGENT_CHAT_MAX_ID_LENGTH),
+          decision: asTrimmedString(item.meta.decision, '', 24),
+          note: asTrimmedString(item.meta.note, '', AGENT_CHAT_MAX_META_LENGTH)
+        }
+      : null,
     createdAt: asNumberInRange(item.createdAt, Date.now(), 0, Number.MAX_SAFE_INTEGER)
   };
 }
@@ -337,12 +412,127 @@ function normalizeAgentChat(value) {
   const messages = recentMessages
     .map((item, index) => normalizeAgentChatMessage(item, index))
     .filter(Boolean);
+  const wrappedMode = isObject(value.wrappedMode)
+    ? {
+        enabled: value.wrappedMode.enabled === true,
+        intentDraft: asTrimmedString(value.wrappedMode.intentDraft, '', AGENT_CHAT_MAX_DRAFT_LENGTH),
+        plannedActions: Array.isArray(value.wrappedMode.plannedActions)
+          ? value.wrappedMode.plannedActions
+            .slice(0, 20)
+            .map((item, index) => ({
+              id: asTrimmedString(item?.id, `action-${index + 1}`, AGENT_CHAT_MAX_ID_LENGTH),
+              label: asTrimmedString(item?.label, '', AGENT_CHAT_MAX_APPROVAL_SUMMARY_LENGTH),
+              status: asTrimmedString(item?.status, 'pending', 24)
+            }))
+            .filter((item) => item.label)
+          : []
+      }
+    : {
+        enabled: false,
+        intentDraft: '',
+        plannedActions: []
+      };
 
   return {
     isOpen: typeof value.isOpen === 'boolean' ? value.isOpen : DEFAULT_AGENT_CHAT.isOpen,
     messages,
-    draft: asTrimmedString(value.draft, DEFAULT_AGENT_CHAT.draft, AGENT_CHAT_MAX_DRAFT_LENGTH)
+    draft: asTrimmedString(value.draft, DEFAULT_AGENT_CHAT.draft, AGENT_CHAT_MAX_DRAFT_LENGTH),
+    wrappedMode
   };
+}
+
+function normalizeThemePresetItem(item, index) {
+  if (!isObject(item)) return null;
+  const name = asTrimmedString(item.name, '', 80);
+  if (!name) return null;
+
+  return {
+    id: asTrimmedString(item.id, `theme-preset-${index + 1}`, 128),
+    name,
+    settings: normalizeSettings(item.settings),
+    createdAt: asNumberInRange(item.createdAt, Date.now(), 0, Number.MAX_SAFE_INTEGER)
+  };
+}
+
+function normalizeThemePresets(value) {
+  if (!Array.isArray(value)) return clone(DEFAULT_THEME_PRESETS);
+  const normalized = value
+    .slice(0, 64)
+    .map((item, index) => normalizeThemePresetItem(item, index))
+    .filter(Boolean);
+  return normalized;
+}
+
+function asNullableTimestamp(value) {
+  if (value === null || value === undefined) return null;
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return asNumberInRange(value, Date.now(), 0, Number.MAX_SAFE_INTEGER);
+}
+
+function normalizeBackupJob(item, index) {
+  if (!isObject(item)) return null;
+
+  const sourcePath = asTrimmedString(item.sourcePath, '', 4096);
+  const destinationRoot = asTrimmedString(item.destinationRoot, '', 4096);
+  if (!sourcePath || !destinationRoot) return null;
+
+  return {
+    id: asTrimmedString(item.id, `backup-job-${index + 1}`, 128),
+    name: asTrimmedString(item.name, `Backup Job ${index + 1}`, 200),
+    sourcePath,
+    destinationRoot,
+    includeTimestamp: typeof item.includeTimestamp === 'boolean' ? item.includeTimestamp : true,
+    createdAt: asNumberInRange(item.createdAt, Date.now(), 0, Number.MAX_SAFE_INTEGER),
+    lastRunAt: asNullableTimestamp(item.lastRunAt),
+    lastStatus: ['success', 'error'].includes(item.lastStatus) ? item.lastStatus : null,
+    lastOutputPath: asTrimmedString(item.lastOutputPath, '', 4096) || null,
+    lastError: asTrimmedString(item.lastError, '', 2000) || null
+  };
+}
+
+function normalizeBackupHistoryItem(item, index) {
+  if (!isObject(item)) return null;
+  const jobId = asTrimmedString(item.jobId, '', 128);
+  if (!jobId) return null;
+
+  const status = ['success', 'error'].includes(item.status) ? item.status : null;
+  if (!status) return null;
+
+  const startedAt = asNullableTimestamp(item.startedAt);
+  const finishedAt = asNullableTimestamp(item.finishedAt);
+  if (!startedAt || !finishedAt) return null;
+
+  return {
+    id: asTrimmedString(item.id, `backup-history-${index + 1}`, 128),
+    jobId,
+    startedAt,
+    finishedAt,
+    status,
+    outputPath: asTrimmedString(item.outputPath, '', 4096) || null,
+    error: asTrimmedString(item.error, '', 2000) || null
+  };
+}
+
+function normalizeBackupJobs(value) {
+  if (!isObject(value)) return clone(DEFAULT_BACKUP_JOBS);
+
+  const jobs = Array.isArray(value.jobs)
+    ? value.jobs
+      .slice(0, 200)
+      .map((item, index) => normalizeBackupJob(item, index))
+      .filter(Boolean)
+    : [];
+
+  const validJobIds = new Set(jobs.map((job) => job.id));
+
+  const history = Array.isArray(value.history)
+    ? value.history
+      .slice(-500)
+      .map((item, index) => normalizeBackupHistoryItem(item, index))
+      .filter((entry) => entry && validJobIds.has(entry.jobId))
+    : [];
+
+  return { jobs, history };
 }
 
 function validateState(key, value) {
@@ -367,6 +557,12 @@ function validateState(key, value) {
       return normalizeWindowDefaults(value);
     case 'agentChat':
       return normalizeAgentChat(value);
+    case 'themePresets':
+      return normalizeThemePresets(value);
+    case 'contextMenu':
+      return normalizeContextMenu(value);
+    case 'backupJobs':
+      return normalizeBackupJobs(value);
     default:
       return clone(DEFAULT_BY_KEY[key]);
   }
