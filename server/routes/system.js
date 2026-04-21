@@ -13,6 +13,7 @@ const stateStore = require('../services/stateStore');
 const serverConfig = require('../config/serverConfig');
 const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath } = require('../utils/pathPolicy');
 const inventoryPaths = require('../utils/inventoryPaths');
+const mediaLibraryPaths = require('../utils/mediaLibraryPaths');
 
 const router = express.Router();
 router.use(auth);
@@ -126,15 +127,107 @@ async function saveBackupJobsState(nextState) {
   return stateStore.writeState('backupJobs', nextState);
 }
 
+const WALLPAPER_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+const WALLPAPER_VIDEO_EXTENSIONS = new Set(['.mp4', '.webm']);
+const WALLPAPER_ALLOWED_EXTENSIONS = new Set([...WALLPAPER_IMAGE_EXTENSIONS, ...WALLPAPER_VIDEO_EXTENSIONS]);
+
+function createMediaLibraryError(status, code, message, details = null) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  err.details = details;
+  return err;
+}
+
+function sendMediaLibraryError(res, err) {
+  return res.status(err.status || 500).json({
+    error: true,
+    code: err.code || 'MEDIA_LIBRARY_INTERNAL_ERROR',
+    message: err.message || 'Media library operation failed.',
+    details: err.details || null
+  });
+}
+
+function getWallpaperKindByExtension(extension) {
+  if (WALLPAPER_IMAGE_EXTENSIONS.has(extension)) return 'image';
+  if (WALLPAPER_VIDEO_EXTENSIONS.has(extension)) return 'video';
+  return 'unknown';
+}
+
+function sanitizeFileStem(stem) {
+  const normalized = String(stem || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_.]+|[-_.]+$/g, '')
+    .slice(0, 80);
+  return normalized || 'wallpaper';
+}
+
+function getWallpaperExtensionOrThrow(fileName) {
+  const extension = path.extname(String(fileName || '')).toLowerCase();
+  if (!WALLPAPER_ALLOWED_EXTENSIONS.has(extension)) {
+    throw createMediaLibraryError(
+      400,
+      'MEDIA_LIBRARY_UNSUPPORTED_EXTENSION',
+      'Only supported wallpaper image/video extensions can be used.',
+      { fileName }
+    );
+  }
+  return extension;
+}
+
+function buildWallpaperItem(fileName) {
+  const extension = path.extname(fileName).toLowerCase();
+  return {
+    filename: fileName,
+    name: path.parse(fileName).name,
+    kind: getWallpaperKindByExtension(extension),
+    url: `/api/media-library-files/wallpapers/${encodeURIComponent(fileName)}`
+  };
+}
+
+async function generateUniqueWallpaperFileName(fileName) {
+  const extension = getWallpaperExtensionOrThrow(fileName);
+  const stem = sanitizeFileStem(path.parse(fileName).name);
+  const wallpapersDir = await mediaLibraryPaths.getWallpapersDir();
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const suffix = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const candidate = `${stem}-${suffix}${extension}`;
+    if (!(await fs.pathExists(path.join(wallpapersDir, candidate)))) {
+      return candidate;
+    }
+  }
+
+  throw createMediaLibraryError(
+    500,
+    'MEDIA_LIBRARY_FILENAME_GENERATION_FAILED',
+    'Failed to generate a unique wallpaper file name.'
+  );
+}
+
 const uploadWP = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      inventoryPaths.getWallpapersDir()
+      mediaLibraryPaths.getWallpapersDir()
         .then((wallpapersDir) => fs.ensureDir(wallpapersDir).then(() => cb(null, wallpapersDir)))
         .catch((err) => cb(err));
     },
-    filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
-  })
+    filename: (req, file, cb) => {
+      generateUniqueWallpaperFileName(file.originalname)
+        .then((fileName) => cb(null, fileName))
+        .catch((err) => cb(err));
+    }
+  }),
+  fileFilter: (req, file, cb) => {
+    try {
+      getWallpaperExtensionOrThrow(file.originalname);
+      cb(null, true);
+    } catch (err) {
+      cb(err);
+    }
+  }
 });
 
 /**
@@ -291,17 +384,21 @@ router.get('/network/connections', async (req, res) => {
 
 /**
  * GET /api/system/wallpapers/list
- * List all files in the wallpapers inventory
+ * List all files in the media library wallpapers directory
  */
 router.get('/wallpapers/list', async (req, res) => {
   try {
-    await inventoryPaths.ensureInventoryStructure();
-    const wallpapersDir = await inventoryPaths.getWallpapersDir();
+    await mediaLibraryPaths.ensureMediaLibraryStructure();
+    const wallpapersDir = await mediaLibraryPaths.getWallpapersDir();
     const files = await fs.readdir(wallpapersDir);
-    const wallpapers = files.filter((f) => /\.(jpg|jpeg|png|webp|mp4|webm|gif)$/i.test(f));
-    res.json({ success: true, data: wallpapers });
+    const wallpapers = files.filter((f) => WALLPAPER_ALLOWED_EXTENSIONS.has(path.extname(f).toLowerCase()));
+    const items = wallpapers.map(buildWallpaperItem);
+    res.json({ success: true, data: wallpapers, items });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    return sendMediaLibraryError(
+      res,
+      createMediaLibraryError(500, 'MEDIA_LIBRARY_LIST_FAILED', err.message || 'Failed to read wallpaper library.')
+    );
   }
 });
 
@@ -309,13 +406,133 @@ router.get('/wallpapers/list', async (req, res) => {
  * POST /api/system/wallpapers/upload
  * Upload a new wallpaper
  */
-router.post('/wallpapers/upload', uploadWP.single('file'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: true, message: 'Upload failed' });
-  }
+router.post('/wallpapers/upload', (req, res) => {
+  uploadWP.single('file')(req, res, async (err) => {
+    try {
+      if (err) {
+        if (err.code && String(err.code).startsWith('MEDIA_LIBRARY_')) {
+          return sendMediaLibraryError(res, err);
+        }
+        return sendMediaLibraryError(
+          res,
+          createMediaLibraryError(500, 'MEDIA_LIBRARY_UPLOAD_FAILED', err.message || 'Upload failed.')
+        );
+      }
+      if (!req.file) {
+        return sendMediaLibraryError(
+          res,
+          createMediaLibraryError(400, 'MEDIA_LIBRARY_UPLOAD_FILE_REQUIRED', 'Upload file is required.')
+        );
+      }
 
-  await auditService.log('SYSTEM', 'Upload Wallpaper', { fileName: req.file.filename, user: req.user?.username }, 'INFO');
-  return res.json({ success: true, filename: req.file.filename });
+      const item = buildWallpaperItem(req.file.filename);
+      await auditService.log(
+        'SYSTEM',
+        'Upload Wallpaper',
+        { fileName: req.file.filename, user: req.user?.username },
+        'INFO'
+      );
+      return res.json({ success: true, filename: req.file.filename, data: item });
+    } catch (routeErr) {
+      return sendMediaLibraryError(
+        res,
+        createMediaLibraryError(500, 'MEDIA_LIBRARY_UPLOAD_FAILED', routeErr.message || 'Upload failed.')
+      );
+    }
+  });
+});
+
+/**
+ * POST /api/system/wallpapers/import
+ * Import a wallpaper from an allowed host path
+ */
+router.post('/wallpapers/import', async (req, res) => {
+  try {
+    const sourcePathValue = toSafeTrimmedString(req.body?.sourcePath);
+    if (!sourcePathValue) {
+      throw createMediaLibraryError(
+        400,
+        'MEDIA_LIBRARY_INVALID_SOURCE_PATH',
+        'sourcePath is required.'
+      );
+    }
+
+    let sourcePath;
+    try {
+      sourcePath = resolveSafePath(sourcePathValue);
+    } catch (err) {
+      throw createMediaLibraryError(
+        400,
+        'MEDIA_LIBRARY_INVALID_SOURCE_PATH',
+        err.message || 'sourcePath is invalid.',
+        { sourcePath: sourcePathValue }
+      );
+    }
+
+    const { allowedRoots, inventoryRoot } = await serverConfig.getPaths();
+    if (!isWithinAllowedRoots(sourcePath, allowedRoots)) {
+      throw createMediaLibraryError(
+        403,
+        'MEDIA_LIBRARY_SOURCE_FORBIDDEN',
+        'sourcePath must be inside allowed roots.',
+        { sourcePath }
+      );
+    }
+    if (isProtectedSystemPath(sourcePath, [inventoryRoot])) {
+      throw createMediaLibraryError(
+        403,
+        'MEDIA_LIBRARY_SOURCE_SYSTEM_PROTECTED',
+        'sourcePath cannot target protected system inventory paths.',
+        { sourcePath }
+      );
+    }
+
+    if (!(await fs.pathExists(sourcePath))) {
+      throw createMediaLibraryError(
+        404,
+        'MEDIA_LIBRARY_SOURCE_NOT_FOUND',
+        'sourcePath does not exist.',
+        { sourcePath }
+      );
+    }
+
+    const sourceStat = await fs.stat(sourcePath);
+    if (!sourceStat.isFile()) {
+      throw createMediaLibraryError(
+        400,
+        'MEDIA_LIBRARY_SOURCE_NOT_FILE',
+        'sourcePath must reference a file.',
+        { sourcePath }
+      );
+    }
+
+    const sourceName = path.basename(sourcePath);
+    getWallpaperExtensionOrThrow(sourceName);
+
+    await mediaLibraryPaths.ensureMediaLibraryStructure();
+    const targetName = await generateUniqueWallpaperFileName(sourceName);
+    const wallpapersDir = await mediaLibraryPaths.getWallpapersDir();
+    const destinationPath = path.join(wallpapersDir, targetName);
+
+    await fs.copy(sourcePath, destinationPath, { overwrite: false, errorOnExist: true, dereference: false });
+
+    const item = buildWallpaperItem(targetName);
+    await auditService.log(
+      'SYSTEM',
+      'Import Wallpaper',
+      { sourcePath, fileName: targetName, user: req.user?.username },
+      'INFO'
+    );
+    return res.status(201).json({ success: true, filename: targetName, data: item });
+  } catch (err) {
+    if (err.code && String(err.code).startsWith('MEDIA_LIBRARY_')) {
+      return sendMediaLibraryError(res, err);
+    }
+    return sendMediaLibraryError(
+      res,
+      createMediaLibraryError(500, 'MEDIA_LIBRARY_IMPORT_FAILED', err.message || 'Wallpaper import failed.')
+    );
+  }
 });
 
 /**

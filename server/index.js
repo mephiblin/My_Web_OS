@@ -18,6 +18,7 @@ const trashService = require('./services/trashService');
 const shareService = require('./services/shareService');
 const auditService = require('./services/auditService');
 const runtimeManager = require('./services/runtimeManager');
+const mediaLibraryPaths = require('./utils/mediaLibraryPaths');
 
 const fsRouter = require('./routes/fs');
 const sysRouter = require('./routes/system');
@@ -104,6 +105,9 @@ async function bootstrap() {
 
   // Static files for Inventory
   app.use('/api/inventory-files', express.static(config.paths.inventoryRoot));
+  await mediaLibraryPaths.ensureMediaLibraryStructure();
+  const mediaLibraryRoot = await mediaLibraryPaths.getMediaLibraryRoot();
+  app.use('/api/media-library-files', express.static(mediaLibraryRoot));
 
   // Basic Route
   app.get('/health', (req, res) => {

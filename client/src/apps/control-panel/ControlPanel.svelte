@@ -8,6 +8,7 @@
   import { taskbarSettings } from '../../core/stores/taskbarStore.js';
   import { windowDefaultsSettings } from '../../core/stores/windowDefaultsStore.js';
   import FilePicker from '../../core/components/FilePicker.svelte';
+  import { fetchWallpaperLibraryItems, uploadWallpaperFile, importWallpaperFromLocalPath } from './api.js';
 
   let activeTab = $state('personalization');
   let wallpaperList = $state([]);
@@ -27,14 +28,7 @@
   async function fetchWallpapers() {
     isLoadingList = true;
     try {
-      const token = localStorage.getItem('web_os_token') || '';
-      const res = await fetch('/api/system/wallpapers/list', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const json = await res.json();
-      if (json.success) {
-        wallpaperList = json.data;
-      }
+      wallpaperList = await fetchWallpaperLibraryItems();
     } catch (e) {
       console.error(e);
     } finally {
@@ -46,37 +40,31 @@
     const file = e.target.files[0];
     if (!file) return;
 
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
-      const token = localStorage.getItem('web_os_token') || '';
-      const res = await fetch('/api/system/wallpapers/upload', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData
-      });
-      const json = await res.json();
-      if (json.success) {
-        addToast('Wallpaper uploaded successfully', 'success');
-        fetchWallpapers();
-      }
+      await uploadWallpaperFile(file);
+      addToast('Wallpaper uploaded successfully', 'success');
+      fetchWallpapers();
     } catch (e) {
       addToast('Upload failed', 'error');
     }
   }
 
-  function selectWallpaper(file) {
-    const url = `/api/inventory-files/wallpapers/${file}`;
-    systemSettings.updateSettings({ wallpaper: url, wallpaperId: file });
+  function selectWallpaper(item) {
+    if (!item?.url) return;
+    systemSettings.updateSettings({ wallpaper: item.url, wallpaperId: item.id });
   }
 
-  function handleFileSelected(path) {
-    // Convert absolute path to a URL the browser can access
-    const url = `/api/fs/raw?path=${encodeURIComponent(path)}`;
-    systemSettings.updateSettings({ wallpaper: url, wallpaperId: path });
-    showFilePicker = false;
-    addToast('Wallpaper applied from Inventory', 'success');
+  async function handleFileSelected(path) {
+    try {
+      const imported = await importWallpaperFromLocalPath(path, $systemSettings.wallpaperType);
+      systemSettings.updateSettings({ wallpaper: imported.url, wallpaperId: imported.id });
+      await fetchWallpapers();
+      addToast('Imported to Media Library and applied', 'success');
+    } catch (e) {
+      addToast(e?.message || 'Import to Media Library failed', 'error');
+    } finally {
+      showFilePicker = false;
+    }
   }
 
   function buildThemeSettingsSnapshot() {
@@ -217,10 +205,10 @@
         {:else}
           <div class="setting-group">
             <div class="lib-header">
-              <label>Inventory Gallery</label>
+              <label>Media Library</label>
               <div class="header-actions">
                 <button class="action-btn-outline" onclick={() => showFilePicker = true}>
-                  <ExternalLink size={14} /> Browse from Files
+                  <ExternalLink size={14} /> Browse Local Files
                 </button>
                 <button class="upload-action-btn" onclick={() => fileInput.click()}>
                   <Upload size={14} /> Upload New
@@ -230,24 +218,24 @@
             </div>
 
             <div class="gallery-grid">
-              {#each wallpaperList as file}
-                {#if ($systemSettings.wallpaperType === 'video' && /\.(mp4|webm)$/i.test(file)) || ($systemSettings.wallpaperType === 'image' && /\.(jpg|jpeg|png|webp|gif)$/i.test(file))}
+              {#each wallpaperList as item}
+                {#if ($systemSettings.wallpaperType === 'video' && item.kind === 'video') || ($systemSettings.wallpaperType === 'image' && item.kind === 'image')}
                   <button 
-                    class="gallery-item {$systemSettings.wallpaperId === file ? 'active' : ''}"
-                    onclick={() => selectWallpaper(file)}
+                    class="gallery-item {$systemSettings.wallpaperId === item.id ? 'active' : ''}"
+                    onclick={() => selectWallpaper(item)}
                   >
                     {#if $systemSettings.wallpaperType === 'video'}
                       <div class="video-preview">
                         <Play size={20} />
                       </div>
                     {:else}
-                      <img src="/api/inventory-files/wallpapers/{file}" alt={file} loading="lazy" />
+                      <img src={item.url} alt={item.name} loading="lazy" />
                     {/if}
                     
-                    {#if $systemSettings.wallpaperId === file}
+                    {#if $systemSettings.wallpaperId === item.id}
                       <div class="active-check"><Check size={16} /></div>
                     {/if}
-                    <span class="wp-name">{file}</span>
+                    <span class="wp-name">{item.name}</span>
                   </button>
                 {/if}
               {/each}
@@ -255,7 +243,7 @@
               {#if wallpaperList.length === 0 && !isLoadingList}
                 <div class="empty-gallery">
                   <Folder size={32} />
-                  <p>No {$systemSettings.wallpaperType === 'video' ? 'videos' : 'images'} found in Inventory/wallpapers</p>
+                  <p>No {$systemSettings.wallpaperType === 'video' ? 'videos' : 'images'} found in Media Library</p>
                 </div>
               {/if}
             </div>
@@ -650,7 +638,7 @@
 
 {#if showFilePicker}
   <FilePicker 
-    filter={$systemSettings.wallpaperType === 'video' ? ['mp4', 'webm', 'mov'] : ['jpg', 'jpeg', 'png', 'webp', 'gif']} 
+    filter={$systemSettings.wallpaperType === 'video' ? ['mp4', 'webm'] : ['jpg', 'jpeg', 'png', 'webp', 'gif']} 
     onSelect={handleFileSelected} 
     onCancel={() => showFilePicker = false} 
   />

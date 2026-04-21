@@ -640,7 +640,7 @@ Completed/worked item migration reference: `완료.md`
 
 ### Autonomous Roadmap Loop
 
-When the user asks to proceed from `AGENTS.md` without naming a specific task, select the first unfinished item from P0, then P1, then P2, then P3.
+When the user asks to proceed from `AGENTS.md` without naming a specific task, select the first unfinished item from P0, then P1, then P2, then P3, then P4.
 Work on one bounded backlog item at a time.
 
 At the start of the task:
@@ -673,6 +673,14 @@ Do not automatically start the next backlog item after finishing the current one
 ### P3
 
 - (worked items migrated) See `완료.md` -> `P3 작업 이관`
+
+### P4
+
+- Media Library boundary model (Inventory vs User Media)
+- Browse Local Files -> Import to Library UX unification
+- media-library API contract and explicit MEDIA_LIBRARY_* errors
+- package manifest media scopes + approval/audit integration
+- migration guide for legacy wallpaper/media path references
 
 ## Verification
 
