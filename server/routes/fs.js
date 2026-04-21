@@ -13,6 +13,63 @@ const { resolveSafePath, isWithinAllowedRoots, isSafeLeafName } = require('../ut
 // Auth required for ALL fs routes
 router.use(auth);
 
+function createFsHttpError(status, code, message, details = null) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  err.details = details;
+  return err;
+}
+
+function mapFsError(err, fallbackCode = 'FS_OPERATION_FAILED', fallbackMessage = 'File operation failed.') {
+  if (err?.status && err?.code) {
+    return {
+      status: err.status,
+      code: err.code,
+      message: err.message || fallbackMessage,
+      details: err.details || null,
+    };
+  }
+
+  switch (err?.code) {
+    case 'ENOENT':
+      return { status: 404, code: 'FS_PATH_NOT_FOUND', message: 'The requested path was not found.', details: null };
+    case 'EACCES':
+    case 'EPERM':
+      return { status: 403, code: 'FS_ACCESS_DENIED', message: 'Permission denied for this file operation.', details: null };
+    case 'EEXIST':
+      return { status: 409, code: 'FS_CONFLICT', message: 'A file or directory with the same name already exists.', details: null };
+    case 'ENOTDIR':
+      return { status: 400, code: 'FS_NOT_DIRECTORY', message: 'Path is not a directory.', details: null };
+    case 'EISDIR':
+      return { status: 400, code: 'FS_NOT_FILE', message: 'Path is not a file.', details: null };
+    default:
+      return {
+        status: err?.status || 500,
+        code: err?.code || fallbackCode,
+        message: err?.message || fallbackMessage,
+        details: err?.details || null,
+      };
+  }
+}
+
+function sendFsError(res, err, fallbackCode, fallbackMessage) {
+  const mapped = mapFsError(err, fallbackCode, fallbackMessage);
+  return res.status(mapped.status).json({
+    error: true,
+    code: mapped.code,
+    message: mapped.message,
+    details: mapped.details,
+  });
+}
+
+function requireSafePath(req) {
+  if (!req.safePath) {
+    throw createFsHttpError(400, 'FS_INVALID_PATH', 'A valid path is required.');
+  }
+  return req.safePath;
+}
+
 
 /**
  * GET /api/fs/trash
@@ -23,7 +80,7 @@ router.get('/trash', async (req, res) => {
     const items = await trashService.getTrashItems();
     res.json(items);
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_TRASH_LIST_FAILED', 'Failed to list trash items.');
   }
 });
 
@@ -34,11 +91,14 @@ router.get('/trash', async (req, res) => {
 router.post('/restore', async (req, res) => {
   const { id } = req.body;
   try {
+    if (!id || typeof id !== 'string') {
+      throw createFsHttpError(400, 'FS_TRASH_RESTORE_ID_REQUIRED', 'A valid trash item id is required.');
+    }
     await trashService.restore(id);
     await auditService.log('FILE_TRANSFER', 'Restore from Trash', { id, user: req.user?.username }, 'INFO');
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_TRASH_RESTORE_FAILED', 'Failed to restore trash item.');
   }
 });
 
@@ -51,7 +111,7 @@ router.delete('/empty-trash', async (req, res) => {
     await auditService.log('SYSTEM', 'Empty Trash', { user: req.user?.username }, 'WARNING');
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_TRASH_EMPTY_FAILED', 'Failed to empty trash.');
   }
 });
 
@@ -69,7 +129,7 @@ router.get('/config', (req, res) => {
       res.json({ initialPath: paths.initialPath || '/' });
     })
     .catch((err) => {
-      res.status(500).json({ error: true, message: err.message });
+      sendFsError(res, err, 'FS_CONFIG_FETCH_FAILED', 'Failed to read file system config.');
     });
 });
 
@@ -83,7 +143,7 @@ router.get('/user-dirs', (req, res) => {
     const dirs = detectUserDirs();
     res.json(dirs);
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_USER_DIRS_FETCH_FAILED', 'Failed to detect user directories.');
   }
 });
 
@@ -98,11 +158,11 @@ router.use(pathGuard);
  */
 router.get('/list', async (req, res) => {
   try {
-    const targetPath = req.safePath;
+    const targetPath = requireSafePath(req);
     const stats = await fs.stat(targetPath);
 
     if (!stats.isDirectory()) {
-      return res.status(400).json({ error: true, message: 'Path is not a directory.' });
+      throw createFsHttpError(400, 'FS_NOT_DIRECTORY', 'Path is not a directory.');
     }
 
     const files = await fs.readdir(targetPath);
@@ -127,7 +187,7 @@ router.get('/list', async (req, res) => {
 
     res.json({ path: targetPath, items: details });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_LIST_FAILED', 'Failed to list directory.');
   }
 });
 
@@ -169,7 +229,7 @@ async function searchDirectory(dir, query, limit, results = []) {
 router.get('/search', async (req, res) => {
   try {
     const { q } = req.query;
-    const targetPath = req.safePath;
+    const targetPath = requireSafePath(req);
     if (!q) {
       return res.json({ items: [], meta: null });
     }
@@ -205,7 +265,7 @@ router.get('/search', async (req, res) => {
     });
 
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_SEARCH_FAILED', 'Failed to search files.');
   }
 });
 
@@ -215,17 +275,17 @@ router.get('/search', async (req, res) => {
  */
 router.get('/read', async (req, res) => {
   try {
-    const targetPath = req.safePath;
+    const targetPath = requireSafePath(req);
     const stats = await fs.stat(targetPath);
 
     if (stats.isDirectory()) {
-      return res.status(400).json({ error: true, message: 'Cannot read a directory as a file.' });
+      throw createFsHttpError(400, 'FS_NOT_FILE', 'Cannot read a directory as a file.');
     }
 
     const content = await fs.readFile(targetPath, 'utf8');
     res.json({ path: targetPath, content });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_READ_FAILED', 'Failed to read file.');
   }
 });
 
@@ -235,11 +295,11 @@ router.get('/read', async (req, res) => {
  */
 router.get('/raw', async (req, res) => {
   try {
-    const targetPath = req.safePath;
+    const targetPath = requireSafePath(req);
     const stats = await fs.stat(targetPath);
 
     if (stats.isDirectory()) {
-      return res.status(400).json({ error: true, message: 'Cannot stream a directory.' });
+      throw createFsHttpError(400, 'FS_NOT_FILE', 'Cannot stream a directory.');
     }
 
     console.log(`[FS] Sending raw file: ${targetPath}`);
@@ -247,13 +307,13 @@ router.get('/raw', async (req, res) => {
       if (err) {
         console.error(`[FS] Error sending file: ${err.message}`);
         if (!res.headersSent) {
-          res.status(err.status || 500).end();
+          sendFsError(res, err, 'FS_RAW_STREAM_FAILED', 'Failed to stream file.');
         }
       }
     });
   } catch (err) {
     console.error(`[FS] Error in /raw: ${err.message}`);
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_RAW_FETCH_FAILED', 'Failed to fetch file stream.');
   }
 });
 
@@ -263,14 +323,18 @@ router.get('/raw', async (req, res) => {
  */
 router.post('/write', async (req, res) => {
   try {
-    const targetPath = req.safePath;
+    const targetPath = requireSafePath(req);
     const { content } = req.body;
+
+    if (typeof content !== 'string' && content !== undefined && content !== null) {
+      throw createFsHttpError(400, 'FS_WRITE_CONTENT_INVALID', 'File content must be a string.');
+    }
 
     await fs.writeFile(targetPath, content || '', 'utf8');
     await auditService.log('FILE_TRANSFER', 'Write File', { path: targetPath, user: req.user?.username }, 'INFO');
     res.json({ success: true, message: 'File saved successfully.' });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_WRITE_FAILED', 'Failed to save file.');
   }
 });
 
@@ -280,12 +344,12 @@ router.post('/write', async (req, res) => {
  */
 router.delete('/delete', async (req, res) => {
   try {
-    const targetPath = req.safePath;
+    const targetPath = requireSafePath(req);
     await trashService.moveToTrash(targetPath);
     await auditService.log('FILE_TRANSFER', 'Move to Trash', { path: targetPath, user: req.user?.username }, 'INFO');
     res.json({ success: true, message: 'Item moved to trash.' });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_DELETE_FAILED', 'Failed to move item to trash.');
   }
 });
 
@@ -295,12 +359,17 @@ router.delete('/delete', async (req, res) => {
  */
 router.post('/create-dir', async (req, res) => {
   try {
-    const targetPath = req.safePath;
+    const targetPath = requireSafePath(req);
+
+    if (await fs.pathExists(targetPath)) {
+      throw createFsHttpError(409, 'FS_CONFLICT', 'A file or directory already exists at this location.');
+    }
+
     await fs.ensureDir(targetPath);
     await auditService.log('FILE_TRANSFER', 'Create Directory', { path: targetPath, user: req.user?.username }, 'INFO');
     res.json({ success: true, message: 'Directory created successfully.' });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_CREATE_DIR_FAILED', 'Failed to create directory.');
   }
 });
 
@@ -312,26 +381,29 @@ router.put('/rename', async (req, res) => {
   try {
     const { oldPath, newName } = req.body;
     if (!oldPath || !newName) {
-      return res.status(400).json({ error: true, message: 'oldPath and newName are required.' });
+      throw createFsHttpError(400, 'FS_RENAME_PARAMS_INVALID', 'oldPath and newName are required.');
     }
 
     const resolvedOld = resolveSafePath(oldPath);
     const { allowedRoots } = await serverConfig.getPaths();
     const isAllowed = isWithinAllowedRoots(resolvedOld, allowedRoots);
     if (!isAllowed) {
-      return res.status(403).json({ error: true, code: 'FS_PERMISSION_DENIED', message: 'Access to this path is restricted.' });
+      throw createFsHttpError(403, 'FS_PERMISSION_DENIED', 'Access to this path is restricted.');
     }
 
     if (!isSafeLeafName(newName)) {
-      return res.status(400).json({ error: true, message: 'Invalid file name.' });
+      throw createFsHttpError(400, 'FS_INVALID_NAME', 'Invalid file name.');
     }
 
     const newPath = path.join(path.dirname(resolvedOld), newName);
+    if (await fs.pathExists(newPath)) {
+      throw createFsHttpError(409, 'FS_CONFLICT', 'A file or directory with the target name already exists.');
+    }
     await fs.rename(resolvedOld, newPath);
     await auditService.log('FILE_TRANSFER', 'Rename Item', { oldPath: resolvedOld, newPath, user: req.user?.username }, 'INFO');
     res.json({ success: true, message: 'Renamed successfully.' });
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_RENAME_FAILED', 'Failed to rename item.');
   }
 });
 
@@ -342,11 +414,11 @@ router.put('/rename', async (req, res) => {
 router.get('/archive-list', async (req, res) => {
   try {
     const AdmZip = require('adm-zip');
-    const targetPath = req.safePath;
+    const targetPath = requireSafePath(req);
     
     const stats = await fs.stat(targetPath);
     if (stats.isDirectory()) {
-      return res.status(400).json({ error: true, message: 'Not an archive.' });
+      throw createFsHttpError(400, 'FS_ARCHIVE_INVALID', 'Not an archive file.');
     }
 
     const zip = new AdmZip(targetPath);
@@ -360,7 +432,7 @@ router.get('/archive-list', async (req, res) => {
     
     res.json({ path: targetPath, items });
   } catch (err) {
-    res.status(500).json({ error: true, message: 'Failed to read archive: ' + err.message });
+    sendFsError(res, err, 'FS_ARCHIVE_READ_FAILED', 'Failed to read archive.');
   }
 });
 
@@ -371,7 +443,7 @@ router.get('/archive-list', async (req, res) => {
 router.post('/extract', async (req, res) => {
   try {
     const AdmZip = require('adm-zip');
-    const sourcePath = req.safePath;
+    const sourcePath = requireSafePath(req);
     let { destPath } = req.body;
     
     if (!destPath) {
@@ -381,19 +453,21 @@ router.post('/extract', async (req, res) => {
        const { allowedRoots } = await serverConfig.getPaths();
        const isAllowed = isWithinAllowedRoots(resolvedDest, allowedRoots);
        if (!isAllowed) {
-         return res.status(403).json({ error: true, message: 'Restricted dest location.' });
+         throw createFsHttpError(403, 'FS_RESTRICTED_DESTINATION', 'Destination path is restricted.');
        }
        destPath = resolvedDest;
     }
 
     const zip = new AdmZip(sourcePath);
     zip.extractAllToAsync(destPath, true, false, async (err) => {
-       if (err) return res.status(500).json({ error: true, message: err.message });
+       if (err) {
+         return sendFsError(res, err, 'FS_ARCHIVE_EXTRACT_FAILED', 'Failed to extract archive.');
+       }
        await auditService.log('FILE_TRANSFER', 'Extract Archive', { path: sourcePath, destPath, user: req.user?.username }, 'INFO');
        res.json({ success: true, message: 'Extracted successfully.' });
     });
   } catch (err) {
-    res.status(500).json({ error: true, message: 'Failed to extract archive: ' + err.message });
+    sendFsError(res, err, 'FS_ARCHIVE_EXTRACT_FAILED', 'Failed to extract archive.');
   }
 });
 
@@ -408,11 +482,23 @@ const upload = multer({ dest: path.join(__dirname, '../storage/tmp/') });
 router.post('/upload-chunk', upload.single('chunk'), async (req, res) => {
   try {
     const { uploadId, chunkIndex, totalChunks, fileName } = req.body;
-    const targetDir = req.safePath;
+    const targetDir = requireSafePath(req);
     
     if (!req.file || !uploadId || chunkIndex === undefined || !totalChunks || !fileName) {
       if (req.file) await fs.remove(req.file.path);
-      return res.status(400).json({ error: true, message: 'Missing parameters.' });
+      throw createFsHttpError(400, 'FS_UPLOAD_PARAMS_INVALID', 'Missing upload parameters.');
+    }
+
+    if (!isSafeLeafName(fileName)) {
+      if (req.file) await fs.remove(req.file.path);
+      throw createFsHttpError(400, 'FS_INVALID_NAME', 'Invalid file name.');
+    }
+
+    const parsedChunkIndex = Number(chunkIndex);
+    const parsedTotalChunks = Number(totalChunks);
+    if (!Number.isInteger(parsedChunkIndex) || !Number.isInteger(parsedTotalChunks) || parsedChunkIndex < 0 || parsedTotalChunks < 1 || parsedChunkIndex >= parsedTotalChunks) {
+      if (req.file) await fs.remove(req.file.path);
+      throw createFsHttpError(400, 'FS_UPLOAD_PARAMS_INVALID', 'Invalid chunk metadata.');
     }
 
     const chunkDir = path.join(__dirname, '../storage/tmp', uploadId);
@@ -422,17 +508,17 @@ router.post('/upload-chunk', upload.single('chunk'), async (req, res) => {
     await fs.move(req.file.path, path.join(chunkDir, chunkIndex), { overwrite: true });
 
     // Merge if last chunk
-    if (parseInt(chunkIndex) === parseInt(totalChunks) - 1) {
+    if (parsedChunkIndex === parsedTotalChunks - 1) {
        const finalPath = path.join(targetDir, fileName);
-       
-       if (!isSafeLeafName(fileName)) {
+
+       if (await fs.pathExists(finalPath)) {
          await fs.remove(chunkDir);
-         return res.status(400).json({ error: true, message: 'Invalid file name.' });
+         throw createFsHttpError(409, 'FS_CONFLICT', 'A file with the same name already exists.');
        }
 
        const outStream = fs.createWriteStream(finalPath);
        
-       for (let i = 0; i < totalChunks; i++) {
+       for (let i = 0; i < parsedTotalChunks; i++) {
          const cp = path.join(chunkDir, i.toString());
          const data = await fs.readFile(cp);
          outStream.write(data);
@@ -452,7 +538,7 @@ router.post('/upload-chunk', upload.single('chunk'), async (req, res) => {
     res.json({ success: true, complete: false });
   } catch (err) {
     if (req.file) await fs.remove(req.file.path);
-    res.status(500).json({ error: true, message: err.message });
+    sendFsError(res, err, 'FS_UPLOAD_FAILED', 'File upload failed.');
   }
 });
 

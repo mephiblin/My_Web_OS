@@ -23,6 +23,45 @@ Default development priority:
 
 `reliability/boundary -> Package Center operations -> local workstation core -> UI customization -> Agent/LLM -> media/home lab -> Docker portability`
 
+## Codex Multi-Agent Orchestration
+
+Codex may use sub-agents only when the user explicitly asks for parallel agents, delegation, orchestration, or multi-agent collaboration.
+Do not spawn sub-agents just because a task is large or requires investigation.
+
+Use this pattern when multi-agent work is requested:
+
+1. The main agent owns the plan, critical path, final integration, and final answer.
+2. Delegate only bounded side tasks that can run in parallel without blocking the main agent's immediate next step.
+3. Use explorer agents for read-only codebase questions with specific outputs.
+4. Use worker agents for implementation tasks with explicit file/module ownership.
+5. Never assign overlapping write areas to multiple workers.
+6. Tell workers they are not alone in the codebase and must not revert unrelated changes.
+7. Review returned changes before integrating or reporting completion.
+8. Close or ignore sub-agents once their result is no longer needed.
+
+Good delegation examples:
+
+- Explorer A checks Package Center UI flow while the main agent inspects backend package routes.
+- Explorer B checks runtime manager state transitions while the main agent edits Package Center UI.
+- Worker A owns `server/routes/packages.js` and package services while Worker B owns `client/src/apps/package-center/` UI.
+- Worker A owns Agent store/backend action mapping while Worker B owns Agent chat panel UI.
+
+Avoid delegation when:
+
+- The next step depends immediately on the delegated answer.
+- The task is a small single-file edit.
+- The work requires one tightly coupled design decision.
+- Multiple agents would touch the same file or same fragile state model.
+
+Suggested orchestration prompt shape:
+
+```text
+Use two sub-agents in parallel.
+Explorer 1: inspect <area> and report exact files, risks, and recommended changes. Do not edit files.
+Worker 1: implement <bounded change> in <explicit files/modules>. Do not touch other areas or revert unrelated changes.
+Main agent: keep the critical path locally, review both results, integrate, verify, and summarize.
+```
+
 ## Project Identity
 
 My Web OS is not a kernel-level replacement for Windows, macOS, or Linux.
@@ -597,6 +636,26 @@ Package work must consider:
 ## Current Priority Backlog
 
 Follow this order unless the user gives a narrower task.
+
+### Autonomous Roadmap Loop
+
+When the user asks to proceed from `AGENTS.md` without naming a specific task, select the first unfinished item from P0, then P1, then P2, then P3.
+Work on one bounded backlog item at a time.
+
+At the start of the task:
+
+- State the selected backlog item.
+- State the relevant files from the Work Area Reference Map.
+- If multi-agent work was explicitly requested, split the task by non-overlapping file ownership.
+
+At the end of the task:
+
+- Summarize what changed.
+- Summarize what verification was run or why it was skipped.
+- State the next recommended backlog item.
+- Ask the user whether to continue with that next item, choose a different item, commit, or stop.
+
+Do not automatically start the next backlog item after finishing the current one unless the user already gave explicit permission to continue through multiple items.
 
 ### P0
 

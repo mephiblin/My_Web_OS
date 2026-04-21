@@ -57,6 +57,15 @@
     { id: 'home', label: 'Home', icon: Home, path: '/' },
   ]);
 
+  function notifyApiError(err, fallbackTitle = 'Request Failed') {
+    const payload = fsApi.toUserNotification(err, fallbackTitle);
+    notifications.add(payload);
+  }
+
+  function addToast(message, type = 'info', title = 'File Station') {
+    notifications.add({ title, message, type });
+  }
+
   function buildSidebarLinks(homePath, dirs) {
     const links = [
       { id: 'home', label: 'Home', icon: Home, path: homePath },
@@ -155,7 +164,7 @@
         currentPath = data.path;
       }
     } catch (err) {
-      console.error(err);
+      notifyApiError(err, 'Browse Failed');
     } finally {
       loading = false;
     }
@@ -173,8 +182,7 @@
       items = data.items || [];
       searchMeta = data.meta || null;
     } catch (err) {
-      console.error(err);
-      notifications.add({ title: 'Search Error', message: 'Failed to search files', type: 'error' });
+      notifyApiError(err, 'Search Failed');
     } finally {
       loading = false;
     }
@@ -200,7 +208,7 @@
         generatedLink = `${window.location.origin}/api/share/download/${res.linkId}`;
       }
     } catch (e) {
-       notifications.add({ title: 'Share Error', message: 'Failed to create share link', type: 'error' });
+      notifyApiError(e, 'Share Failed');
     }
   }
 
@@ -221,8 +229,8 @@
         fetchItems(currentPath);
       }
     } catch (err) {
-      notifications.add({ title: 'Error', message: 'Failed to extract', type: 'error' });
-      agentStore.notifyError('Failed to extract archive.');
+      notifyApiError(err, 'Extract Failed');
+      agentStore.notifyError('Archive extraction failed.');
     } finally {
       loading = false;
     }
@@ -242,7 +250,7 @@
         isDirectory: false // Simplification: display as files
       }));
     } catch (err) {
-      console.error(err);
+      notifyApiError(err, 'Trash Failed');
     } finally {
       loading = false;
     }
@@ -254,7 +262,7 @@
       notifications.add({ title: 'Trash', message: `Restored ${item.name}`, type: 'success' });
       fetchTrash();
     } catch (err) {
-      notifications.add({ title: 'Error', message: 'Failed to restore item.', type: 'error' });
+      notifyApiError(err, 'Restore Failed');
     }
   }
 
@@ -265,7 +273,7 @@
       notifications.add({ title: 'Trash', message: 'Trash emptied.', type: 'success' });
       fetchTrash();
     } catch (err) {
-      console.error(err);
+      notifyApiError(err, 'Empty Trash Failed');
     }
   }
 
@@ -284,7 +292,7 @@
           const res = await fsApi.readCloudFile(remote, remotePath);
           openWindow({ id: 'editor', title: `Cloud Edit - ${item.name}`, icon: FileText }, { content: res.content, readonly: true });
         } catch (e) {
-          notifications.add({ title: 'Error', message: 'Could not fetch cloud content.', type: 'error' });
+          notifyApiError(e, 'Cloud Read Failed');
         }
       }
       return;
@@ -343,8 +351,9 @@
                 res = await fsApi.readFile(item.path);
              }
              previewContent = res.content;
-           } catch {
+           } catch (err) {
              previewContent = 'Cannot render preview.';
+             notifyApiError(err, 'Preview Failed');
            } finally {
              previewLoading = false;
            }
@@ -421,8 +430,8 @@
       if (currentUpload.path === currentPath) fetchItems(currentPath);
     } catch (e) {
       currentUpload.status = 'error';
-      addToast(`Failed to upload ${currentUpload.file.name}`, 'error');
-      agentStore.notifyError('Upload failed.');
+      notifyApiError(e, 'Upload Failed');
+      agentStore.notifyError(`Upload failed: ${currentUpload.file.name}`);
     }
 
     currentUpload = null;
@@ -441,7 +450,7 @@
       await fsApi.writeFile(`${currentPath}/${name}`, '');
       fetchItems(currentPath);
     } catch (err) {
-      console.error(err);
+      notifyApiError(err, 'Save Failed');
     }
   }
 
@@ -452,7 +461,7 @@
       await fsApi.createDir(`${currentPath}/${name}`);
       fetchItems(currentPath);
     } catch (err) {
-      console.error(err);
+      notifyApiError(err, 'Create Folder Failed');
     }
   }
 
@@ -465,8 +474,8 @@
       selectedItem = null;
       fetchItems(currentPath);
     } catch (err) {
-      console.error(err);
-      agentStore.notifyError('Failed to delete item.');
+      notifyApiError(err, 'Delete Failed');
+      agentStore.notifyError(`Failed to delete ${selectedItem?.name || 'item'}.`);
     }
   }
 
@@ -480,7 +489,7 @@
       selectedItem = null;
       fetchItems(currentPath);
     } catch (err) {
-      console.error(err);
+      notifyApiError(err, 'Rename Failed');
     }
   }
 
@@ -514,14 +523,14 @@
       inventoryPath = userDirs._inventoryPath || '';
       sidebarLinks = buildSidebarLinks(userDirs.home || initialPath, userDirs);
     } catch (e) {
-      console.error('Failed to load dirs:', e);
+      notifyApiError(e, 'File Station Load Failed');
     }
     fetchItems(currentPath);
   });
 
   async function handleAddCloud() {
     if (!cloudName.trim() || !cloudUrl.trim()) {
-      notifications.add({ title: 'Error', message: 'Name and URL are required.', type: 'error' });
+      notifications.add({ title: 'Cloud Connect Failed', message: 'Name and URL are required.', type: 'error' });
       return;
     }
     loading = true;
@@ -539,10 +548,10 @@
         // Reset form
         cloudName = ''; cloudUrl = ''; cloudUser = ''; cloudPass = '';
       } else {
-         notifications.add({ title: 'Error', message: res.message || 'Failed to add connection.', type: 'error' });
+        notifyApiError(res, 'Cloud Connect Failed');
       }
     } catch (e) {
-      notifications.add({ title: 'Error', message: 'Connection failed.', type: 'error' });
+      notifyApiError(e, 'Cloud Connect Failed');
     } finally {
       loading = false;
     }

@@ -979,6 +979,380 @@ async function computePackageHealthReport(appId, options = {}) {
   };
 }
 
+function parseBooleanQuery(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function parseBoundedLimit(value, fallback = 20, max = 50) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(1, Math.floor(numeric)));
+}
+
+async function buildPackageOpsSummary(appId, options = {}) {
+  const safeAppId = appPaths.assertSafeAppId(appId);
+  const runtimeManager = options.runtimeManager || null;
+  const refreshHealth = Boolean(options.refreshHealth);
+  const eventsLimit = parseBoundedLimit(options.eventsLimit, 20, 50);
+
+  const installedPackage = await packageRegistryService.getSandboxApp(safeAppId);
+  if (!installedPackage) {
+    const err = new Error('Package not found.');
+    err.code = 'PACKAGE_NOT_FOUND';
+    throw err;
+  }
+
+  const manifest = await readManifestRaw(safeAppId);
+
+  let lifecycle = null;
+  try {
+    lifecycle = await packageLifecycleService.getLifecycle(safeAppId, manifest || {});
+  } catch (err) {
+    const wrapped = new Error('Failed to fetch package lifecycle.');
+    wrapped.code = 'PACKAGE_LIFECYCLE_FETCH_FAILED';
+    wrapped.cause = err;
+    throw wrapped;
+  }
+
+  let recentRuntimeEvents = [];
+  if (runtimeManager && typeof runtimeManager.getEvents === 'function') {
+    try {
+      const eventsResult = runtimeManager.getEvents(safeAppId, { limit: eventsLimit });
+      recentRuntimeEvents = Array.isArray(eventsResult?.items) ? eventsResult.items : [];
+    } catch (err) {
+      const wrapped = new Error('Failed to fetch recent runtime events.');
+      wrapped.code = 'PACKAGE_RUNTIME_EVENTS_FETCH_FAILED';
+      wrapped.cause = err;
+      throw wrapped;
+    }
+  }
+
+  const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[safeAppId] || null;
+  let lastHealthReport = lifecycle?.lastQaReport || null;
+
+  if (refreshHealth) {
+    if (!runtimeManager) {
+      const err = new Error('Runtime manager is not initialized.');
+      err.code = 'PACKAGE_RUNTIME_MANAGER_UNAVAILABLE';
+      throw err;
+    }
+
+    try {
+      const report = await computePackageHealthReport(safeAppId, { runtimeManager });
+      await packageLifecycleService.recordQaReport(safeAppId, {
+        checkedAt: report.checkedAt,
+        status: report.status,
+        summary: `Package health check finished with status: ${report.status}.`,
+        checks: report.checks
+      });
+      lastHealthReport = {
+        checkedAt: report.checkedAt,
+        status: report.status,
+        summary: `Package health check finished with status: ${report.status}.`,
+        checks: report.checks
+      };
+    } catch (err) {
+      const wrapped = new Error('Failed to refresh package health report.');
+      wrapped.code = 'PACKAGE_HEALTH_REPORT_FETCH_FAILED';
+      wrapped.cause = err;
+      throw wrapped;
+    }
+  }
+
+  return {
+    appId: safeAppId,
+    runtimeStatus,
+    lifecycle,
+    recentRuntimeEvents,
+    lastHealthReport
+  };
+}
+
+function parseBooleanBody(value) {
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+async function resolveRegistryInstallTarget(body = {}) {
+  const sourceId = String(body.sourceId || '').trim();
+  const packageId = String(body.packageId || '').trim();
+  const overwrite = parseBooleanBody(body.overwrite);
+  const forcePolicyBypass = parseBooleanBody(body.forcePolicyBypass);
+  let zipUrl = String(body.zipUrl || '').trim();
+  let targetPackage = null;
+
+  if (!zipUrl) {
+    if (!sourceId || !packageId) {
+      const err = new Error('Either zipUrl or (sourceId + packageId) is required.');
+      err.code = 'REGISTRY_INSTALL_TARGET_REQUIRED';
+      throw err;
+    }
+
+    const sources = await readRegistrySources();
+    const source = sources.find((item) => item.id === sourceId);
+    if (!source) {
+      const err = new Error(`Registry source "${sourceId}" not found.`);
+      err.code = 'REGISTRY_SOURCE_NOT_FOUND';
+      throw err;
+    }
+
+    const packages = await fetchRegistryPackagesFromSource(source);
+    targetPackage = packages.find((item) => item.id === packageId);
+    if (!targetPackage) {
+      const err = new Error(`Package "${packageId}" was not found in source "${sourceId}".`);
+      err.code = 'REGISTRY_PACKAGE_NOT_FOUND';
+      throw err;
+    }
+
+    if (!targetPackage.zipUrl) {
+      const err = new Error(`Package "${packageId}" does not expose a zipUrl.`);
+      err.code = 'REGISTRY_PACKAGE_ZIP_MISSING';
+      throw err;
+    }
+
+    zipUrl = targetPackage.zipUrl;
+  }
+
+  return {
+    sourceId,
+    packageId,
+    zipUrl,
+    overwrite,
+    forcePolicyBypass,
+    targetPackage
+  };
+}
+
+function buildPermissionReview(manifest = {}) {
+  const permissionIds = Array.isArray(manifest.permissions)
+    ? manifest.permissions.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+
+  const catalogMap = new Map(CAPABILITY_CATALOG.map((item) => [item.id, item]));
+  const permissions = permissionIds.map((permission) => {
+    const metadata = catalogMap.get(permission);
+    return {
+      id: permission,
+      category: metadata?.category || 'unknown',
+      risk: metadata?.risk || 'unknown',
+      summary: metadata?.summary || 'No capability catalog metadata available.',
+      inCapabilityCatalog: Boolean(metadata)
+    };
+  });
+
+  const riskCounts = {
+    low: 0,
+    medium: 0,
+    high: 0,
+    unknown: 0
+  };
+  for (const permission of permissions) {
+    const risk = ['low', 'medium', 'high'].includes(permission.risk) ? permission.risk : 'unknown';
+    riskCounts[risk] += 1;
+  }
+
+  const highestRisk = riskCounts.high > 0
+    ? 'high'
+    : riskCounts.medium > 0
+      ? 'medium'
+      : riskCounts.low > 0
+        ? 'low'
+        : (permissions.length > 0 ? 'unknown' : 'none');
+
+  return {
+    permissions,
+    summary: {
+      total: permissions.length,
+      byRisk: riskCounts,
+      highestRisk
+    }
+  };
+}
+
+async function evaluateManifestDependencyCompatibility(manifest = {}) {
+  const runtimeProfile = normalizeRuntimeProfile(manifest);
+  const checks = [];
+  const dependencies = normalizeManifestDependencies(manifest.dependencies);
+  const installed = await packageRegistryService.listSandboxApps();
+  const installedMap = new Map(
+    installed.map((item) => [
+      String(item.id || '').trim(),
+      String(item.version || '0.0.0').trim() || '0.0.0'
+    ])
+  );
+
+  for (const dependency of dependencies) {
+    const installedVersion = installedMap.get(dependency.id) || '';
+    const exists = Boolean(installedVersion);
+    const versionRange = dependency.version || '*';
+    const versionMatches = exists
+      ? packageLifecycleService.matchesVersionRange(installedVersion, versionRange)
+      : false;
+
+    if (exists && versionMatches) {
+      checks.push({
+        id: `dependency.${dependency.id}`,
+        level: 'pass',
+        message: `Dependency "${dependency.id}" is installed (${installedVersion}).`,
+        installedVersion,
+        versionRange
+      });
+      continue;
+    }
+    if (exists && dependency.optional) {
+      checks.push({
+        id: `dependency.${dependency.id}`,
+        level: 'warn',
+        code: 'DEPENDENCY_VERSION_MISMATCH',
+        message: `Optional dependency "${dependency.id}" version ${installedVersion} does not satisfy ${versionRange}.`,
+        installedVersion,
+        versionRange
+      });
+      continue;
+    }
+    if (exists) {
+      checks.push({
+        id: `dependency.${dependency.id}`,
+        level: 'fail',
+        code: 'DEPENDENCY_VERSION_MISMATCH',
+        message: `Required dependency "${dependency.id}" version ${installedVersion} does not satisfy ${versionRange}.`,
+        installedVersion,
+        versionRange
+      });
+      continue;
+    }
+    if (dependency.optional) {
+      checks.push({
+        id: `dependency.${dependency.id}`,
+        level: 'warn',
+        message: `Optional dependency "${dependency.id}" is not installed.`,
+        versionRange
+      });
+      continue;
+    }
+    checks.push({
+      id: `dependency.${dependency.id}`,
+      level: 'fail',
+      code: 'DEPENDENCY_MISSING',
+      message: `Required dependency "${dependency.id}" is not installed.`,
+      versionRange
+    });
+  }
+
+  if (dependencies.length === 0) {
+    checks.push({
+      id: 'dependencies',
+      level: 'pass',
+      message: 'No package dependencies declared.'
+    });
+  }
+
+  const compatibility = normalizeManifestCompatibility(manifest.compatibility);
+  const serverVersion = await getServerVersion();
+
+  if (compatibility.minServerVersion) {
+    if (compareVersions(serverVersion, compatibility.minServerVersion) < 0) {
+      checks.push({
+        id: 'compatibility.minServerVersion',
+        level: 'fail',
+        code: 'COMPATIBILITY_MIN_VERSION_MISMATCH',
+        message: `Server version ${serverVersion} is lower than required ${compatibility.minServerVersion}.`
+      });
+    } else {
+      checks.push({
+        id: 'compatibility.minServerVersion',
+        level: 'pass',
+        message: `Server version ${serverVersion} satisfies minimum ${compatibility.minServerVersion}.`
+      });
+    }
+  }
+
+  if (compatibility.maxServerVersion) {
+    if (compareVersions(serverVersion, compatibility.maxServerVersion) > 0) {
+      checks.push({
+        id: 'compatibility.maxServerVersion',
+        level: 'fail',
+        code: 'COMPATIBILITY_MAX_VERSION_MISMATCH',
+        message: `Server version ${serverVersion} exceeds maximum ${compatibility.maxServerVersion}.`
+      });
+    } else {
+      checks.push({
+        id: 'compatibility.maxServerVersion',
+        level: 'pass',
+        message: `Server version ${serverVersion} is below maximum ${compatibility.maxServerVersion}.`
+      });
+    }
+  }
+
+  if (compatibility.requiredRuntimeTypes.length > 0) {
+    if (!compatibility.requiredRuntimeTypes.includes(runtimeProfile.runtimeType)) {
+      checks.push({
+        id: 'compatibility.runtimeType',
+        level: 'fail',
+        code: 'COMPATIBILITY_RUNTIME_TYPE_MISMATCH',
+        message: `Runtime type "${runtimeProfile.runtimeType}" is not in required list.`,
+        required: compatibility.requiredRuntimeTypes
+      });
+    } else {
+      checks.push({
+        id: 'compatibility.runtimeType',
+        level: 'pass',
+        message: `Runtime type "${runtimeProfile.runtimeType}" is compatible.`
+      });
+    }
+  }
+
+  const status = checks.some((check) => check.level === 'fail')
+    ? 'fail'
+    : checks.some((check) => check.level === 'warn')
+      ? 'warn'
+      : 'pass';
+
+  return {
+    status,
+    serverVersion,
+    dependencies,
+    compatibility,
+    checks
+  };
+}
+
+function buildBackupPlanSummary(options = {}) {
+  const overwrite = Boolean(options.overwrite);
+  const hasExisting = Boolean(options.existing);
+  const required = overwrite && hasExisting;
+  return {
+    required,
+    reason: required ? 'overwrite-update' : 'not-required',
+    note: required
+      ? 'A backup snapshot should be created before overwrite/update execution.'
+      : 'No overwrite snapshot is required for this operation.'
+  };
+}
+
+function mapPreflightStatusToHttpStatus(err) {
+  if (
+    err.code === 'APP_ID_INVALID' ||
+    err.code === 'REGISTRY_INSTALL_TARGET_REQUIRED' ||
+    err.code === 'REGISTRY_PACKAGE_ZIP_MISSING' ||
+    err.code === 'REGISTRY_PACKAGE_TOO_LARGE' ||
+    err.code === 'REGISTRY_PACKAGE_ZIP_URL_INVALID' ||
+    err.code === 'REGISTRY_PACKAGE_DOWNLOAD_TIMEOUT' ||
+    err.code === 'REGISTRY_PACKAGE_DOWNLOAD_FAILED' ||
+    err.code === 'RUNTIME_PROFILE_INVALID' ||
+    err.code?.startsWith('PACKAGE_') ||
+    err.code?.startsWith('TEMPLATE_QUALITY_')
+  ) {
+    return 400;
+  }
+  if (err.code === 'REGISTRY_SOURCE_NOT_FOUND' || err.code === 'REGISTRY_PACKAGE_NOT_FOUND') {
+    return 404;
+  }
+  return 500;
+}
+
 router.get('/', async (req, res) => {
   try {
     const packages = await packageRegistryService.listSandboxApps();
@@ -1530,6 +1904,157 @@ router.get('/registry/updates', async (req, res) => {
   }
 });
 
+router.post('/registry/preflight', async (req, res) => {
+  let tempZipFile = '';
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const target = await resolveRegistryInstallTarget(body);
+    tempZipFile = await downloadRegistryPackageZip(target.zipUrl);
+
+    const incomingManifest = await readManifestFromZip(tempZipFile);
+    const appId = incomingManifest.id;
+    const existing = await packageRegistryService.getSandboxApp(appId);
+    const lifecycle = existing ? await packageLifecycleService.getLifecycle(appId).catch(() => null) : null;
+
+    const permissionsReview = buildPermissionReview(incomingManifest);
+
+    let qualityGateReport = null;
+    try {
+      qualityGateReport = await templateQualityGate.evaluate({
+        templateId: target.sourceId ? `registry:${target.sourceId}` : 'registry:direct-url',
+        appId,
+        manifest: incomingManifest,
+        allowFsMutation: false
+      });
+    } catch (err) {
+      const wrapped = new Error('Failed to evaluate template quality gate during preflight.');
+      wrapped.code = err.code || 'REGISTRY_PREFLIGHT_QUALITY_GATE_FAILED';
+      wrapped.cause = err;
+      throw wrapped;
+    }
+
+    let dependencyCompatibility = null;
+    try {
+      dependencyCompatibility = await evaluateManifestDependencyCompatibility(incomingManifest);
+    } catch (err) {
+      const wrapped = new Error('Failed to evaluate dependency and compatibility checks.');
+      wrapped.code = 'REGISTRY_PREFLIGHT_COMPATIBILITY_CHECK_FAILED';
+      wrapped.cause = err;
+      throw wrapped;
+    }
+
+    let updatePolicy = null;
+    if (existing) {
+      const policy = channelUpdatePolicyService.evaluateCandidate({
+        installedVersion: String(existing.version || '0.0.0').trim() || '0.0.0',
+        candidateVersion: incomingManifest.version,
+        targetChannel: lifecycle?.channel || lifecycle?.current?.channel || 'stable',
+        candidateChannel: target.targetPackage?.release?.channel || incomingManifest.release?.channel || 'stable',
+        publishedAt: target.targetPackage?.release?.publishedAt || '',
+        rolloutDelayMs: target.targetPackage?.release?.rolloutDelayMs
+      });
+      updatePolicy = {
+        evaluated: true,
+        policy
+      };
+    }
+
+    const backupPlan = buildBackupPlanSummary({
+      overwrite: target.overwrite,
+      existing
+    });
+    const operationType = existing ? 'update' : 'install';
+    const blockers = [];
+
+    if (existing && !target.overwrite) {
+      blockers.push({
+        code: 'PACKAGE_ALREADY_EXISTS',
+        message: `Package "${appId}" already exists. Set overwrite=true to perform update.`,
+        area: 'operation'
+      });
+    }
+
+    if (qualityGateReport?.status === 'fail') {
+      blockers.push({
+        code: 'TEMPLATE_QUALITY_GATE_FAILED',
+        message: 'Quality gate produced blocking failures for this package manifest.',
+        area: 'qualityGate'
+      });
+    }
+
+    if (updatePolicy?.evaluated && updatePolicy.policy && !updatePolicy.policy.allowed) {
+      if (!target.forcePolicyBypass) {
+        blockers.push({
+          code: 'REGISTRY_UPDATE_POLICY_BLOCKED',
+          message: `Update is blocked by channel policy (${updatePolicy.policy.blockedReason || 'policy-blocked'}).`,
+          area: 'updatePolicy'
+        });
+      } else {
+        const adminUsername = await getAdminUsername();
+        const isAdminUser = Boolean(adminUsername) && req.user?.username === adminUsername;
+        if (!isAdminUser) {
+          blockers.push({
+            code: 'REGISTRY_UPDATE_POLICY_BYPASS_FORBIDDEN',
+            message: 'Only admin can bypass channel update policy.',
+            area: 'updatePolicy'
+          });
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      preflight: {
+        operation: {
+          type: operationType,
+          appId,
+          overwrite: target.overwrite,
+          sourceId: target.sourceId || null,
+          packageId: target.packageId || null,
+          zipUrl: target.zipUrl,
+          existing: existing
+            ? {
+                installed: true,
+                id: existing.id,
+                title: existing.title,
+                version: String(existing.version || '0.0.0').trim() || '0.0.0',
+                lifecycle: lifecycle
+                  ? {
+                      channel: lifecycle.channel || lifecycle.current?.channel || 'stable',
+                      currentVersion: lifecycle.current?.version || null
+                    }
+                  : null
+              }
+            : {
+                installed: false
+              }
+        },
+        permissionsReview,
+        qualityGate: qualityGateReport,
+        dependencyCompatibility,
+        backupPlan,
+        updatePolicy: updatePolicy || {
+          evaluated: false
+        },
+        executionReadiness: {
+          ready: blockers.length === 0,
+          blockers
+        }
+      }
+    });
+  } catch (err) {
+    return res.status(mapPreflightStatusToHttpStatus(err)).json({
+      error: true,
+      code: err.code || 'REGISTRY_PREFLIGHT_FAILED',
+      message: err.message
+    });
+  } finally {
+    if (tempZipFile) {
+      await fs.remove(tempZipFile).catch(() => {});
+    }
+  }
+});
+
 router.post('/registry/install', async (req, res) => {
   let tempZipFile = '';
   try {
@@ -1896,6 +2421,45 @@ router.get(`/${APP_ID_ROUTE}/lifecycle`, async (req, res) => {
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_LIFECYCLE_READ_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.get(`/${APP_ID_ROUTE}/ops-summary`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const refreshHealth = parseBooleanQuery(req.query.refreshHealth);
+    const eventsLimit = parseBoundedLimit(req.query.eventsLimit, 20, 50);
+    const runtimeManager = req.app.get('runtimeManager');
+
+    const summary = await buildPackageOpsSummary(appId, {
+      runtimeManager,
+      refreshHealth,
+      eventsLimit
+    });
+
+    return res.json({
+      success: true,
+      summary
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID'
+        ? 400
+        : err.code === 'PACKAGE_NOT_FOUND'
+          ? 404
+          : err.code === 'PACKAGE_RUNTIME_MANAGER_UNAVAILABLE'
+            ? 503
+            : err.code === 'PACKAGE_LIFECYCLE_FETCH_FAILED' ||
+                err.code === 'PACKAGE_RUNTIME_EVENTS_FETCH_FAILED' ||
+                err.code === 'PACKAGE_HEALTH_REPORT_FETCH_FAILED'
+              ? 500
+              : 500;
+
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_OPS_SUMMARY_FETCH_FAILED',
       message: err.message
     });
   }

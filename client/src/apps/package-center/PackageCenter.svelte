@@ -3,6 +3,23 @@
   import { onMount } from 'svelte';
   import { LayoutGrid, Store, Link2, RefreshCw, Download, Play, Square, RotateCcw, Trash2 } from 'lucide-svelte';
   import { apiFetch } from '../../utils/api.js';
+  import {
+    createPackageBackup,
+    controlRuntimeApp,
+    fetchInstalledOpsSummary,
+    fetchInstalledPackages,
+    fetchRegistryInstallPreflight,
+    fetchPackageLifecycle,
+    fetchRuntimeApps,
+    fetchRuntimeEvents,
+    fetchRuntimeLogs,
+    recoverRuntimeApp,
+    removeInstalledPackage as removeInstalledPackageRequest,
+    rollbackPackageBackup,
+    runPackageHealth,
+    stopRuntimeApp,
+    updatePackageChannel
+  } from './api.js';
   import { openWindow, windows, closeWindow } from '../../core/stores/windowStore.js';
 
   const CATEGORY = {
@@ -39,6 +56,7 @@
   let scaffoldingTemplateId = $state('');
   let backupNotesByApp = $state({});
   let selectedBackupByApp = $state({});
+  let installReview = $state(null);
 
   let sourceForm = $state({
     id: '',
@@ -217,10 +235,336 @@
     return storePackages.filter((pkg) => pkg.source?.id === sourceId).length;
   }
 
+  function readPreflightField(source, paths, fallback = null) {
+    for (const path of paths) {
+      const segments = Array.isArray(path) ? path : String(path || '').split('.');
+      let value = source;
+      let missing = false;
+      for (const segment of segments) {
+        if (value == null || typeof value !== 'object' || !(segment in value)) {
+          missing = true;
+          break;
+        }
+        value = value[segment];
+      }
+      if (!missing && value !== undefined && value !== null) {
+        return value;
+      }
+    }
+    return fallback;
+  }
+
+  function normalizeReviewDecision(value) {
+    const raw = String(value || '').toLowerCase();
+    if (raw.includes('block') || raw.includes('deny') || raw.includes('fail') || raw.includes('error')) {
+      return 'blocked';
+    }
+    if (raw.includes('pass') || raw.includes('allow') || raw.includes('ok') || raw === 'success') {
+      return 'pass';
+    }
+    return 'warn';
+  }
+
+  function normalizeReviewItemStatus(value) {
+    const raw = String(value || '').toLowerCase();
+    if (raw.includes('fail') || raw.includes('block') || raw.includes('deny') || raw.includes('error')) {
+      return 'fail';
+    }
+    if (raw.includes('warn') || raw.includes('caution') || raw.includes('review')) {
+      return 'warn';
+    }
+    if (raw.includes('pass') || raw.includes('allow') || raw.includes('ok') || raw.includes('success')) {
+      return 'pass';
+    }
+    return 'info';
+  }
+
+  function normalizeReviewItems(value, defaultLabel) {
+    if (value == null) return [];
+
+    if (Array.isArray(value)) {
+      return value
+        .map((item) => {
+          if (typeof item === 'string') {
+            return { label: item, status: 'info', detail: '' };
+          }
+          if (!item || typeof item !== 'object') return null;
+          return {
+            label: String(item.label || item.name || item.id || item.key || item.permission || defaultLabel || 'item'),
+            status: normalizeReviewItemStatus(item.status || item.result || item.outcome || item.level || item.severity),
+            detail: String(item.detail || item.message || item.reason || item.summary || item.note || '')
+          };
+        })
+        .filter(Boolean);
+    }
+
+    if (typeof value === 'string') {
+      return [{ label: value, status: 'info', detail: '' }];
+    }
+
+    if (typeof value === 'object') {
+      if (Array.isArray(value.items)) {
+        return normalizeReviewItems(value.items, defaultLabel);
+      }
+      return Object.entries(value).map(([key, item]) => {
+        if (typeof item === 'string') {
+          return { label: key, status: normalizeReviewItemStatus(item), detail: item };
+        }
+        return {
+          label: String(key || defaultLabel || 'item'),
+          status: normalizeReviewItemStatus(item?.status || item?.result || item?.outcome),
+          detail: String(item?.detail || item?.message || item?.reason || item?.summary || '')
+        };
+      });
+    }
+
+    return [];
+  }
+
+  function normalizeReviewText(value, fallback = '') {
+    if (value == null) return fallback;
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (typeof value === 'object') {
+      return String(value.summary || value.message || value.reason || fallback);
+    }
+    return fallback;
+  }
+
+  function normalizeInstallPreflight(payload, pkg, overwrite, fallbackMessage = '') {
+    const raw = payload?.review || payload?.preflight || payload?.data || payload || {};
+    const executionReadiness = readPreflightField(raw, ['executionReadiness'], null);
+    const blockers = Array.isArray(executionReadiness?.blockers) ? executionReadiness.blockers : [];
+    const hasBlockers = blockers.length > 0;
+    const qualityGateStatus = String(readPreflightField(raw, [['qualityGate', 'status']], '') || '').toLowerCase();
+    const dependencyStatus = String(readPreflightField(raw, [['dependencyCompatibility', 'status']], '') || '').toLowerCase();
+    const readinessState = executionReadiness && executionReadiness.ready === true ? 'pass' : (hasBlockers ? 'blocked' : 'warn');
+
+    const decision = normalizeReviewDecision(
+      readPreflightField(raw, [
+        ['executionReadiness', 'status'],
+        'decision',
+        'status',
+        'result',
+        'overallStatus',
+        ['qualityGate', 'status'],
+        ['dependencyCompatibility', 'status'],
+        ['gate', 'status'],
+        ['policy', 'decision']
+      ], readinessState)
+    );
+
+    const blocked = Boolean(
+      readPreflightField(raw, [
+        ['executionReadiness', 'blocked'],
+        'blocked',
+        'isBlocked',
+        ['gate', 'blocked'],
+        ['policy', 'blocked']
+      ], false)
+    ) || decision === 'blocked' || hasBlockers || qualityGateStatus === 'fail' || dependencyStatus === 'fail';
+
+    const summary = normalizeReviewText(
+      readPreflightField(raw, [
+        'summary',
+        'message',
+        ['qualityGate', 'summary'],
+        ['quality', 'summary']
+      ], fallbackMessage || (blocked ? 'Install/update is blocked by preflight policy.' : 'Review preflight checks before continuing.'))
+    );
+
+    const permissions = normalizeReviewItems(
+      readPreflightField(raw, [
+        ['permissionsReview', 'permissions'],
+        'permissions',
+        'permissionChecks',
+        ['permissionReview', 'items'],
+        ['manifest', 'permissions']
+      ], pkg.permissions || []),
+      'permission'
+    );
+
+    const qualityChecks = normalizeReviewItems(
+      readPreflightField(raw, [
+        'qualityChecks',
+        ['qualityGate', 'checks'],
+        ['quality', 'checks'],
+        ['qa', 'checks']
+      ], []),
+      'quality'
+    );
+
+    const dependencyChecks = normalizeReviewItems(
+      readPreflightField(raw, [
+        ['dependencyCompatibility', 'checks'],
+        'dependencyChecks',
+        'dependencies',
+        ['dependencyReview', 'checks'],
+        ['dependency', 'checks']
+      ], []),
+      'dependency'
+    );
+
+    const compatibilityChecks = normalizeReviewItems(
+      readPreflightField(raw, [
+        ['dependencyCompatibility', 'checks'],
+        'compatibilityChecks',
+        'compatibility',
+        ['runtimeCompatibility', 'checks'],
+        ['compatibilityReview', 'checks']
+      ], []),
+      'compatibility'
+    );
+
+    const backupSummary = normalizeReviewText(
+      readPreflightField(raw, [
+        ['backupPlan', 'note'],
+        ['backupPlan', 'summary'],
+        ['backup', 'summary'],
+        'backupPlan',
+        'backup',
+        ['rollbackPlan', 'summary']
+      ], overwrite ? 'Backup recommended before overwrite update.' : 'No existing package backup required for first install.')
+    );
+
+    const backupChecks = normalizeReviewItems(
+      readPreflightField(raw, [
+        ['backupPlan', 'checks'],
+        ['backup', 'checks'],
+        ['rollbackPlan', 'checks']
+      ], []),
+      'backup'
+    );
+
+    const blockedReason = normalizeReviewText(
+      readPreflightField(raw, [
+        ['executionReadiness', 'reason'],
+        'blockedReason',
+        'reason',
+        ['policy', 'reason']
+      ], '')
+    );
+
+    const blockerItems = blockers.map((item) => ({
+      label: String(item?.code || item?.id || 'preflight.blocker'),
+      status: 'fail',
+      detail: String(item?.message || item?.reason || '')
+    }));
+
+    return {
+      packageId: pkg.id,
+      packageTitle: pkg.title || pkg.id,
+      overwrite,
+      loading: false,
+      forcePolicyBypass: false,
+      decision,
+      blocked,
+      blockedReason,
+      summary,
+      permissions,
+      qualitySummary: normalizeReviewText(
+        readPreflightField(raw, [['qualityGate', 'summary'], ['quality', 'summary'], ['qa', 'summary']], '')
+      ),
+      qualityChecks,
+      dependencyChecks,
+      compatibilityChecks,
+      backupSummary,
+      backupChecks,
+      blockerItems,
+      source: payload ? 'preflight-endpoint' : 'fallback'
+    };
+  }
+
+  async function openInstallReview(pkg, options = {}) {
+    const overwrite = options.overwrite === true;
+    installReview = {
+      packageId: pkg.id,
+      packageTitle: pkg.title || pkg.id,
+      overwrite,
+      loading: true,
+      forcePolicyBypass: false,
+      decision: 'warn',
+      blocked: false,
+      blockedReason: '',
+      summary: overwrite ? 'Running update preflight checks...' : 'Running install preflight checks...',
+      permissions: [],
+      qualitySummary: '',
+      qualityChecks: [],
+      dependencyChecks: [],
+      compatibilityChecks: [],
+      backupSummary: overwrite ? 'Backup review pending...' : 'Install backup review pending...',
+      backupChecks: [],
+      blockerItems: [],
+      source: 'loading'
+    };
+
+    clearFeedback();
+    try {
+      const response = await withTimeout(
+        fetchRegistryInstallPreflight({
+          sourceId: pkg.source?.id,
+          packageId: pkg.id,
+          zipUrl: pkg.zipUrl || '',
+          overwrite
+        }),
+        12000,
+        'Preflight review request timed out.'
+      );
+      installReview = normalizeInstallPreflight(response, pkg, overwrite);
+    } catch (err) {
+      installReview = normalizeInstallPreflight(
+        null,
+        pkg,
+        overwrite,
+        err.message || 'Preflight endpoint unavailable. Please verify details before continuing.'
+      );
+    }
+  }
+
+  function closeInstallReview() {
+    installReview = null;
+  }
+
+  function setInstallReviewBypass(checked) {
+    if (!installReview) return;
+    installReview = {
+      ...installReview,
+      forcePolicyBypass: checked === true
+    };
+  }
+
+  async function executeInstallFromReview() {
+    if (!installReview || installReview.loading) return;
+    const target = storePackages.find((pkg) => pkg.id === installReview.packageId);
+    if (!target) {
+      error = 'Selected package is no longer in store results.';
+      return;
+    }
+    if (installReview.blocked && !installReview.forcePolicyBypass) {
+      error = 'Preflight is blocked. Enable policy bypass to continue.';
+      return;
+    }
+
+    const ok = await installPackage(target, {
+      overwrite: installReview.overwrite,
+      forcePolicyBypass: installReview.forcePolicyBypass
+    });
+    if (ok) {
+      closeInstallReview();
+    }
+  }
+
+  function getInstallReviewDecisionLabel(review) {
+    if (!review) return 'REVIEW';
+    if (review.decision === 'pass' && !review.blocked) return 'PASS';
+    if (review.decision === 'blocked' || review.blocked) return 'BLOCKED';
+    return 'WARN';
+  }
+
   async function loadInstalledPackages() {
     loadingInstalled = true;
     try {
-      const response = await apiFetch('/api/packages');
+      const response = await fetchInstalledPackages();
       installedPackages = Array.isArray(response.packages) ? response.packages : [];
       const activeIds = new Set(installedPackages.map((item) => item.id));
       for (const appId of Object.keys(consoleOpenByApp)) {
@@ -239,7 +583,7 @@
 
   async function loadRuntimeStatuses() {
     try {
-      const response = await apiFetch('/api/runtime/apps');
+      const response = await fetchRuntimeApps();
       const apps = Array.isArray(response.apps) ? response.apps : [];
       const next = {};
       for (const app of apps) {
@@ -405,8 +749,10 @@
         : `Package "${pkg.title}" installed successfully.`;
       await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
       activeCategory = CATEGORY.INSTALLED;
+      return true;
     } catch (err) {
       error = err.message || 'Package install/update failed.';
+      return false;
     } finally {
       installingPackageId = '';
     }
@@ -439,9 +785,7 @@
     clearFeedback();
     try {
       await withTimeout(
-        apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/${action}`, {
-          method: 'POST'
-        }),
+        controlRuntimeApp(pkg.id, action),
         15000,
         'Runtime control request timed out.'
       );
@@ -465,7 +809,7 @@
     clearFeedback();
     try {
       const response = await withTimeout(
-        apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/logs?limit=200`),
+        fetchRuntimeLogs(pkg.id, 200),
         10000,
         '濡쒓렇 議고쉶媛 吏?곕릺怨??덉뒿?덈떎.'
       );
@@ -484,7 +828,7 @@
     runtimeEventsLoading = appId;
     try {
       const response = await withTimeout(
-        apiFetch(`/api/runtime/apps/${encodeURIComponent(appId)}/events?limit=120`),
+        fetchRuntimeEvents(appId, 120),
         10000,
         'Runtime events request timed out.'
       );
@@ -504,7 +848,7 @@
     lifecycleLoading = appId;
     try {
       const response = await withTimeout(
-        apiFetch(`/api/packages/${encodeURIComponent(appId)}/lifecycle`),
+        fetchPackageLifecycle(appId),
         10000,
         'Lifecycle request timed out.'
       );
@@ -528,7 +872,7 @@
     clearFeedback();
     try {
       const response = await withTimeout(
-        apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}/health`),
+        runPackageHealth(pkg.id),
         12000,
         'Health check timed out.'
       );
@@ -549,10 +893,7 @@
     lifecycleActioning = `${pkg.id}:channel:${channel}`;
     clearFeedback();
     try {
-      await apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}/channel`, {
-        method: 'PUT',
-        body: JSON.stringify({ channel })
-      });
+      await updatePackageChannel(pkg.id, channel);
       await loadLifecycle(pkg.id);
       message = `"${pkg.title}" channel changed to ${channel}.`;
     } catch (err) {
@@ -566,10 +907,7 @@
     lifecycleActioning = `${pkg.id}:backup`;
     clearFeedback();
     try {
-      await apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}/backup`, {
-        method: 'POST',
-        body: JSON.stringify({ note: getBackupNote(pkg.id) || 'Manual backup from Package Center' })
-      });
+      await createPackageBackup(pkg.id, getBackupNote(pkg.id) || 'Manual backup from Package Center');
       setBackupNote(pkg.id, '');
       await loadLifecycle(pkg.id);
       message = `"${pkg.title}" backup created.`;
@@ -590,10 +928,7 @@
     lifecycleActioning = `${pkg.id}:rollback`;
     clearFeedback();
     try {
-      await apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}/rollback`, {
-        method: 'POST',
-        body: JSON.stringify({ backupId })
-      });
+      await rollbackPackageBackup(pkg.id, backupId);
       await Promise.all([loadLifecycle(pkg.id), loadRuntimeStatuses()]);
       message = `"${pkg.title}" rollback completed.`;
     } catch (err) {
@@ -607,15 +942,71 @@
     lifecycleActioning = `${pkg.id}:recover`;
     clearFeedback();
     try {
-      await apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/recover`, {
-        method: 'POST'
-      });
+      await recoverRuntimeApp(pkg.id);
       await Promise.all([loadRuntimeStatuses(), loadRuntimeEvents(pkg.id)]);
       message = `"${pkg.title}" runtime recover requested.`;
     } catch (err) {
       error = err.message || 'Runtime recover failed.';
     } finally {
       lifecycleActioning = '';
+    }
+  }
+
+  function applyOpsSummary(appId, summary) {
+    lifecycleByApp = {
+      ...lifecycleByApp,
+      [appId]: summary.lifecycle || null
+    };
+    runtimeEventsByApp = {
+      ...runtimeEventsByApp,
+      [appId]: Array.isArray(summary.events) ? summary.events : []
+    };
+    if (summary.healthReport || summary.lifecycle?.lastQaReport) {
+      healthByApp = {
+        ...healthByApp,
+        [appId]: summary.healthReport || summary.lifecycle?.lastQaReport || null
+      };
+    }
+    if (summary.runtimeStatus) {
+      runtimeStatusByApp = {
+        ...runtimeStatusByApp,
+        [appId]: summary.runtimeStatus
+      };
+    }
+  }
+
+  async function hydrateOpsConsole(appId, options = {}) {
+    const withLoading = options.withLoading === true;
+    const silent = options.silent === true;
+
+    if (withLoading) {
+      lifecycleLoading = appId;
+      runtimeEventsLoading = appId;
+    }
+
+    try {
+      const summary = await withTimeout(
+        fetchInstalledOpsSummary(appId, { eventsLimit: 120 }),
+        10000,
+        'Ops console request timed out.'
+      );
+      applyOpsSummary(appId, summary);
+      return true;
+    } catch (err) {
+      if (!silent) {
+        lifecycleByApp = {
+          ...lifecycleByApp,
+          [appId]: null
+        };
+        clearRuntimeEvents(appId);
+        error = err.message || 'Failed to load ops console data.';
+      }
+      return false;
+    } finally {
+      if (withLoading) {
+        lifecycleLoading = '';
+        runtimeEventsLoading = '';
+      }
     }
   }
 
@@ -629,10 +1020,7 @@
       return;
     }
 
-    await Promise.all([
-      loadLifecycle(pkg.id),
-      loadRuntimeEvents(pkg.id)
-    ]);
+    await hydrateOpsConsole(pkg.id, { withLoading: true });
   }
 
   async function removeInstalledPackage(pkg) {
@@ -642,11 +1030,9 @@
 
     try {
       if (isServicePackage(pkg)) {
-        await apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/stop`, { method: 'POST' }).catch(() => {});
+        await stopRuntimeApp(pkg.id).catch(() => {});
       }
-      await apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}`, {
-        method: 'DELETE'
-      });
+      await removeInstalledPackageRequest(pkg.id);
       stopInstalledPackage(pkg);
       message = `"${pkg.title}" ?쒓굅 ?꾨즺`;
       clearRuntimeLogs(pkg.id);
@@ -670,7 +1056,7 @@
           .filter(([, opened]) => opened)
           .map(([appId]) => appId);
         for (const appId of openIds) {
-          loadLifecycle(appId).catch(() => {});
+          hydrateOpsConsole(appId, { silent: true }).catch(() => {});
         }
       }
     }, 5000);
@@ -810,7 +1196,7 @@
                 <div class="actions">
                   {#if pkg.installed}
                     {#if pkg.updatePolicy?.allowed}
-                      <button class="btn primary" onclick={() => installPackage(pkg, { overwrite: true })} disabled={installingPackageId === pkg.id}>
+                      <button class="btn primary" onclick={() => openInstallReview(pkg, { overwrite: true })} disabled={installingPackageId === pkg.id || installReview?.loading}>
                         <Download size={14} />
                         {installingPackageId === pkg.id ? 'Updating...' : 'Update'}
                       </button>
@@ -820,12 +1206,145 @@
                   {:else if !pkg.zipUrl}
                     <button class="btn ghost" disabled>No Zip</button>
                   {:else}
-                    <button class="btn primary" onclick={() => installPackage(pkg)} disabled={installingPackageId === pkg.id}>
+                    <button class="btn primary" onclick={() => openInstallReview(pkg)} disabled={installingPackageId === pkg.id || installReview?.loading}>
                       <Download size={14} />
                       {installingPackageId === pkg.id ? 'Installing...' : 'Install'}
                     </button>
                   {/if}
                 </div>
+                {#if installReview && installReview.packageId === pkg.id}
+                  <div class="preflight-panel">
+                    <div class="preflight-head">
+                      <div class="preflight-title">
+                        <strong>{installReview.overwrite ? 'Update Preflight Review' : 'Install Preflight Review'}</strong>
+                        <span class="preflight-decision {installReview.blocked ? 'blocked' : installReview.decision}">
+                          {getInstallReviewDecisionLabel(installReview)}
+                        </span>
+                      </div>
+                      <div class="runtime-log-empty">{installReview.source === 'fallback' ? 'fallback review' : 'endpoint review'}</div>
+                    </div>
+                    {#if installReview.loading}
+                      <div class="runtime-log-empty">Loading preflight checks...</div>
+                    {:else}
+                      <div class="preflight-summary">{installReview.summary || 'Preflight checks are ready for review.'}</div>
+                      {#if installReview.blockedReason}
+                        <div class="preflight-blocked-reason">{installReview.blockedReason}</div>
+                      {/if}
+
+                      <div class="preflight-grid">
+                        <div class="preflight-group">
+                          <label>Permissions</label>
+                          {#if installReview.permissions.length === 0}
+                            <div class="runtime-log-empty">No permission data.</div>
+                          {:else}
+                            <div class="preflight-list">
+                              {#each installReview.permissions as item}
+                                <div class="preflight-item">
+                                  <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                  <span>{item.label}</span>
+                                  {#if item.detail}
+                                    <span class="preflight-item-detail">{item.detail}</span>
+                                  {/if}
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+
+                        <div class="preflight-group">
+                          <label>Quality Gate</label>
+                          <div class="preflight-summary-inline">{installReview.qualitySummary || 'No quality summary.'}</div>
+                          {#if installReview.qualityChecks.length === 0}
+                            <div class="runtime-log-empty">No quality checks.</div>
+                          {:else}
+                            <div class="preflight-list">
+                              {#each installReview.qualityChecks as item}
+                                <div class="preflight-item">
+                                  <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                  <span>{item.label}</span>
+                                  {#if item.detail}
+                                    <span class="preflight-item-detail">{item.detail}</span>
+                                  {/if}
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+
+                        <div class="preflight-group">
+                          <label>Dependency / Compatibility</label>
+                          {#if installReview.dependencyChecks.length === 0 && installReview.compatibilityChecks.length === 0 && (!installReview.blockerItems || installReview.blockerItems.length === 0)}
+                            <div class="runtime-log-empty">No dependency or compatibility checks.</div>
+                          {:else}
+                            <div class="preflight-list">
+                              {#each installReview.blockerItems || [] as item}
+                                <div class="preflight-item">
+                                  <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                  <span>{item.label}</span>
+                                  {#if item.detail}
+                                    <span class="preflight-item-detail">{item.detail}</span>
+                                  {/if}
+                                </div>
+                              {/each}
+                              {#each [...installReview.dependencyChecks, ...installReview.compatibilityChecks] as item}
+                                <div class="preflight-item">
+                                  <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                  <span>{item.label}</span>
+                                  {#if item.detail}
+                                    <span class="preflight-item-detail">{item.detail}</span>
+                                  {/if}
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+
+                        <div class="preflight-group">
+                          <label>Backup Plan</label>
+                          <div class="preflight-summary-inline">{installReview.backupSummary || 'No backup plan details.'}</div>
+                          {#if installReview.backupChecks.length === 0}
+                            <div class="runtime-log-empty">No backup checks.</div>
+                          {:else}
+                            <div class="preflight-list">
+                              {#each installReview.backupChecks as item}
+                                <div class="preflight-item">
+                                  <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                  <span>{item.label}</span>
+                                  {#if item.detail}
+                                    <span class="preflight-item-detail">{item.detail}</span>
+                                  {/if}
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                      </div>
+
+                      <div class="preflight-actions">
+                        <label class="preflight-bypass">
+                          <input
+                            type="checkbox"
+                            checked={installReview.forcePolicyBypass}
+                            onchange={(event) => setInstallReviewBypass(event.currentTarget.checked)}
+                          />
+                          Force policy bypass on execution
+                        </label>
+                        <div class="preflight-buttons">
+                          <button class="btn ghost" onclick={closeInstallReview} disabled={installingPackageId === pkg.id}>Cancel</button>
+                          <button
+                            class="btn primary"
+                            onclick={executeInstallFromReview}
+                            disabled={installingPackageId === pkg.id || (installReview.blocked && !installReview.forcePolicyBypass)}
+                          >
+                            {installingPackageId === pkg.id
+                              ? (installReview.overwrite ? 'Updating...' : 'Installing...')
+                              : (installReview.overwrite ? 'Approve & Update' : 'Approve & Install')}
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
                 {#if pkg.installed && pkg.updatePolicy && !pkg.updatePolicy.allowed}
                   <div class="runtime-log-empty">
                     update blocked: {pkg.updatePolicy.blockedReason || 'policy'}
@@ -1536,6 +2055,168 @@
     gap: 8px;
     font-size: 11px;
     color: #cbd5e1;
+  }
+
+  .preflight-panel {
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.58);
+    padding: 10px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .preflight-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .preflight-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .preflight-decision {
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 11px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    color: #cbd5e1;
+    background: rgba(51, 65, 85, 0.25);
+  }
+
+  .preflight-decision.pass {
+    color: #bbf7d0;
+    border-color: rgba(22, 163, 74, 0.42);
+    background: rgba(22, 163, 74, 0.2);
+  }
+
+  .preflight-decision.warn {
+    color: #fde68a;
+    border-color: rgba(202, 138, 4, 0.42);
+    background: rgba(202, 138, 4, 0.2);
+  }
+
+  .preflight-decision.blocked {
+    color: #fecaca;
+    border-color: rgba(248, 113, 113, 0.42);
+    background: rgba(185, 28, 28, 0.22);
+  }
+
+  .preflight-summary,
+  .preflight-summary-inline {
+    font-size: 12px;
+    color: #cbd5e1;
+    line-height: 1.4;
+  }
+
+  .preflight-blocked-reason {
+    border: 1px dashed rgba(248, 113, 113, 0.35);
+    border-radius: 8px;
+    background: rgba(127, 29, 29, 0.2);
+    color: #fecaca;
+    padding: 8px;
+    font-size: 12px;
+  }
+
+  .preflight-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+  }
+
+  .preflight-group {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    background: rgba(15, 23, 36, 0.45);
+    padding: 8px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .preflight-group label {
+    font-size: 11px;
+    color: #93c5fd;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .preflight-list {
+    display: grid;
+    gap: 6px;
+  }
+
+  .preflight-item {
+    display: grid;
+    gap: 2px;
+    font-size: 12px;
+    color: #e2e8f0;
+  }
+
+  .preflight-item-status {
+    width: fit-content;
+    border-radius: 999px;
+    padding: 2px 7px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(51, 65, 85, 0.25);
+    font-size: 10px;
+    color: #cbd5e1;
+  }
+
+  .preflight-item-status.pass {
+    color: #bbf7d0;
+    border-color: rgba(22, 163, 74, 0.4);
+    background: rgba(22, 163, 74, 0.2);
+  }
+
+  .preflight-item-status.warn {
+    color: #fde68a;
+    border-color: rgba(202, 138, 4, 0.4);
+    background: rgba(202, 138, 4, 0.2);
+  }
+
+  .preflight-item-status.fail {
+    color: #fecaca;
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(185, 28, 28, 0.2);
+  }
+
+  .preflight-item-detail {
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  .preflight-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .preflight-bypass {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #cbd5e1;
+  }
+
+  .preflight-bypass input[type='checkbox'] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    padding: 0;
+    border-radius: 4px;
+  }
+
+  .preflight-buttons {
+    display: inline-flex;
+    gap: 8px;
   }
 
   @media (max-width: 1000px) {

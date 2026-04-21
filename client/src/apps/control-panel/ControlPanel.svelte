@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { Settings, Image as ImageIcon, Palette, Info, Monitor, Shield, Heart, Folder, Upload, Play, Check, ExternalLink, ServerCog, RefreshCw, RotateCw } from 'lucide-svelte';
+  import { Settings, Image as ImageIcon, Palette, Info, Monitor, Shield, Heart, Folder, Upload, Play, Check, ExternalLink } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
   import { systemSettings } from '../../core/stores/systemStore.js';
   import FilePicker from '../../core/components/FilePicker.svelte';
@@ -9,16 +9,11 @@
   let wallpaperList = $state([]);
   let isLoadingList = $state(false);
   let showFilePicker = $state(false);
-  let services = $state({});
-  let isLoadingServices = $state(false);
-  let restartingService = $state('');
   let fileInput;
   
   const tabs = [
     { id: 'personalization', title: 'Personalization', icon: Palette },
     { id: 'system', title: 'System', icon: Monitor },
-    { id: 'services', title: 'Services', icon: ServerCog },
-    { id: 'security', title: 'Security', icon: Shield },
     { id: 'about', title: 'About', icon: Info }
   ];
 
@@ -77,74 +72,8 @@
     addToast('Wallpaper applied from Inventory', 'success');
   }
 
-  async function fetchServices() {
-    isLoadingServices = true;
-    try {
-      const token = localStorage.getItem('web_os_token') || '';
-      const res = await fetch('/api/services', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const json = await res.json();
-      if (json.success && json.services) {
-        services = json.services;
-      } else {
-        addToast('Failed to load service status', 'error');
-      }
-    } catch (e) {
-      console.error(e);
-      addToast('Failed to load service status', 'error');
-    } finally {
-      isLoadingServices = false;
-    }
-  }
-
-  async function restartService(name) {
-    restartingService = name;
-    try {
-      const token = localStorage.getItem('web_os_token') || '';
-      const res = await fetch(`/api/services/${encodeURIComponent(name)}/restart`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const json = await res.json();
-      if (json.success) {
-        addToast(`${name} restarted`, 'success');
-        await fetchServices();
-      } else {
-        addToast(json.message || 'Restart failed', 'error');
-      }
-    } catch (e) {
-      console.error(e);
-      addToast('Restart failed', 'error');
-    } finally {
-      restartingService = '';
-    }
-  }
-
-  function statusLabel(status) {
-    if (status === 'running') return 'Running';
-    if (status === 'stopped') return 'Stopped';
-    if (status === 'error') return 'Error';
-    if (status === 'starting') return 'Starting';
-    if (status === 'stopping') return 'Stopping';
-    return 'Unknown';
-  }
-
-  function uptimeText(uptimeMs) {
-    if (!uptimeMs || uptimeMs < 1000) return '0s';
-    const totalSeconds = Math.floor(uptimeMs / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    if (minutes > 0) return `${minutes}m ${seconds}s`;
-    return `${seconds}s`;
-  }
-
   onMount(() => {
     fetchWallpapers();
-    fetchServices();
   });
 
   const gradientPresets = [
@@ -159,7 +88,7 @@
   <aside class="sidebar glass-effect">
     <div class="sidebar-header">
       <Settings size={20} />
-      <span>Settings</span>
+      <span>Control Panel</span>
     </div>
     <nav>
       {#each tabs as tab}
@@ -178,6 +107,7 @@
     {#if activeTab === 'personalization'}
       <section class="settings-section">
         <h2>Personalization</h2>
+        <p class="panel-note">Desktop appearance lives here. Server/runtime operations are managed in the Settings app.</p>
         
         <div class="setting-group">
           <label>Background Source</label>
@@ -333,46 +263,6 @@
           </div>
         </div>
       </section>
-    {:else if activeTab === 'services'}
-      <section class="settings-section">
-        <div class="services-header">
-          <h2>Service Manager</h2>
-          <button class="refresh-btn" onclick={fetchServices} disabled={isLoadingServices}>
-            <RefreshCw size={14} class={isLoadingServices ? 'is-spinning' : ''} /> Refresh
-          </button>
-        </div>
-
-        <div class="service-grid">
-          {#if Object.keys(services).length === 0 && !isLoadingServices}
-            <div class="empty-service">No services available</div>
-          {/if}
-
-          {#each Object.entries(services) as [name, svc]}
-            <div class="service-card glass-effect">
-              <div class="service-top">
-                <div class="service-name">{name}</div>
-                <span class="service-status {svc.status || 'unknown'}">{statusLabel(svc.status)}</span>
-              </div>
-
-              <div class="service-meta">
-                <div>Uptime: {uptimeText(svc.uptimeMs)}</div>
-                {#if svc.lastError}
-                  <div class="service-error">Error: {svc.lastError}</div>
-                {/if}
-              </div>
-
-              <button 
-                class="restart-btn" 
-                onclick={() => restartService(name)} 
-                disabled={restartingService === name}
-              >
-                <RotateCw size={14} class={restartingService === name ? 'is-spinning' : ''} />
-                {restartingService === name ? 'Restarting...' : 'Restart'}
-              </button>
-            </div>
-          {/each}
-        </div>
-      </section>
     {:else if activeTab === 'about'}
       <section class="settings-section about">
         <div class="logo-area">
@@ -422,6 +312,7 @@
   .content-area { flex: 1; padding: 30px; overflow-y: auto; }
   
   h2 { font-size: 24px; font-weight: 700; margin-bottom: 24px; color: var(--text-primary); }
+  .panel-note { margin: -10px 0 16px; color: var(--text-dim); font-size: 13px; }
   
   .setting-group { margin-bottom: 24px; display: flex; flex-direction: column; gap: 10px; }
   .setting-group label { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
@@ -481,34 +372,6 @@
   .credits { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13px; margin-top: 20px; }
 
   .empty-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-dim); opacity: 0.5; gap: 16px; }
-
-  .services-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-  .refresh-btn { background: rgba(255,255,255,0.06); border: 1px solid var(--glass-border); color: var(--text-primary); border-radius: 8px; padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
-  .refresh-btn:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
-  .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-  .service-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
-  .service-card { border-radius: 12px; border: 1px solid var(--glass-border); padding: 14px; display: flex; flex-direction: column; gap: 10px; background: rgba(255,255,255,0.03); }
-  .service-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .service-name { font-size: 14px; font-weight: 700; color: var(--text-primary); text-transform: capitalize; }
-
-  .service-status { font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 999px; border: 1px solid transparent; }
-  .service-status.running { color: #5ee69e; border-color: rgba(94,230,158,0.5); background: rgba(94,230,158,0.12); }
-  .service-status.stopped { color: #c8d1dc; border-color: rgba(200,209,220,0.4); background: rgba(200,209,220,0.12); }
-  .service-status.error { color: #ff7b72; border-color: rgba(255,123,114,0.4); background: rgba(255,123,114,0.12); }
-  .service-status.starting, .service-status.stopping { color: #f2cc60; border-color: rgba(242,204,96,0.4); background: rgba(242,204,96,0.12); }
-
-  .service-meta { font-size: 12px; color: var(--text-dim); display: flex; flex-direction: column; gap: 4px; }
-  .service-error { color: #ff7b72; }
-
-  .restart-btn { align-self: flex-start; background: rgba(88,166,255,0.14); border: 1px solid rgba(88,166,255,0.4); color: #7ec3ff; border-radius: 8px; padding: 7px 10px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
-  .restart-btn:hover:not(:disabled) { background: rgba(88,166,255,0.24); }
-  .restart-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-  .empty-service { grid-column: 1 / -1; border: 1px dashed var(--glass-border); border-radius: 12px; color: var(--text-dim); padding: 24px; text-align: center; }
-
-  .is-spinning { animation: spin 1s linear infinite; }
-  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
   /* Custom Scrollbar */
   .content-area::-webkit-scrollbar { width: 6px; }

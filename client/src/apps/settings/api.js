@@ -10,3 +10,13 @@ export async function updateSettings(settings) {
     body: JSON.stringify(settings)
   });
 }
+
+export async function fetchServices() {
+  return apiFetch('/api/services');
+}
+
+export async function restartService(name) {
+  return apiFetch(`/api/services/${encodeURIComponent(name)}/restart`, {
+    method: 'POST'
+  });
+}

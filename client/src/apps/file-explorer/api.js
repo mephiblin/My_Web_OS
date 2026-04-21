@@ -1,15 +1,106 @@
 import { apiFetch } from '../../utils/api.js';
 
+const OPERATION_META = {
+  list: { title: 'Browse Failed', defaultMessage: 'Could not load this folder.' },
+  read: { title: 'Read Failed', defaultMessage: 'Could not read this file.' },
+  raw: { title: 'Preview Failed', defaultMessage: 'Could not load raw file data.' },
+  write: { title: 'Save Failed', defaultMessage: 'Could not save this file.' },
+  createDir: { title: 'Create Folder Failed', defaultMessage: 'Could not create this folder.' },
+  delete: { title: 'Delete Failed', defaultMessage: 'Could not move this item to trash.' },
+  rename: { title: 'Rename Failed', defaultMessage: 'Could not rename this item.' },
+  upload: { title: 'Upload Failed', defaultMessage: 'Could not upload this file.' },
+  extract: { title: 'Extract Failed', defaultMessage: 'Could not extract this archive.' },
+  share: { title: 'Share Failed', defaultMessage: 'Could not create a share link.' },
+  cloudList: { title: 'Cloud Browse Failed', defaultMessage: 'Could not load this cloud folder.' },
+  cloudRead: { title: 'Cloud Read Failed', defaultMessage: 'Could not read this cloud file.' },
+  cloudAdd: { title: 'Cloud Connect Failed', defaultMessage: 'Could not connect this network drive.' },
+  search: { title: 'Search Failed', defaultMessage: 'Could not search files.' },
+  trash: { title: 'Trash Failed', defaultMessage: 'Could not load trash items.' },
+  restore: { title: 'Restore Failed', defaultMessage: 'Could not restore this item.' },
+  emptyTrash: { title: 'Empty Trash Failed', defaultMessage: 'Could not empty trash.' },
+  config: { title: 'Load Failed', defaultMessage: 'Could not load file station configuration.' },
+  userDirs: { title: 'Load Failed', defaultMessage: 'Could not load user directories.' },
+  cloudRemotes: { title: 'Load Failed', defaultMessage: 'Could not load cloud remotes.' }
+};
+
+function parseErrorMessage(err) {
+  if (!err) return '';
+  if (typeof err === 'string') return err;
+  if (typeof err.message === 'string') return err.message;
+  return 'Unexpected error';
+}
+
+function inferCodeFromMessage(message) {
+  const msg = (message || '').toLowerCase();
+  if (!msg) return 'UNKNOWN_ERROR';
+  if (msg.includes('system inventory is protected')) return 'FS_SYSTEM_PROTECTED';
+  if (msg.includes('access to this path is restricted')) return 'FS_PERMISSION_DENIED';
+  if (msg.includes('invalid path')) return 'FS_INVALID_PATH';
+  if (msg.includes('enoent') || msg.includes('no such file')) return 'FS_PATH_NOT_FOUND';
+  if (msg.includes('eacces') || msg.includes('eperm') || msg.includes('permission denied')) return 'FS_PERMISSION_DENIED';
+  if (msg.includes('cannot read a directory')) return 'FS_READ_DIRECTORY_BLOCKED';
+  if (msg.includes('path is not a directory')) return 'FS_NOT_DIRECTORY';
+  if (msg.includes('cannot stream a directory')) return 'FS_RAW_DIRECTORY_BLOCKED';
+  return 'REQUEST_FAILED';
+}
+
+function getFriendlyMessage(code, operation, originalMessage) {
+  const op = OPERATION_META[operation] || {};
+  const fallback = op.defaultMessage || 'Request failed.';
+  const boundaryMap = {
+    FS_SYSTEM_PROTECTED: 'This location is protected by system boundary rules. Use system or package tools instead.',
+    FS_PERMISSION_DENIED: 'This location is outside your allowed roots. Choose a permitted folder.',
+    FS_INVALID_PATH: 'The selected path is invalid. Check the path and try again.',
+    FS_PATH_NOT_FOUND: 'The target path no longer exists.',
+    FS_READ_DIRECTORY_BLOCKED: 'You selected a folder where a file is required.',
+    FS_NOT_DIRECTORY: 'You selected a file where a folder is required.',
+    FS_RAW_DIRECTORY_BLOCKED: 'Raw preview is not available for folders.'
+  };
+  return boundaryMap[code] || originalMessage || fallback;
+}
+
+function normalizeApiError(operation, err) {
+  const message = parseErrorMessage(err);
+  const code = inferCodeFromMessage(message);
+  const op = OPERATION_META[operation] || {};
+  return {
+    error: true,
+    operation,
+    code,
+    title: op.title || 'Request Failed',
+    message: getFriendlyMessage(code, operation, message),
+    rawMessage: message,
+    isBoundaryError: code.startsWith('FS_')
+  };
+}
+
+async function withNormalizedError(operation, request) {
+  try {
+    return await request();
+  } catch (err) {
+    throw normalizeApiError(operation, err);
+  }
+}
+
+export function toUserNotification(err, fallbackTitle = 'Request Failed') {
+  const normalized = err?.error ? err : normalizeApiError('unknown', err);
+  return {
+    title: normalized.title || fallbackTitle,
+    message: normalized.message || 'Request failed.',
+    type: 'error'
+  };
+}
+
 export async function fetchConfig() {
-  return apiFetch('/api/fs/config');
+  return withNormalizedError('config', () => apiFetch('/api/fs/config'));
 }
 
 export async function fetchUserDirs() {
-  return apiFetch('/api/fs/user-dirs');
+  return withNormalizedError('userDirs', () => apiFetch('/api/fs/user-dirs'));
 }
 
 export async function listDir(path) {
-  return apiFetch(`/api/fs/list?path=${encodeURIComponent(path)}`);
+  return withNormalizedError('list', () => apiFetch(`/api/fs/list?path=${encodeURIComponent(path)}`));
 }
 
 export async function uploadChunk(path, fileChunk, uploadId, chunkIndex, totalChunks, fileName) {
@@ -21,98 +112,98 @@ export async function uploadChunk(path, fileChunk, uploadId, chunkIndex, totalCh
   formData.append('fileName', fileName);
   formData.append('chunk', fileChunk);
 
-  return apiFetch('/api/fs/upload-chunk', {
+  return withNormalizedError('upload', () => apiFetch('/api/fs/upload-chunk', {
     method: 'POST',
     body: formData
-  });
+  }));
 }
 
 export async function readFile(path) {
-  return apiFetch(`/api/fs/read?path=${encodeURIComponent(path)}`);
+  return withNormalizedError('read', () => apiFetch(`/api/fs/read?path=${encodeURIComponent(path)}`));
 }
 
 export async function writeFile(path, content) {
-  return apiFetch('/api/fs/write', {
+  return withNormalizedError('write', () => apiFetch('/api/fs/write', {
     method: 'POST',
     body: JSON.stringify({ path, content })
-  });
+  }));
 }
 
 export async function createDir(path) {
-  return apiFetch('/api/fs/create-dir', {
+  return withNormalizedError('createDir', () => apiFetch('/api/fs/create-dir', {
     method: 'POST',
     body: JSON.stringify({ path })
-  });
+  }));
 }
 
 export async function deleteItem(path) {
-  return apiFetch('/api/fs/delete', {
+  return withNormalizedError('delete', () => apiFetch('/api/fs/delete', {
     method: 'DELETE',
     body: JSON.stringify({ path })
-  });
+  }));
 }
 
 export async function renameItem(oldPath, newName) {
-  return apiFetch('/api/fs/rename', {
+  return withNormalizedError('rename', () => apiFetch('/api/fs/rename', {
     method: 'PUT',
     body: JSON.stringify({ oldPath, newName })
-  });
+  }));
 }
 
 export async function searchFiles(query, path = '') {
-  return apiFetch(`/api/fs/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}`);
+  return withNormalizedError('search', () => apiFetch(`/api/fs/search?q=${encodeURIComponent(query)}&path=${encodeURIComponent(path)}`));
 }
 
 export async function fetchTrash() {
-  return apiFetch('/api/fs/trash');
+  return withNormalizedError('trash', () => apiFetch('/api/fs/trash'));
 }
 
 export async function restoreItem(id) {
-  return apiFetch('/api/fs/restore', {
+  return withNormalizedError('restore', () => apiFetch('/api/fs/restore', {
     method: 'POST',
     body: JSON.stringify({ id })
-  });
+  }));
 }
 
 export async function emptyTrash() {
-  return apiFetch('/api/fs/empty-trash', {
+  return withNormalizedError('emptyTrash', () => apiFetch('/api/fs/empty-trash', {
     method: 'DELETE'
-  });
+  }));
 }
 
 export async function listArchive(path) {
-  return apiFetch(`/api/fs/archive-list?path=${encodeURIComponent(path)}`);
+  return withNormalizedError('read', () => apiFetch(`/api/fs/archive-list?path=${encodeURIComponent(path)}`));
 }
 
 export async function extractArchive(path, destPath = '') {
-  return apiFetch('/api/fs/extract', {
+  return withNormalizedError('extract', () => apiFetch('/api/fs/extract', {
     method: 'POST',
     body: JSON.stringify({ path, destPath })
-  });
+  }));
 }
 
 export async function fetchCloudRemotes() {
-  return apiFetch('/api/cloud/remotes');
+  return withNormalizedError('cloudRemotes', () => apiFetch('/api/cloud/remotes'));
 }
 
 export async function listCloudDir(remote, path) {
-  return apiFetch(`/api/cloud/list?remote=${encodeURIComponent(remote)}&path=${encodeURIComponent(path)}`);
+  return withNormalizedError('cloudList', () => apiFetch(`/api/cloud/list?remote=${encodeURIComponent(remote)}&path=${encodeURIComponent(path)}`));
 }
 
 export async function readCloudFile(remote, path) {
-  return apiFetch(`/api/cloud/read?remote=${encodeURIComponent(remote)}&path=${encodeURIComponent(path)}`);
+  return withNormalizedError('cloudRead', () => apiFetch(`/api/cloud/read?remote=${encodeURIComponent(remote)}&path=${encodeURIComponent(path)}`));
 }
 
 export async function createShareLink(path, expiryHours) {
-  return apiFetch('/api/share/create', {
+  return withNormalizedError('share', () => apiFetch('/api/share/create', {
     method: 'POST',
     body: JSON.stringify({ path, expiryHours })
-  });
+  }));
 }
 
 export async function addWebDAV(name, url, user, pass) {
-  return apiFetch('/api/cloud/add-webdav', {
+  return withNormalizedError('cloudAdd', () => apiFetch('/api/cloud/add-webdav', {
     method: 'POST',
     body: JSON.stringify({ name, url, user, pass })
-  });
+  }));
 }
