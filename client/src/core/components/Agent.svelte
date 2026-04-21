@@ -1,6 +1,7 @@
 <script>
   import { agentStore } from '../stores/agentStore.js';
   import { Bot, AlertTriangle, XCircle, CheckCircle, Loader } from 'lucide-svelte';
+  import AgentChatPanel from './AgentChatPanel.svelte';
 
   const emotionColors = {
     idle: 'var(--accent-blue)',
@@ -20,9 +21,16 @@
       </div>
     {/if}
     
-    <div 
+    {#if $agentStore.isOpen}
+      <AgentChatPanel />
+    {/if}
+
+    <button
       class="agent-avatar glass-effect" 
       style="border-color: {emotionColors[$agentStore.emotion]}; box-shadow: 0 0 20px {emotionColors[$agentStore.emotion]}40;"
+      type="button"
+      onclick={() => agentStore.togglePanel()}
+      aria-label="Toggle agent chat panel"
     >
       <!-- Placeholder for Inochi2D Canvas -->
       <div class="canvas-placeholder">
@@ -38,7 +46,7 @@
           <Bot size={32} color={emotionColors.idle} />
         {/if}
       </div>
-    </div>
+    </button>
   </div>
 {/if}
 

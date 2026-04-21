@@ -1332,6 +1332,133 @@ function buildBackupPlanSummary(options = {}) {
   };
 }
 
+async function createLocalPackageFromManifest(manifestInput, options = {}) {
+  const manifest = normalizeManifestInput(manifestInput || {});
+  const appRoot = await appPaths.getAppRoot(manifest.id);
+  if (await fs.pathExists(appRoot)) {
+    const err = new Error(`Package "${manifest.id}" already exists.`);
+    err.code = 'PACKAGE_ALREADY_EXISTS';
+    throw err;
+  }
+
+  await fs.ensureDir(appRoot);
+  await fs.writeJson(path.join(appRoot, 'manifest.json'), manifest, { spaces: 2 });
+  const runtimeProfile = normalizeRuntimeProfile(manifest);
+  const shouldCreateEntryFile = Boolean(manifest.entry);
+  if (shouldCreateEntryFile) {
+    const entryPath = await resolvePackagePath(manifest.id, manifest.entry);
+    await fs.ensureDir(path.dirname(entryPath));
+    if (runtimeProfile.appType === 'service') {
+      await fs.writeFile(
+        entryPath,
+        createDefaultServiceTemplate({ appId: manifest.id, runtimeType: runtimeProfile.runtimeType }),
+        'utf8'
+      );
+    } else {
+      await fs.writeFile(entryPath, createDefaultHtmlTemplate({ appId: manifest.id, title: manifest.title }), 'utf8');
+    }
+  }
+
+  const created = await packageRegistryService.getSandboxApp(manifest.id);
+  await packageLifecycleService.recordInstall(manifest.id, {
+    manifest,
+    reason: options.reason || 'create',
+    source: options.source || 'local:create'
+  });
+  await auditService.log(
+    'PACKAGES',
+    `Create Package: ${manifest.id}`,
+    { appId: manifest.id, user: options.user || '' },
+    'INFO'
+  );
+
+  return {
+    package: created,
+    manifest
+  };
+}
+
+async function buildWizardPreflight(manifestInput, options = {}) {
+  const manifest = normalizeManifestInput(manifestInput || {});
+  const appId = manifest.id;
+  const templateId = String(options.templateId || '').trim();
+  const existing = await packageRegistryService.getSandboxApp(appId);
+  const permissionsReview = buildPermissionReview(manifest);
+
+  let qualityGate = null;
+  try {
+    qualityGate = await templateQualityGate.evaluate({
+      templateId: templateId || 'wizard:custom',
+      appId,
+      manifest,
+      allowFsMutation: false
+    });
+  } catch (err) {
+    const wrapped = new Error('Failed to evaluate template quality gate during wizard preflight.');
+    wrapped.code = err.code || 'PACKAGE_WIZARD_PREFLIGHT_QUALITY_GATE_FAILED';
+    wrapped.cause = err;
+    throw wrapped;
+  }
+
+  let dependencyCompatibility = null;
+  try {
+    dependencyCompatibility = await evaluateManifestDependencyCompatibility(manifest);
+  } catch (err) {
+    const wrapped = new Error('Failed to evaluate dependency and compatibility checks.');
+    wrapped.code = 'PACKAGE_WIZARD_PREFLIGHT_COMPATIBILITY_CHECK_FAILED';
+    wrapped.cause = err;
+    throw wrapped;
+  }
+
+  const backupPlan = buildBackupPlanSummary({
+    overwrite: false,
+    existing
+  });
+  const blockers = [];
+
+  if (existing) {
+    blockers.push({
+      code: 'PACKAGE_ALREADY_EXISTS',
+      message: `Package "${appId}" already exists.`,
+      area: 'operation'
+    });
+  }
+
+  if (qualityGate?.status === 'fail') {
+    blockers.push({
+      code: 'TEMPLATE_QUALITY_GATE_FAILED',
+      message: 'Quality gate produced blocking failures for this package manifest.',
+      area: 'qualityGate'
+    });
+  }
+
+  return {
+    operation: {
+      type: 'create',
+      appId,
+      templateId: templateId || null,
+      existing: existing
+        ? {
+            installed: true,
+            id: existing.id,
+            title: existing.title,
+            version: String(existing.version || '0.0.0').trim() || '0.0.0'
+          }
+        : {
+            installed: false
+          }
+    },
+    permissionsReview,
+    qualityGate,
+    dependencyCompatibility,
+    backupPlan,
+    executionReadiness: {
+      ready: blockers.length === 0,
+      blockers
+    }
+  };
+}
+
 function mapPreflightStatusToHttpStatus(err) {
   if (
     err.code === 'APP_ID_INVALID' ||
@@ -1349,6 +1476,22 @@ function mapPreflightStatusToHttpStatus(err) {
   }
   if (err.code === 'REGISTRY_SOURCE_NOT_FOUND' || err.code === 'REGISTRY_PACKAGE_NOT_FOUND') {
     return 404;
+  }
+  return 500;
+}
+
+function mapWizardStatusToHttpStatus(err) {
+  if (err.code === 'PACKAGE_ALREADY_EXISTS') {
+    return 409;
+  }
+  if (
+    err.code === 'PACKAGE_MANIFEST_REQUIRED' ||
+    err.code === 'APP_ID_INVALID' ||
+    err.code === 'RUNTIME_PROFILE_INVALID' ||
+    err.code?.startsWith('PACKAGE_') ||
+    err.code?.startsWith('TEMPLATE_QUALITY_')
+  ) {
+    return 400;
   }
   return 500;
 }
@@ -1383,55 +1526,79 @@ router.get('/runtime/capabilities', async (_req, res) => {
   });
 });
 
-router.post('/', async (req, res) => {
+router.post('/wizard/preflight', async (req, res) => {
   try {
-    const manifest = normalizeManifestInput(req.body || {});
-    const appRoot = await appPaths.getAppRoot(manifest.id);
-    if (await fs.pathExists(appRoot)) {
-      return res.status(409).json({
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    if (!body.manifest || typeof body.manifest !== 'object') {
+      return res.status(400).json({
         error: true,
-        code: 'PACKAGE_ALREADY_EXISTS',
-        message: `Package "${manifest.id}" already exists.`
+        code: 'PACKAGE_MANIFEST_REQUIRED',
+        message: 'Body "manifest" object is required.'
       });
     }
 
-    await fs.ensureDir(appRoot);
-    await fs.writeJson(path.join(appRoot, 'manifest.json'), manifest, { spaces: 2 });
-    const runtimeProfile = normalizeRuntimeProfile(manifest);
-    const shouldCreateEntryFile = Boolean(manifest.entry);
-    if (shouldCreateEntryFile) {
-      const entryPath = await resolvePackagePath(manifest.id, manifest.entry);
-      await fs.ensureDir(path.dirname(entryPath));
-      if (runtimeProfile.appType === 'service') {
-        await fs.writeFile(
-          entryPath,
-          createDefaultServiceTemplate({ appId: manifest.id, runtimeType: runtimeProfile.runtimeType }),
-          'utf8'
-        );
-      } else {
-        await fs.writeFile(entryPath, createDefaultHtmlTemplate({ appId: manifest.id, title: manifest.title }), 'utf8');
-      }
+    const preflight = await buildWizardPreflight(body.manifest, {
+      templateId: body.templateId
+    });
+
+    return res.json({
+      success: true,
+      preflight
+    });
+  } catch (err) {
+    return res.status(mapWizardStatusToHttpStatus(err)).json({
+      error: true,
+      code: err.code || 'PACKAGE_WIZARD_PREFLIGHT_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.post('/wizard/create', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    if (!body.manifest || typeof body.manifest !== 'object') {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_MANIFEST_REQUIRED',
+        message: 'Body "manifest" object is required.'
+      });
     }
 
-    const created = await packageRegistryService.getSandboxApp(manifest.id);
-    await packageLifecycleService.recordInstall(manifest.id, {
-      manifest,
+    const created = await createLocalPackageFromManifest(body.manifest, {
+      user: req.user?.username,
       reason: 'create',
       source: 'local:create'
     });
-    await auditService.log(
-      'PACKAGES',
-      `Create Package: ${manifest.id}`,
-      { appId: manifest.id, user: req.user?.username },
-      'INFO'
-    );
 
     return res.status(201).json({
       success: true,
-      package: created
+      package: created.package,
+      manifest: created.manifest
     });
   } catch (err) {
-    const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') || err.code === 'RUNTIME_PROFILE_INVALID' ? 400 : 500;
+    return res.status(mapWizardStatusToHttpStatus(err)).json({
+      error: true,
+      code: err.code || 'PACKAGE_WIZARD_CREATE_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const created = await createLocalPackageFromManifest(req.body || {}, {
+      user: req.user?.username,
+      reason: 'create',
+      source: 'local:create'
+    });
+
+    return res.status(201).json({
+      success: true,
+      package: created.package
+    });
+  } catch (err) {
+    const status = mapWizardStatusToHttpStatus(err);
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_CREATE_FAILED',
@@ -2671,6 +2838,131 @@ router.get(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_MANIFEST_READ_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
+  try {
+    const routeAppId = appPaths.assertSafeAppId(req.params.id);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const manifestInput = body.manifest;
+
+    if (!manifestInput || typeof manifestInput !== 'object' || Array.isArray(manifestInput)) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_MANIFEST_REQUIRED',
+        message: 'Body "manifest" object is required.'
+      });
+    }
+
+    const manifest = normalizeManifestInput(manifestInput, routeAppId);
+    if (manifest.id !== routeAppId) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_ID_MISMATCH',
+        message: 'Manifest id must match route id.',
+        executionReadiness: {
+          ready: false,
+          blockers: [
+            {
+              code: 'PACKAGE_ID_MISMATCH',
+              message: 'Manifest id must match route id.',
+              area: 'manifest'
+            }
+          ]
+        }
+      });
+    }
+
+    const appRoot = await appPaths.getAppRoot(routeAppId);
+    if (!(await fs.pathExists(appRoot))) {
+      return res.status(404).json({
+        error: true,
+        code: 'PACKAGE_NOT_FOUND',
+        message: 'Package not found.'
+      });
+    }
+
+    const permissionsReview = buildPermissionReview(manifest);
+
+    let dependencyCompatibility = null;
+    try {
+      dependencyCompatibility = await evaluateManifestDependencyCompatibility(manifest);
+    } catch (err) {
+      const wrapped = new Error('Failed to evaluate dependency and compatibility checks.');
+      wrapped.code = 'PACKAGE_MANIFEST_PREFLIGHT_COMPATIBILITY_CHECK_FAILED';
+      wrapped.cause = err;
+      throw wrapped;
+    }
+
+    const blockers = [];
+    let runtimeProfile = null;
+    try {
+      runtimeProfile = normalizeRuntimeProfile(manifest);
+      assertValidRuntimeProfile(manifest, runtimeProfile);
+    } catch (err) {
+      blockers.push({
+        code: err.code || 'RUNTIME_PROFILE_INVALID',
+        message: err.message,
+        area: 'runtime'
+      });
+    }
+
+    const shouldValidateUiEntry = runtimeProfile && runtimeProfile.appType !== 'service';
+    if (shouldValidateUiEntry) {
+      const entryPath = await resolvePackagePath(routeAppId, manifest.entry);
+      if (!(await fs.pathExists(entryPath))) {
+        blockers.push({
+          code: 'PACKAGE_ENTRY_NOT_FOUND',
+          message: `Entry file "${manifest.entry}" does not exist.`,
+          area: 'entry'
+        });
+      }
+    }
+
+    const compatibilityFailures = Array.isArray(dependencyCompatibility?.checks)
+      ? dependencyCompatibility.checks.filter((check) => check.level === 'fail')
+      : [];
+    for (const failure of compatibilityFailures) {
+      blockers.push({
+        code: failure.code || 'PACKAGE_DEPENDENCY_COMPATIBILITY_FAILED',
+        message: failure.message || 'Dependency or compatibility check failed.',
+        area: String(failure.id || '').startsWith('dependency.') ? 'dependency' : 'compatibility'
+      });
+    }
+
+    return res.json({
+      success: true,
+      preflight: {
+        operation: {
+          type: 'manifest-update',
+          appId: routeAppId
+        },
+        permissionsReview,
+        dependencyCompatibility,
+        executionReadiness: {
+          ready: blockers.length === 0,
+          blockers
+        }
+      }
+    });
+  } catch (err) {
+    const status =
+      err.code === 'PACKAGE_NOT_FOUND'
+        ? 404
+        :
+      err.code === 'APP_ID_INVALID' ||
+      err.code === 'PACKAGE_MANIFEST_REQUIRED' ||
+      err.code === 'PACKAGE_ID_MISMATCH' ||
+      err.code === 'RUNTIME_PROFILE_INVALID' ||
+      err.code?.startsWith('PACKAGE_')
+        ? 400
+        : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_MANIFEST_PREFLIGHT_FAILED',
       message: err.message
     });
   }

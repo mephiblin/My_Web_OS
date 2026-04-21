@@ -26,7 +26,11 @@
   import Spotlight from './Spotlight.svelte';
   import { openSpotlight, toggleSpotlight } from './stores/spotlightStore.js';
   import Taskbar from './components/Taskbar.svelte';
+  import StartMenu from './components/StartMenu.svelte';
   import NotificationCenter from './components/NotificationCenter.svelte';
+  import { closeStartMenu, startMenuState, toggleStartMenu } from './stores/startMenuStore.js';
+  import { taskbarSettings } from './stores/taskbarStore.js';
+  import { windowDefaultsSettings } from './stores/windowDefaultsStore.js';
   import ControlPanel from '../apps/control-panel/ControlPanel.svelte';
   import TransferUI from '../apps/transfer/TransferUI.svelte';
   import LogViewer from '../apps/log-viewer/LogViewer.svelte';
@@ -71,6 +75,7 @@
   };
 
   let apps = $state([]);
+  let startButtonEl = $state(null);
   
   async function loadApps() {
     try {
@@ -97,7 +102,10 @@
   onMount(async () => {
     // Initialize OS State from backend inventory
     await Promise.all([
+      agentStore.init(),
       systemSettings.init(),
+      taskbarSettings.init(),
+      windowDefaultsSettings.init(),
       initWindows(),
       widgets.init(),
       widgetLibrary.init(),
@@ -113,6 +121,10 @@
   function handleKeydown(e) {
     // ESC: close active window
     if (e.key === 'Escape') {
+      if ($startMenuState.isOpen) {
+        closeStartMenu();
+        return;
+      }
       if (isNotificationCenterOpen) {
         isNotificationCenterOpen = false;
         return;
@@ -190,6 +202,10 @@
       default: return 'cover';
     }
   }
+
+  function handleOpenStartMenuApp(app) {
+    openWindow(app);
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -210,7 +226,7 @@
     {/each}
   </div>
 
-  <div class="app-grid" onclick={() => closeContextMenu()}>
+  <div class="app-grid" onclick={() => { closeContextMenu(); closeStartMenu(); }}>
     {#each apps as app}
       <button class="app-icon" ondblclick={() => openWindow(app)}>
         <div class="icon-box glass-effect">
@@ -279,6 +295,7 @@
   {/if}
 
   <Spotlight />
+  <StartMenu apps={apps} onOpenApp={handleOpenStartMenuApp} {startButtonEl} />
   <NotificationCenter bind:isOpen={isNotificationCenterOpen} />
   
   <Agent />
@@ -286,6 +303,9 @@
   <Taskbar 
     {time} 
     isNotificationCenterOpen={isNotificationCenterOpen}
+    isStartMenuOpen={$startMenuState.isOpen}
+    onStartButtonReady={(el) => (startButtonEl = el)}
+    onToggleStartMenu={toggleStartMenu}
     onToggleNotifications={() => isNotificationCenterOpen = !isNotificationCenterOpen}
     onOpenSettings={() => openWindow({ id: 'control-panel', title: 'Settings', icon: Settings, singleton: true })}
   />

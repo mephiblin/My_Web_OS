@@ -30,6 +30,26 @@ export async function fetchPackageLifecycle(appId) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/lifecycle`);
 }
 
+export async function fetchPackageManifest(appId) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/manifest`);
+}
+
+export async function preflightPackageManifestUpdate(appId, manifest) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/manifest/preflight`, {
+    method: 'POST',
+    body: JSON.stringify({
+      manifest: manifest || {}
+    })
+  });
+}
+
+export async function updatePackageManifest(appId, manifest) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/manifest`, {
+    method: 'PUT',
+    body: JSON.stringify(manifest || {})
+  });
+}
+
 export async function runPackageHealth(appId) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/health`);
 }
@@ -126,6 +146,25 @@ export async function fetchRegistryInstallPreflight(payload = {}) {
       packageId: payload.packageId || '',
       zipUrl: payload.zipUrl || '',
       overwrite: payload.overwrite === true
+    })
+  });
+}
+
+export async function wizardPreflightPackage(manifest, templateId) {
+  return apiFetch('/api/packages/wizard/preflight', {
+    method: 'POST',
+    body: JSON.stringify({
+      manifest: manifest || {},
+      ...(templateId ? { templateId: String(templateId) } : {})
+    })
+  });
+}
+
+export async function wizardCreatePackage(manifest) {
+  return apiFetch('/api/packages/wizard/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      manifest: manifest || {}
     })
   });
 }

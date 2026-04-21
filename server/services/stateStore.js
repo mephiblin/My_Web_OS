@@ -1,7 +1,7 @@
 const fs = require('fs-extra');
 const inventoryPaths = require('../utils/inventoryPaths');
 
-const STATE_KEYS = new Set(['settings', 'windows', 'widgets', 'shortcuts', 'desktops']);
+const STATE_KEYS = new Set(['settings', 'windows', 'widgets', 'shortcuts', 'desktops', 'startMenu', 'taskbar', 'windowDefaults', 'agentChat']);
 
 const DEFAULT_SETTINGS = {
   blurIntensity: 20,
@@ -36,12 +36,54 @@ const DEFAULT_DESKTOPS = {
   currentDesktopId: 1
 };
 
+const DEFAULT_START_MENU = {
+  pinnedAppIds: [],
+  recentAppIds: [],
+  layout: 'default'
+};
+
+const DEFAULT_TASKBAR = {
+  showStartButton: true,
+  showDesktopSwitcher: true,
+  showSearch: true,
+  showSystemTray: true,
+  showClock: true,
+  compactMode: false,
+  iconSize: 'md'
+};
+
+const DEFAULT_WINDOW_DEFAULTS = {
+  defaultWidth: 960,
+  defaultHeight: 640,
+  minWidth: 480,
+  minHeight: 320,
+  titleBarHeight: 40,
+  rememberLastSize: true,
+  rememberLastPosition: true
+};
+
+const DEFAULT_AGENT_CHAT = {
+  isOpen: false,
+  messages: [],
+  draft: ''
+};
+
+const AGENT_CHAT_ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
+const AGENT_CHAT_MAX_MESSAGE_COUNT = 200;
+const AGENT_CHAT_MAX_ID_LENGTH = 128;
+const AGENT_CHAT_MAX_CONTENT_LENGTH = 4000;
+const AGENT_CHAT_MAX_DRAFT_LENGTH = 2000;
+
 const DEFAULT_BY_KEY = {
   settings: DEFAULT_SETTINGS,
   windows: DEFAULT_WINDOWS,
   widgets: DEFAULT_WIDGETS,
   shortcuts: DEFAULT_SHORTCUTS,
-  desktops: DEFAULT_DESKTOPS
+  desktops: DEFAULT_DESKTOPS,
+  startMenu: DEFAULT_START_MENU,
+  taskbar: DEFAULT_TASKBAR,
+  windowDefaults: DEFAULT_WINDOW_DEFAULTS,
+  agentChat: DEFAULT_AGENT_CHAT
 };
 
 function clone(value) {
@@ -66,6 +108,22 @@ function asNumber(value, fallback) {
 
 function asString(value, fallback) {
   return typeof value === 'string' && value.trim() !== '' ? value : fallback;
+}
+
+function asTrimmedString(value, fallback, maxLength) {
+  const fallbackValue = typeof fallback === 'string' ? fallback : '';
+  const safeFallback = fallbackValue.slice(0, maxLength);
+  if (typeof value !== 'string') return safeFallback;
+  const trimmed = value.trim();
+  if (!trimmed) return safeFallback;
+  return trimmed.slice(0, maxLength);
+}
+
+function asNumberInRange(value, fallback, min, max) {
+  const numeric = asNumber(value, fallback);
+  if (numeric < min) return min;
+  if (numeric > max) return max;
+  return numeric;
 }
 
 function normalizeSettings(value) {
@@ -191,6 +249,102 @@ function normalizeDesktops(value) {
   };
 }
 
+function normalizeStringList(value) {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set();
+  const normalized = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function normalizeStartMenu(value) {
+  if (!isObject(value)) {
+    return clone(DEFAULT_START_MENU);
+  }
+
+  const layout = ['default', 'compact', 'wide'].includes(value.layout)
+    ? value.layout
+    : DEFAULT_START_MENU.layout;
+
+  return {
+    pinnedAppIds: normalizeStringList(value.pinnedAppIds),
+    recentAppIds: normalizeStringList(value.recentAppIds),
+    layout
+  };
+}
+
+function normalizeTaskbar(value) {
+  if (!isObject(value)) {
+    return clone(DEFAULT_TASKBAR);
+  }
+
+  return {
+    showStartButton: typeof value.showStartButton === 'boolean' ? value.showStartButton : DEFAULT_TASKBAR.showStartButton,
+    showDesktopSwitcher: typeof value.showDesktopSwitcher === 'boolean' ? value.showDesktopSwitcher : DEFAULT_TASKBAR.showDesktopSwitcher,
+    showSearch: typeof value.showSearch === 'boolean' ? value.showSearch : DEFAULT_TASKBAR.showSearch,
+    showSystemTray: typeof value.showSystemTray === 'boolean' ? value.showSystemTray : DEFAULT_TASKBAR.showSystemTray,
+    showClock: typeof value.showClock === 'boolean' ? value.showClock : DEFAULT_TASKBAR.showClock,
+    compactMode: typeof value.compactMode === 'boolean' ? value.compactMode : DEFAULT_TASKBAR.compactMode,
+    iconSize: ['sm', 'md', 'lg'].includes(value.iconSize) ? value.iconSize : DEFAULT_TASKBAR.iconSize
+  };
+}
+
+function normalizeWindowDefaults(value) {
+  if (!isObject(value)) {
+    return clone(DEFAULT_WINDOW_DEFAULTS);
+  }
+
+  return {
+    defaultWidth: asNumberInRange(value.defaultWidth, DEFAULT_WINDOW_DEFAULTS.defaultWidth, 320, 3840),
+    defaultHeight: asNumberInRange(value.defaultHeight, DEFAULT_WINDOW_DEFAULTS.defaultHeight, 240, 2160),
+    minWidth: asNumberInRange(value.minWidth, DEFAULT_WINDOW_DEFAULTS.minWidth, 240, 1920),
+    minHeight: asNumberInRange(value.minHeight, DEFAULT_WINDOW_DEFAULTS.minHeight, 180, 1080),
+    titleBarHeight: asNumberInRange(value.titleBarHeight, DEFAULT_WINDOW_DEFAULTS.titleBarHeight, 28, 72),
+    rememberLastSize: typeof value.rememberLastSize === 'boolean' ? value.rememberLastSize : DEFAULT_WINDOW_DEFAULTS.rememberLastSize,
+    rememberLastPosition: typeof value.rememberLastPosition === 'boolean' ? value.rememberLastPosition : DEFAULT_WINDOW_DEFAULTS.rememberLastPosition
+  };
+}
+
+function normalizeAgentChatMessage(item, index) {
+  if (!isObject(item)) return null;
+  if (!AGENT_CHAT_ALLOWED_ROLES.has(item.role)) return null;
+
+  const content = asTrimmedString(item.content, '', AGENT_CHAT_MAX_CONTENT_LENGTH);
+  if (!content) return null;
+
+  return {
+    id: asTrimmedString(item.id, `message-${index + 1}`, AGENT_CHAT_MAX_ID_LENGTH),
+    role: item.role,
+    content,
+    createdAt: asNumberInRange(item.createdAt, Date.now(), 0, Number.MAX_SAFE_INTEGER)
+  };
+}
+
+function normalizeAgentChat(value) {
+  if (!isObject(value)) {
+    return clone(DEFAULT_AGENT_CHAT);
+  }
+
+  const rawMessages = Array.isArray(value.messages) ? value.messages : [];
+  const recentMessages = rawMessages.slice(-AGENT_CHAT_MAX_MESSAGE_COUNT);
+  const messages = recentMessages
+    .map((item, index) => normalizeAgentChatMessage(item, index))
+    .filter(Boolean);
+
+  return {
+    isOpen: typeof value.isOpen === 'boolean' ? value.isOpen : DEFAULT_AGENT_CHAT.isOpen,
+    messages,
+    draft: asTrimmedString(value.draft, DEFAULT_AGENT_CHAT.draft, AGENT_CHAT_MAX_DRAFT_LENGTH)
+  };
+}
+
 function validateState(key, value) {
   ensureStateKey(key);
 
@@ -205,6 +359,14 @@ function validateState(key, value) {
       return normalizeShortcuts(value);
     case 'desktops':
       return normalizeDesktops(value);
+    case 'startMenu':
+      return normalizeStartMenu(value);
+    case 'taskbar':
+      return normalizeTaskbar(value);
+    case 'windowDefaults':
+      return normalizeWindowDefaults(value);
+    case 'agentChat':
+      return normalizeAgentChat(value);
     default:
       return clone(DEFAULT_BY_KEY[key]);
   }

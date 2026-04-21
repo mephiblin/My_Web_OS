@@ -636,6 +636,7 @@ Package work must consider:
 ## Current Priority Backlog
 
 Follow this order unless the user gives a narrower task.
+Completed/worked item migration reference: `완료.md`
 
 ### Autonomous Roadmap Loop
 
@@ -659,25 +660,16 @@ Do not automatically start the next backlog item after finishing the current one
 
 ### P0
 
-- Package Center Installed-tab runtime/lifecycle console polish
-- Install/update preflight review: permissions, quality gate, dependency, compatibility, backup
-- Settings and Control Panel role separation
-- File Station boundary and error UX
-- official test command for `server/tests/*`
-- Start Menu base
-- Taskbar settings model
-- Window defaults model
-- Agent chat panel base
+- (worked items migrated) See `완료.md` -> `P0 작업 이관`
 
 ### P1
 
-- Package creation wizard
-- manifest editor UI
 - Code Editor and Package Center file editing integration
 - Theme presets
 - desktop layout persistence and edit mode
 - Agent status expansion and approval cards
 - Wrapped Assistant Mode UI skeleton
+- (worked items migrated) See `완료.md` -> `P1 작업 이관`
 
 ### P2
 

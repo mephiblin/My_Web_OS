@@ -3,6 +3,8 @@
   import { Settings, Image as ImageIcon, Palette, Info, Monitor, Shield, Heart, Folder, Upload, Play, Check, ExternalLink } from 'lucide-svelte';
   import { addToast } from '../../core/stores/toastStore.js';
   import { systemSettings } from '../../core/stores/systemStore.js';
+  import { taskbarSettings } from '../../core/stores/taskbarStore.js';
+  import { windowDefaultsSettings } from '../../core/stores/windowDefaultsStore.js';
   import FilePicker from '../../core/components/FilePicker.svelte';
 
   let activeTab = $state('personalization');
@@ -244,6 +246,161 @@
             <span class="color-value">{$systemSettings.accentColor}</span>
           </div>
         </div>
+
+        <div class="setting-divider"></div>
+
+        <div class="setting-group">
+          <label>Taskbar</label>
+          <div class="taskbar-settings glass-effect">
+            <div class="taskbar-row">
+              <span>Compact mode</span>
+              <button
+                class="toggle-btn {$taskbarSettings.compactMode ? 'active' : ''}"
+                onclick={() => taskbarSettings.updateSettings({ compactMode: !$taskbarSettings.compactMode })}
+              >
+                {$taskbarSettings.compactMode ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            <div class="taskbar-row">
+              <span>Icon size</span>
+              <div class="size-segment">
+                <button
+                  class:active={$taskbarSettings.iconSize === 'sm'}
+                  onclick={() => taskbarSettings.updateSettings({ iconSize: 'sm' })}
+                >
+                  S
+                </button>
+                <button
+                  class:active={$taskbarSettings.iconSize === 'md'}
+                  onclick={() => taskbarSettings.updateSettings({ iconSize: 'md' })}
+                >
+                  M
+                </button>
+                <button
+                  class:active={$taskbarSettings.iconSize === 'lg'}
+                  onclick={() => taskbarSettings.updateSettings({ iconSize: 'lg' })}
+                >
+                  L
+                </button>
+              </div>
+            </div>
+
+            <div class="taskbar-row wrap">
+              <span>Visible sections</span>
+              <div class="pill-toggles">
+                <button
+                  class="pill-btn {$taskbarSettings.showStartButton ? 'active' : ''}"
+                  onclick={() => taskbarSettings.updateSettings({ showStartButton: !$taskbarSettings.showStartButton })}
+                >
+                  Start
+                </button>
+                <button
+                  class="pill-btn {$taskbarSettings.showDesktopSwitcher ? 'active' : ''}"
+                  onclick={() => taskbarSettings.updateSettings({ showDesktopSwitcher: !$taskbarSettings.showDesktopSwitcher })}
+                >
+                  Desktops
+                </button>
+                <button
+                  class="pill-btn {$taskbarSettings.showSearch ? 'active' : ''}"
+                  onclick={() => taskbarSettings.updateSettings({ showSearch: !$taskbarSettings.showSearch })}
+                >
+                  Search
+                </button>
+                <button
+                  class="pill-btn {$taskbarSettings.showSystemTray ? 'active' : ''}"
+                  onclick={() => taskbarSettings.updateSettings({ showSystemTray: !$taskbarSettings.showSystemTray })}
+                >
+                  Tray
+                </button>
+                <button
+                  class="pill-btn {$taskbarSettings.showClock ? 'active' : ''}"
+                  onclick={() => taskbarSettings.updateSettings({ showClock: !$taskbarSettings.showClock })}
+                  disabled={!$taskbarSettings.showSystemTray}
+                >
+                  Clock
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label>Window Defaults</label>
+          <div class="taskbar-settings glass-effect window-defaults">
+            <div class="taskbar-row">
+              <span>Default size</span>
+              <div class="number-pair">
+                <input
+                  type="number"
+                  min="320"
+                  max="3840"
+                  value={$windowDefaultsSettings.defaultWidth}
+                  onchange={(e) => windowDefaultsSettings.updateSettings({ defaultWidth: Number(e.target.value) })}
+                />
+                <span>x</span>
+                <input
+                  type="number"
+                  min="240"
+                  max="2160"
+                  value={$windowDefaultsSettings.defaultHeight}
+                  onchange={(e) => windowDefaultsSettings.updateSettings({ defaultHeight: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+
+            <div class="taskbar-row">
+              <span>Minimum size</span>
+              <div class="number-pair">
+                <input
+                  type="number"
+                  min="240"
+                  max="1920"
+                  value={$windowDefaultsSettings.minWidth}
+                  onchange={(e) => windowDefaultsSettings.updateSettings({ minWidth: Number(e.target.value) })}
+                />
+                <span>x</span>
+                <input
+                  type="number"
+                  min="180"
+                  max="1080"
+                  value={$windowDefaultsSettings.minHeight}
+                  onchange={(e) => windowDefaultsSettings.updateSettings({ minHeight: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+
+            <div class="taskbar-row">
+              <span>Title bar height</span>
+              <input
+                class="number-input"
+                type="number"
+                min="28"
+                max="72"
+                value={$windowDefaultsSettings.titleBarHeight}
+                onchange={(e) => windowDefaultsSettings.updateSettings({ titleBarHeight: Number(e.target.value) })}
+              />
+            </div>
+
+            <div class="taskbar-row wrap">
+              <span>Behavior</span>
+              <div class="pill-toggles">
+                <button
+                  class="pill-btn {$windowDefaultsSettings.rememberLastSize ? 'active' : ''}"
+                  onclick={() => windowDefaultsSettings.updateSettings({ rememberLastSize: !$windowDefaultsSettings.rememberLastSize })}
+                >
+                  Remember size
+                </button>
+                <button
+                  class="pill-btn {$windowDefaultsSettings.rememberLastPosition ? 'active' : ''}"
+                  onclick={() => windowDefaultsSettings.updateSettings({ rememberLastPosition: !$windowDefaultsSettings.rememberLastPosition })}
+                >
+                  Remember position
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
     {:else if activeTab === 'system'}
       <section class="settings-section">
@@ -372,6 +529,100 @@
   .credits { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: 13px; margin-top: 20px; }
 
   .empty-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-dim); opacity: 0.5; gap: 16px; }
+
+  .taskbar-settings {
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .taskbar-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .taskbar-row.wrap {
+    align-items: flex-start;
+  }
+  .toggle-btn {
+    border: 1px solid var(--glass-border);
+    background: transparent;
+    color: var(--text-dim);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .toggle-btn.active {
+    color: white;
+    border-color: rgba(88, 166, 255, 0.6);
+    background: rgba(88, 166, 255, 0.2);
+  }
+  .size-segment {
+    display: inline-flex;
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .size-segment button {
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    width: 34px;
+    height: 28px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .size-segment button.active {
+    background: rgba(88, 166, 255, 0.2);
+    color: white;
+  }
+  .pill-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  .pill-btn {
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    padding: 4px 10px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .pill-btn.active {
+    color: white;
+    border-color: rgba(88, 166, 255, 0.6);
+    background: rgba(88, 166, 255, 0.18);
+  }
+  .pill-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .window-defaults .number-pair {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .window-defaults .number-pair input,
+  .window-defaults .number-input {
+    width: 72px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--glass-border);
+    color: white;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
 
   /* Custom Scrollbar */
   .content-area::-webkit-scrollbar { width: 6px; }

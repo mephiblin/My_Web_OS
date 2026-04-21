@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { currentDesktopId } from './desktopStore.js';
+import { windowDefaultsSettings } from './windowDefaultsStore.js';
 
 export const windows = writable([]);
 export const activeWindowId = writable(null);
@@ -45,6 +46,15 @@ activeWindowId.subscribe(id => saveState(get(windows), id));
 export function openWindow(app, data = null) {
   const currentWindows = get(windows);
   const windowConfig = app.window || {};
+  const defaults = get(windowDefaultsSettings);
+  const mergedWindowConfig = {
+    width: defaults.defaultWidth,
+    height: defaults.defaultHeight,
+    minWidth: defaults.minWidth,
+    minHeight: defaults.minHeight,
+    titleBarHeight: defaults.titleBarHeight,
+    ...windowConfig
+  };
   
   // Singleton check
   if (app.singleton) {
@@ -66,12 +76,13 @@ export function openWindow(app, data = null) {
       data,
       x: 100 + items.length * 30,
       y: 100 + items.length * 30,
-      width: Number.isFinite(Number(windowConfig.width)) ? Number(windowConfig.width) : 800,
-      height: Number.isFinite(Number(windowConfig.height)) ? Number(windowConfig.height) : 600,
+      width: Number.isFinite(Number(mergedWindowConfig.width)) ? Number(mergedWindowConfig.width) : defaults.defaultWidth,
+      height: Number.isFinite(Number(mergedWindowConfig.height)) ? Number(mergedWindowConfig.height) : defaults.defaultHeight,
       minimized: false,
       maximized: false,
       zIndex: maxZ + 1,
-      desktopId: get(currentDesktopId)
+      desktopId: get(currentDesktopId),
+      window: mergedWindowConfig
     };
     
     activeWindowId.set(newId);

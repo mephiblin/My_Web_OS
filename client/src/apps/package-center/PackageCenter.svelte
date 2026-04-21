@@ -7,9 +7,11 @@
     createPackageBackup,
     controlRuntimeApp,
     fetchInstalledOpsSummary,
+    fetchPackageManifest,
     fetchInstalledPackages,
     fetchRegistryInstallPreflight,
     fetchPackageLifecycle,
+    preflightPackageManifestUpdate,
     fetchRuntimeApps,
     fetchRuntimeEvents,
     fetchRuntimeLogs,
@@ -18,7 +20,10 @@
     rollbackPackageBackup,
     runPackageHealth,
     stopRuntimeApp,
-    updatePackageChannel
+    updatePackageManifest,
+    updatePackageChannel,
+    wizardCreatePackage,
+    wizardPreflightPackage
   } from './api.js';
   import { openWindow, windows, closeWindow } from '../../core/stores/windowStore.js';
 
@@ -53,16 +58,155 @@
   let lifecycleLoading = $state('');
   let lifecycleActioning = $state('');
   let healthLoading = $state('');
+  let manifestEditorByApp = $state({});
   let scaffoldingTemplateId = $state('');
   let backupNotesByApp = $state({});
   let selectedBackupByApp = $state({});
   let installReview = $state(null);
+  let wizardPhase = $state('draft');
+  let wizardLoadingPreflight = $state(false);
+  let wizardCreating = $state(false);
+  let wizardReview = $state(null);
+
+  let wizardDraft = $state({
+    id: '',
+    title: '',
+    description: '',
+    version: '0.1.0',
+    appType: 'app',
+    runtimeType: 'sandbox-html',
+    entry: 'index.html',
+    permissions: '',
+    templateId: ''
+  });
 
   let sourceForm = $state({
     id: '',
     title: '',
     url: ''
   });
+
+  function normalizePermissionList(rawValue) {
+    return String(rawValue || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function updateWizardDraft(field, value) {
+    wizardDraft = {
+      ...wizardDraft,
+      [field]: value
+    };
+    if (wizardPhase === 'review') {
+      wizardPhase = 'draft';
+      wizardReview = null;
+    }
+  }
+
+  function buildWizardManifest() {
+    return {
+      id: String(wizardDraft.id || '').trim(),
+      title: String(wizardDraft.title || '').trim(),
+      description: String(wizardDraft.description || '').trim(),
+      version: String(wizardDraft.version || '').trim() || '0.1.0',
+      appType: String(wizardDraft.appType || 'app'),
+      runtime: {
+        runtimeType: String(wizardDraft.runtimeType || 'sandbox-html'),
+        entry: String(wizardDraft.entry || '').trim()
+      },
+      permissions: normalizePermissionList(wizardDraft.permissions)
+    };
+  }
+
+  async function runWizardPreflight() {
+    wizardLoadingPreflight = true;
+    wizardReview = null;
+    clearFeedback();
+    try {
+      const manifest = buildWizardManifest();
+      const response = await wizardPreflightPackage(manifest, wizardDraft.templateId);
+      const raw = response?.review || response?.preflight || response?.data || response || {};
+      const blockers = normalizeReviewItems(
+        readPreflightField(raw, [
+          ['executionReadiness', 'blockers'],
+          'blockers'
+        ], []),
+        'blocker'
+      ).map((item) => ({
+        ...item,
+        status: 'fail'
+      }));
+      const decision = normalizeReviewDecision(
+        readPreflightField(raw, [
+          ['executionReadiness', 'status'],
+          'decision',
+          'status',
+          'result',
+          'overallStatus'
+        ], blockers.length > 0 ? 'blocked' : 'warn')
+      );
+      const blocked = Boolean(
+        readPreflightField(raw, [
+          ['executionReadiness', 'blocked'],
+          'blocked',
+          'isBlocked'
+        ], false)
+      ) || blockers.length > 0 || decision === 'blocked';
+
+      wizardReview = {
+        decision,
+        blocked,
+        summary: normalizeReviewText(
+          readPreflightField(raw, ['summary', 'message'], blocked ? 'Preflight review is blocked.' : 'Preflight review is complete.')
+        ),
+        blockers,
+        source: response ? 'preflight-endpoint' : 'fallback'
+      };
+      wizardPhase = 'review';
+    } catch (err) {
+      wizardReview = {
+        decision: 'blocked',
+        blocked: true,
+        summary: err.message || 'Package preflight failed.',
+        blockers: [],
+        source: 'preflight-endpoint'
+      };
+      wizardPhase = 'review';
+      error = err.message || 'Package preflight failed.';
+    } finally {
+      wizardLoadingPreflight = false;
+    }
+  }
+
+  async function createPackageFromWizard() {
+    if (!wizardReview || wizardReview.blocked) return;
+    wizardCreating = true;
+    clearFeedback();
+    try {
+      const manifest = buildWizardManifest();
+      const response = await wizardCreatePackage(manifest);
+      const createdId = String(response?.package?.id || response?.appId || manifest.id || '').trim();
+      message = createdId
+        ? `Package "${createdId}" created successfully.`
+        : 'Package created successfully.';
+      wizardPhase = 'draft';
+      wizardReview = null;
+      wizardDraft = {
+        ...wizardDraft,
+        id: '',
+        title: '',
+        description: '',
+        permissions: ''
+      };
+      await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
+      activeCategory = CATEGORY.INSTALLED;
+    } catch (err) {
+      error = err.message || 'Package create failed.';
+    } finally {
+      wizardCreating = false;
+    }
+  }
 
   function slugify(value) {
     return String(value || '')
@@ -229,6 +373,34 @@
       ...selectedBackupByApp,
       [appId]: String(backupId || '')
     };
+  }
+
+  function getManifestEditorState(appId) {
+    return manifestEditorByApp[appId] || null;
+  }
+
+  function isManifestEditorOpen(appId) {
+    return Boolean(getManifestEditorState(appId)?.open);
+  }
+
+  function updateManifestEditorState(appId, updater) {
+    const previous = getManifestEditorState(appId) || {
+      open: false,
+      loading: false,
+      loadError: '',
+      text: '',
+      parsed: null,
+      parseError: '',
+      preflightLoading: false,
+      preflight: null,
+      saving: false
+    };
+    const next = typeof updater === 'function' ? updater(previous) : { ...previous, ...updater };
+    manifestEditorByApp = {
+      ...manifestEditorByApp,
+      [appId]: next
+    };
+    return next;
   }
 
   function getSourcePackageCount(sourceId) {
@@ -471,6 +643,50 @@
       backupSummary,
       backupChecks,
       blockerItems,
+      source: payload ? 'preflight-endpoint' : 'fallback'
+    };
+  }
+
+  function normalizeManifestPreflight(payload = {}) {
+    const raw = payload?.review || payload?.preflight || payload?.data || payload || {};
+    const blockers = normalizeReviewItems(
+      readPreflightField(raw, [
+        ['executionReadiness', 'blockers'],
+        'blockers'
+      ], []),
+      'blocker'
+    ).map((item) => ({
+      ...item,
+      status: 'fail'
+    }));
+    const decision = normalizeReviewDecision(
+      readPreflightField(raw, [
+        ['executionReadiness', 'status'],
+        'decision',
+        'status',
+        'result',
+        'overallStatus'
+      ], blockers.length > 0 ? 'blocked' : 'warn')
+    );
+    const blocked = Boolean(
+      readPreflightField(raw, [
+        ['executionReadiness', 'blocked'],
+        'blocked',
+        'isBlocked'
+      ], false)
+    ) || blockers.length > 0 || decision === 'blocked';
+
+    return {
+      decision,
+      blocked,
+      blockers,
+      summary: normalizeReviewText(
+        readPreflightField(raw, [
+          ['executionReadiness', 'summary'],
+          'summary',
+          'message'
+        ], blocked ? 'Manifest preflight is blocked.' : 'Manifest preflight completed.')
+      ),
       source: payload ? 'preflight-endpoint' : 'fallback'
     };
   }
@@ -952,6 +1168,153 @@
     }
   }
 
+  async function openManifestEditor(pkg) {
+    updateManifestEditorState(pkg.id, {
+      open: true,
+      loading: true,
+      loadError: '',
+      text: '',
+      parsed: null,
+      parseError: '',
+      preflightLoading: false,
+      preflight: null,
+      saving: false
+    });
+
+    try {
+      const response = await withTimeout(
+        fetchPackageManifest(pkg.id),
+        10000,
+        'Manifest request timed out.'
+      );
+      const manifestValue = response?.manifest ?? response;
+      if (!manifestValue || typeof manifestValue !== 'object' || Array.isArray(manifestValue)) {
+        throw new Error('Manifest response is not a valid object.');
+      }
+
+      updateManifestEditorState(pkg.id, {
+        loading: false,
+        loadError: '',
+        text: JSON.stringify(manifestValue, null, 2),
+        parsed: manifestValue,
+        parseError: '',
+        preflight: null
+      });
+    } catch (err) {
+      updateManifestEditorState(pkg.id, {
+        loading: false,
+        loadError: err.message || 'Failed to load manifest.'
+      });
+    }
+  }
+
+  function closeManifestEditor(pkg) {
+    updateManifestEditorState(pkg.id, {
+      open: false
+    });
+  }
+
+  function onManifestEditorInput(pkg, value) {
+    let parsed = null;
+    let parseError = '';
+    try {
+      parsed = JSON.parse(value);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        parseError = 'Manifest JSON must be an object at the root.';
+      }
+    } catch (err) {
+      parseError = err.message || 'Invalid JSON.';
+    }
+
+    updateManifestEditorState(pkg.id, {
+      text: value,
+      parsed,
+      parseError,
+      preflight: null
+    });
+  }
+
+  async function runManifestPreflight(pkg) {
+    const current = getManifestEditorState(pkg.id);
+    if (!current || current.loading || current.parseError || !current.parsed) {
+      return;
+    }
+
+    updateManifestEditorState(pkg.id, {
+      preflightLoading: true
+    });
+    clearFeedback();
+
+    try {
+      const response = await withTimeout(
+        preflightPackageManifestUpdate(pkg.id, current.parsed),
+        12000,
+        'Manifest preflight timed out.'
+      );
+      updateManifestEditorState(pkg.id, {
+        preflightLoading: false,
+        preflight: normalizeManifestPreflight(response)
+      });
+      message = `"${pkg.title}" manifest preflight completed.`;
+    } catch (err) {
+      updateManifestEditorState(pkg.id, {
+        preflightLoading: false,
+        preflight: {
+          decision: 'blocked',
+          blocked: true,
+          blockers: [],
+          summary: err.message || 'Manifest preflight failed.',
+          source: 'preflight-endpoint'
+        }
+      });
+      error = err.message || 'Manifest preflight failed.';
+    }
+  }
+
+  async function saveManifestUpdate(pkg) {
+    const current = getManifestEditorState(pkg.id);
+    if (!current || current.loading || current.saving || current.parseError || !current.parsed) {
+      return;
+    }
+    if (current.preflight?.blocked) {
+      error = 'Manifest preflight is blocked. Resolve blockers before saving.';
+      return;
+    }
+
+    updateManifestEditorState(pkg.id, {
+      saving: true
+    });
+    clearFeedback();
+
+    try {
+      await withTimeout(
+        updatePackageManifest(pkg.id, current.parsed),
+        15000,
+        'Manifest update timed out.'
+      );
+      await Promise.all([
+        loadInstalledPackages(),
+        loadRuntimeStatuses(),
+        hydrateOpsConsole(pkg.id, { silent: true })
+      ]);
+      message = `"${pkg.title}" manifest saved.`;
+      await openManifestEditor(pkg);
+    } catch (err) {
+      error = err.message || 'Manifest update failed.';
+      updateManifestEditorState(pkg.id, {
+        saving: false
+      });
+    }
+  }
+
+  async function toggleManifestEditor(pkg) {
+    if (isManifestEditorOpen(pkg.id)) {
+      closeManifestEditor(pkg);
+      return;
+    }
+    await openManifestEditor(pkg);
+  }
+
   function applyOpsSummary(appId, summary) {
     lifecycleByApp = {
       ...lifecycleByApp,
@@ -1041,6 +1404,11 @@
       healthByApp = { ...healthByApp, [pkg.id]: null };
       consoleOpenByApp = { ...consoleOpenByApp, [pkg.id]: false };
       selectedBackupByApp = { ...selectedBackupByApp, [pkg.id]: '' };
+      {
+        const nextManifestEditorByApp = { ...manifestEditorByApp };
+        delete nextManifestEditorByApp[pkg.id];
+        manifestEditorByApp = nextManifestEditorByApp;
+      }
       await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
     } catch (err) {
       error = err.message || '?⑦궎吏 ?쒓굅???ㅽ뙣?덉뒿?덈떎.';
@@ -1145,6 +1513,109 @@
             </div>
           </div>
         {/if}
+
+        <div class="wizard-panel">
+          <div class="wizard-head">
+            <div>
+              <div class="section-title">Package Creation Wizard</div>
+              <div class="runtime-log-empty">Draft manifest, run preflight review, then create.</div>
+            </div>
+            <div class="wizard-steps">
+              <span class="wizard-step {wizardPhase === 'draft' ? 'active' : ''}">1. Draft</span>
+              <span class="wizard-step {wizardPhase === 'review' ? 'active' : ''}">2. Review</span>
+            </div>
+          </div>
+          <div class="wizard-form-grid">
+            <input
+              type="text"
+              placeholder="id (e.g. demo-notes)"
+              value={wizardDraft.id}
+              oninput={(event) => updateWizardDraft('id', event.currentTarget.value)}
+            />
+            <input
+              type="text"
+              placeholder="title"
+              value={wizardDraft.title}
+              oninput={(event) => updateWizardDraft('title', event.currentTarget.value)}
+            />
+            <input
+              type="text"
+              placeholder="description"
+              value={wizardDraft.description}
+              oninput={(event) => updateWizardDraft('description', event.currentTarget.value)}
+            />
+            <input
+              type="text"
+              placeholder="version"
+              value={wizardDraft.version}
+              oninput={(event) => updateWizardDraft('version', event.currentTarget.value)}
+            />
+            <select value={wizardDraft.appType} onchange={(event) => updateWizardDraft('appType', event.currentTarget.value)}>
+              <option value="app">app</option>
+              <option value="widget">widget</option>
+              <option value="service">service</option>
+              <option value="hybrid">hybrid</option>
+              <option value="developer">developer</option>
+            </select>
+            <select value={wizardDraft.runtimeType} onchange={(event) => updateWizardDraft('runtimeType', event.currentTarget.value)}>
+              <option value="sandbox-html">sandbox-html</option>
+              <option value="process-node">process-node</option>
+              <option value="process-python">process-python</option>
+              <option value="binary">binary</option>
+            </select>
+            <input
+              type="text"
+              placeholder="entry (e.g. index.html)"
+              value={wizardDraft.entry}
+              oninput={(event) => updateWizardDraft('entry', event.currentTarget.value)}
+            />
+            <input
+              type="text"
+              placeholder="permissions (comma-separated)"
+              value={wizardDraft.permissions}
+              oninput={(event) => updateWizardDraft('permissions', event.currentTarget.value)}
+            />
+          </div>
+          <div class="wizard-actions">
+            <button class="btn ghost" onclick={runWizardPreflight} disabled={wizardLoadingPreflight || wizardCreating}>
+              {wizardLoadingPreflight ? 'Reviewing...' : 'Run Preflight'}
+            </button>
+            <button
+              class="btn primary"
+              onclick={createPackageFromWizard}
+              disabled={wizardCreating || wizardLoadingPreflight || !wizardReview || wizardReview.blocked}
+            >
+              {wizardCreating ? 'Creating...' : 'Create Package'}
+            </button>
+          </div>
+          {#if wizardReview}
+            <div class="preflight-panel">
+              <div class="preflight-head">
+                <div class="preflight-title">
+                  <strong>Wizard Preflight</strong>
+                  <span class="preflight-decision {wizardReview.blocked ? 'blocked' : wizardReview.decision}">
+                    {wizardReview.blocked ? 'BLOCKED' : String(wizardReview.decision || 'warn').toUpperCase()}
+                  </span>
+                </div>
+                <div class="runtime-log-empty">{wizardReview.source}</div>
+              </div>
+              <div class="preflight-summary-inline">{wizardReview.summary}</div>
+              {#if wizardReview.blockers.length > 0}
+                <div class="preflight-list">
+                  {#each wizardReview.blockers as blocker}
+                    <div class="preflight-item">
+                      <span class="preflight-item-status fail">FAIL</span>
+                      <strong>{blocker.label}</strong>
+                      {#if blocker.detail}
+                        <span class="preflight-item-detail">{blocker.detail}</span>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
 
         <div class="store-categories">
           <button class="store-filter {activeStoreSource === 'all' ? 'active' : ''}" onclick={() => activeStoreSource = 'all'}>
@@ -1505,6 +1976,93 @@
                       </div>
                     </div>
 
+                    <div class="ops-row">
+                      <div class="ops-group">
+                        <label>Manifest Editor</label>
+                        <div class="ops-inline">
+                          <button class="btn tiny ghost" onclick={() => toggleManifestEditor(pkg)}>
+                            {isManifestEditorOpen(pkg.id) ? 'Close Editor' : 'Open Editor'}
+                          </button>
+                          {#if isManifestEditorOpen(pkg.id)}
+                            <button
+                              class="btn tiny ghost"
+                              onclick={() => openManifestEditor(pkg)}
+                              disabled={Boolean(getManifestEditorState(pkg.id)?.loading) || Boolean(getManifestEditorState(pkg.id)?.saving)}
+                            >
+                              {getManifestEditorState(pkg.id)?.loading ? 'Loading...' : 'Reload'}
+                            </button>
+                          {/if}
+                        </div>
+                        {#if isManifestEditorOpen(pkg.id)}
+                          <div class="manifest-editor-panel">
+                            {#if getManifestEditorState(pkg.id)?.loading}
+                              <div class="runtime-log-empty">Loading manifest...</div>
+                            {:else if getManifestEditorState(pkg.id)?.loadError}
+                              <div class="preflight-blocked-reason">{getManifestEditorState(pkg.id)?.loadError}</div>
+                            {:else}
+                              <textarea
+                                class="manifest-editor-textarea"
+                                value={getManifestEditorState(pkg.id)?.text || ''}
+                                oninput={(event) => onManifestEditorInput(pkg, event.currentTarget.value)}
+                                spellcheck="false"
+                              ></textarea>
+                              {#if getManifestEditorState(pkg.id)?.parseError}
+                                <div class="manifest-parse-error">{getManifestEditorState(pkg.id)?.parseError}</div>
+                              {/if}
+                              {#if getManifestEditorState(pkg.id)?.preflight}
+                                <div class="manifest-preflight-head">
+                                  <span class="preflight-decision {getManifestEditorState(pkg.id)?.preflight?.blocked ? 'blocked' : getManifestEditorState(pkg.id)?.preflight?.decision}">
+                                    {getManifestEditorState(pkg.id)?.preflight?.blocked ? 'BLOCKED' : getInstallReviewDecisionLabel(getManifestEditorState(pkg.id)?.preflight)}
+                                  </span>
+                                  <span class="preflight-summary-inline">{getManifestEditorState(pkg.id)?.preflight?.summary}</span>
+                                </div>
+                                {#if getManifestEditorState(pkg.id)?.preflight?.blockers?.length}
+                                  <div class="preflight-list">
+                                    {#each getManifestEditorState(pkg.id)?.preflight?.blockers || [] as blocker}
+                                      <div class="preflight-item">
+                                        <span class="preflight-item-status fail">FAIL</span>
+                                        <span>{blocker.label}</span>
+                                        {#if blocker.detail}
+                                          <span class="preflight-item-detail">{blocker.detail}</span>
+                                        {/if}
+                                      </div>
+                                    {/each}
+                                  </div>
+                                {/if}
+                              {/if}
+                              <div class="manifest-editor-actions">
+                                <button
+                                  class="btn tiny ghost"
+                                  onclick={() => runManifestPreflight(pkg)}
+                                  disabled={
+                                    Boolean(getManifestEditorState(pkg.id)?.preflightLoading)
+                                    || Boolean(getManifestEditorState(pkg.id)?.saving)
+                                    || Boolean(getManifestEditorState(pkg.id)?.parseError)
+                                    || !getManifestEditorState(pkg.id)?.parsed
+                                  }
+                                >
+                                  {getManifestEditorState(pkg.id)?.preflightLoading ? 'Preflight...' : 'Run Preflight'}
+                                </button>
+                                <button
+                                  class="btn tiny primary"
+                                  onclick={() => saveManifestUpdate(pkg)}
+                                  disabled={
+                                    Boolean(getManifestEditorState(pkg.id)?.saving)
+                                    || Boolean(getManifestEditorState(pkg.id)?.preflightLoading)
+                                    || Boolean(getManifestEditorState(pkg.id)?.parseError)
+                                    || !getManifestEditorState(pkg.id)?.parsed
+                                    || Boolean(getManifestEditorState(pkg.id)?.preflight?.blocked)
+                                  }
+                                >
+                                  {getManifestEditorState(pkg.id)?.saving ? 'Saving...' : 'Save Manifest'}
+                                </button>
+                              </div>
+                            {/if}
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+
                     <div class="ops-row split">
                       <div class="ops-panel">
                         <div class="ops-panel-title">Lifecycle Summary</div>
@@ -1773,6 +2331,64 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  .wizard-panel {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    padding: 10px;
+    background: rgba(2, 6, 23, 0.35);
+    display: grid;
+    gap: 10px;
+  }
+
+  .wizard-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .wizard-steps {
+    display: inline-flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .wizard-step {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: #cbd5e1;
+    background: rgba(51, 65, 85, 0.25);
+  }
+
+  .wizard-step.active {
+    color: #dbeafe;
+    border-color: rgba(56, 189, 248, 0.34);
+    background: rgba(14, 165, 233, 0.16);
+  }
+
+  .wizard-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 8px;
+  }
+
+  .wizard-form-grid select {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.65);
+    color: #e2e8f0;
+    padding: 9px 10px;
+  }
+
+  .wizard-actions {
+    display: inline-flex;
+    gap: 8px;
+    flex-wrap: wrap;
   }
 
   .store-filter {
@@ -2217,6 +2833,52 @@
   .preflight-buttons {
     display: inline-flex;
     gap: 8px;
+  }
+
+  .manifest-editor-panel {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.52);
+    padding: 8px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .manifest-editor-textarea {
+    width: 100%;
+    min-height: 220px;
+    resize: vertical;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.72);
+    color: #e2e8f0;
+    padding: 8px;
+    font-size: 12px;
+    line-height: 1.45;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  }
+
+  .manifest-parse-error {
+    border: 1px dashed rgba(248, 113, 113, 0.38);
+    border-radius: 8px;
+    background: rgba(127, 29, 29, 0.22);
+    color: #fecaca;
+    font-size: 12px;
+    padding: 7px 8px;
+  }
+
+  .manifest-preflight-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .manifest-editor-actions {
+    display: inline-flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   @media (max-width: 1000px) {

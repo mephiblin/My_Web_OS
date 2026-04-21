@@ -2,6 +2,8 @@
   import { X, Minus, Square, LayoutGrid } from 'lucide-svelte';
   import { closeWindow, focusWindow, toggleMinimize, toggleMaximize } from './stores/windowStore.js';
   import { setSnapGhost, hideSnapGhost } from './stores/snapStore.js';
+  import { taskbarSettings } from './stores/taskbarStore.js';
+  import { windowDefaultsSettings } from './stores/windowDefaultsStore.js';
 
   let { window: win, active = false, children } = $props();
 
@@ -19,6 +21,12 @@
 
   let snapZone = $state(null); // 'left', 'right', 'top', null
   const iconComponent = $derived(win.iconComponent || (typeof win.icon === 'function' ? win.icon : LayoutGrid));
+  const taskbarHeight = $derived($taskbarSettings.compactMode ? 42 : 48);
+  const titleBarHeight = $derived(
+    Number.isFinite(Number(win.window?.titleBarHeight))
+      ? Number(win.window.titleBarHeight)
+      : $windowDefaultsSettings.titleBarHeight
+  );
 
   $effect(() => {
     if (!dragging && !resizing) {
@@ -66,7 +74,6 @@
         
         // Snap detection
         const edgeThreshold = 20;
-        const taskbarHeight = 48;
         const availableHeight = globalThis.innerHeight - taskbarHeight;
 
         if (cx < edgeThreshold) {
@@ -88,8 +95,12 @@
       } else if (resizing && !win.maximized) {
         const dx = cx - startX;
         const dy = cy - startY;
-        const minWidth = Number.isFinite(Number(win.window?.minWidth)) ? Number(win.window.minWidth) : 300;
-        const minHeight = Number.isFinite(Number(win.window?.minHeight)) ? Number(win.window.minHeight) : 200;
+        const minWidth = Number.isFinite(Number(win.window?.minWidth))
+          ? Number(win.window.minWidth)
+          : $windowDefaultsSettings.minWidth;
+        const minHeight = Number.isFinite(Number(win.window?.minHeight))
+          ? Number(win.window.minHeight)
+          : $windowDefaultsSettings.minHeight;
         localWidth = Math.max(minWidth, localWidth + dx);
         localHeight = Math.max(minHeight, localHeight + dy);
         win.width = localWidth;
@@ -103,7 +114,6 @@
 
   function handleMouseUp() {
     if (dragging && snapZone) {
-      const taskbarHeight = 48;
       const availableHeight = globalThis.innerHeight - taskbarHeight;
 
       if (snapZone === 'left') {
@@ -138,10 +148,10 @@
 <div
   bind:this={winEl}
   class="window glass-effect window-shadow {active ? 'active' : ''} {win.minimized ? 'minimized' : ''} {win.maximized ? 'maximized' : ''} {dragging || resizing ? 'interacting' : ''}"
-  style="transform: {win.maximized ? 'none' : `translate3d(${localX}px, ${localY}px, 0)`}; width: {win.maximized ? '100%' : localWidth + 'px'}; height: {win.maximized ? 'calc(100% - 48px)' : localHeight + 'px'}; z-index: {win.zIndex}"
+  style="transform: {win.maximized ? 'none' : `translate3d(${localX}px, ${localY}px, 0)`}; width: {win.maximized ? '100%' : localWidth + 'px'}; height: {win.maximized ? `calc(100% - ${taskbarHeight}px)` : localHeight + 'px'}; z-index: {win.zIndex}"
   onmousedown={handleMouseDown}
 >
-  <div class="title-bar" ondblclick={() => toggleMaximize(win.id)}>
+  <div class="title-bar" style:height={`${titleBarHeight}px`} ondblclick={() => toggleMaximize(win.id)}>
     <div class="title">
       {#if win.iconType === 'image' && win.iconUrl}
         <img class="title-icon-image" src={win.iconUrl} alt={win.title} loading="lazy" />
