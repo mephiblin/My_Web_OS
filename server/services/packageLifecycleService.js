@@ -238,18 +238,221 @@ async function addDirectoryToZip(zip, rootPath, relativePath = '') {
 }
 
 function compareVersions(a, b) {
-  const parse = (version) => String(version || '')
-    .split('.')
-    .map((part) => Number(part.replace(/[^0-9].*$/, '')) || 0)
-    .slice(0, 3);
-
-  const left = parse(a);
-  const right = parse(b);
-  for (let index = 0; index < 3; index += 1) {
-    const diff = (left[index] || 0) - (right[index] || 0);
-    if (diff !== 0) return diff;
+  const left = parseSemVer(a);
+  const right = parseSemVer(b);
+  if (!left || !right) {
+    const parse = (version) => String(version || '')
+      .split('.')
+      .map((part) => Number(part.replace(/[^0-9].*$/, '')) || 0)
+      .slice(0, 3);
+    const leftParts = parse(a);
+    const rightParts = parse(b);
+    for (let index = 0; index < 3; index += 1) {
+      const diff = (leftParts[index] || 0) - (rightParts[index] || 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
   }
+  return compareSemVer(left, right);
+}
+
+function stripVersionPrefix(value = '') {
+  return String(value || '').trim().replace(/^v/i, '');
+}
+
+function parseSemVer(value) {
+  const raw = stripVersionPrefix(value);
+  const match = raw.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);
+  if (!match) return null;
+  const major = Number(match[1] || 0);
+  const minor = Number(match[2] || 0);
+  const patch = Number(match[3] || 0);
+  if (!Number.isFinite(major) || !Number.isFinite(minor) || !Number.isFinite(patch)) {
+    return null;
+  }
+
+  const prereleaseRaw = String(match[4] || '').trim();
+  const prerelease = prereleaseRaw
+    ? prereleaseRaw.split('.').filter(Boolean).map((segment) => (
+      /^\d+$/.test(segment)
+        ? { type: 'number', value: Number(segment) }
+        : { type: 'string', value: segment }
+    ))
+    : [];
+
+  const segmentCount = raw.split('-')[0].split('.').length;
+
+  return {
+    major,
+    minor,
+    patch,
+    prerelease,
+    segmentCount
+  };
+}
+
+function compareSemVer(left, right) {
+  if (left.major !== right.major) return left.major - right.major;
+  if (left.minor !== right.minor) return left.minor - right.minor;
+  if (left.patch !== right.patch) return left.patch - right.patch;
+
+  const leftPre = left.prerelease || [];
+  const rightPre = right.prerelease || [];
+  if (leftPre.length === 0 && rightPre.length === 0) return 0;
+  if (leftPre.length === 0) return 1;
+  if (rightPre.length === 0) return -1;
+
+  const maxLen = Math.max(leftPre.length, rightPre.length);
+  for (let index = 0; index < maxLen; index += 1) {
+    const a = leftPre[index];
+    const b = rightPre[index];
+    if (!a && b) return -1;
+    if (a && !b) return 1;
+    if (!a && !b) return 0;
+    if (a.type === b.type) {
+      if (a.value < b.value) return -1;
+      if (a.value > b.value) return 1;
+      continue;
+    }
+    if (a.type === 'number') return -1;
+    return 1;
+  }
+
   return 0;
+}
+
+function hasPreReleaseMention(rangeValue = '') {
+  return /-[0-9A-Za-z]/.test(String(rangeValue || ''));
+}
+
+function matchesComparator(version, comparator, target) {
+  const cmp = compareSemVer(version, target);
+  if (comparator === '>') return cmp > 0;
+  if (comparator === '>=') return cmp >= 0;
+  if (comparator === '<') return cmp < 0;
+  if (comparator === '<=') return cmp <= 0;
+  return cmp === 0;
+}
+
+function incrementForCaret(base) {
+  if (base.major > 0) {
+    return { major: base.major + 1, minor: 0, patch: 0, prerelease: [], segmentCount: 3 };
+  }
+  if (base.minor > 0) {
+    return { major: 0, minor: base.minor + 1, patch: 0, prerelease: [], segmentCount: 3 };
+  }
+  return { major: 0, minor: 0, patch: base.patch + 1, prerelease: [], segmentCount: 3 };
+}
+
+function incrementForTilde(base) {
+  if (base.segmentCount <= 1) {
+    return { major: base.major + 1, minor: 0, patch: 0, prerelease: [], segmentCount: 3 };
+  }
+  return { major: base.major, minor: base.minor + 1, patch: 0, prerelease: [], segmentCount: 3 };
+}
+
+function parseRangeToken(token) {
+  const trimmed = String(token || '').trim();
+  if (!trimmed) return [];
+  if (trimmed === '*' || trimmed.toLowerCase() === 'x') return [{ kind: 'any' }];
+
+  const opMatch = trimmed.match(/^(<=|>=|<|>|=)?\s*(.+)$/);
+  if (!opMatch) return [{ kind: 'invalid' }];
+
+  const operator = opMatch[1] || '';
+  const versionText = stripVersionPrefix(opMatch[2]);
+  if (!versionText) return [{ kind: 'invalid' }];
+
+  if (versionText.startsWith('^')) {
+    const base = parseSemVer(versionText.slice(1));
+    if (!base) return [{ kind: 'invalid' }];
+    return [
+      { kind: 'cmp', op: '>=', version: base },
+      { kind: 'cmp', op: '<', version: incrementForCaret(base) }
+    ];
+  }
+
+  if (versionText.startsWith('~')) {
+    const base = parseSemVer(versionText.slice(1));
+    if (!base) return [{ kind: 'invalid' }];
+    return [
+      { kind: 'cmp', op: '>=', version: base },
+      { kind: 'cmp', op: '<', version: incrementForTilde(base) }
+    ];
+  }
+
+  if (operator) {
+    const parsed = parseSemVer(versionText);
+    if (!parsed) return [{ kind: 'invalid' }];
+    return [{ kind: 'cmp', op: operator || '=', version: parsed }];
+  }
+
+  const exact = parseSemVer(versionText);
+  if (!exact) return [{ kind: 'invalid' }];
+  if (exact.segmentCount >= 3 || exact.prerelease.length > 0) {
+    return [{ kind: 'cmp', op: '=', version: exact }];
+  }
+  if (exact.segmentCount === 1) {
+    return [
+      { kind: 'cmp', op: '>=', version: { ...exact, minor: 0, patch: 0, prerelease: [], segmentCount: 3 } },
+      { kind: 'cmp', op: '<', version: { major: exact.major + 1, minor: 0, patch: 0, prerelease: [], segmentCount: 3 } }
+    ];
+  }
+  return [
+    { kind: 'cmp', op: '>=', version: { ...exact, patch: 0, prerelease: [], segmentCount: 3 } },
+    { kind: 'cmp', op: '<', version: { major: exact.major, minor: exact.minor + 1, patch: 0, prerelease: [], segmentCount: 3 } }
+  ];
+}
+
+function matchesVersionRange(version, range) {
+  const parsedVersion = parseSemVer(version);
+  if (!parsedVersion) return false;
+
+  const normalizedRange = String(range || '*').trim();
+  if (!normalizedRange || normalizedRange === '*' || normalizedRange.toLowerCase() === 'x') {
+    return true;
+  }
+
+  if (parsedVersion.prerelease.length > 0 && !hasPreReleaseMention(normalizedRange)) {
+    return false;
+  }
+
+  const groups = normalizedRange.split('||').map((item) => item.trim()).filter(Boolean);
+  if (groups.length === 0) return true;
+
+  for (const group of groups) {
+    const tokens = group
+      .replace(/,/g, ' ')
+      .split(/\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (tokens.length === 0) return true;
+
+    let groupOk = true;
+    for (const token of tokens) {
+      const comparators = parseRangeToken(token);
+      if (comparators.length === 0) continue;
+
+      for (const comparator of comparators) {
+        if (comparator.kind === 'any') continue;
+        if (comparator.kind === 'invalid') {
+          groupOk = false;
+          break;
+        }
+        if (!matchesComparator(parsedVersion, comparator.op, comparator.version)) {
+          groupOk = false;
+          break;
+        }
+      }
+
+      if (!groupOk) break;
+    }
+
+    if (groupOk) return true;
+  }
+
+  return false;
 }
 
 const packageLifecycleService = {
@@ -258,6 +461,7 @@ const packageLifecycleService = {
   normalizeDependencies,
   normalizeCompatibility,
   compareVersions,
+  matchesVersionRange,
 
   async getLifecycle(appId, manifest = null) {
     const safeAppId = appPaths.assertSafeAppId(appId);

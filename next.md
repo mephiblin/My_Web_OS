@@ -1,142 +1,142 @@
-# 서비스 런타임 계층 상세 기획서 (`next.md`)
+﻿# ?쒕퉬???고???怨꾩링 ?곸꽭 湲고쉷??(`next.md`)
 
-## 1. 문서 목적
+## 1. 臾몄꽌 紐⑹쟻
 
-이 문서는 현재 `web_os` 프로젝트에 부족한 **서비스 런타임 계층(Service Runtime Layer)** 을 설계·구현하기 위한 실행 기준서다.  
-핵심은 다음 4가지를 명확히 하는 것이다.
+??臾몄꽌???꾩옱 `web_os` ?꾨줈?앺듃??遺議깊븳 **?쒕퉬???고???怨꾩링(Service Runtime Layer)** ???ㅺ퀎쨌援ы쁽?섍린 ?꾪븳 ?ㅽ뻾 湲곗??쒕떎.  
+?듭떖? ?ㅼ쓬 4媛吏瑜?紐낇솗???섎뒗 寃껋씠??
 
-1. 어떻게 구현할 것인가 (아키텍처/단계)
-2. 무엇을 해야 하는가 (작업 항목/우선순위)
-3. 기대되는 결과는 무엇인가 (기능/운영 효과)
-4. 작업이 실제로 어느 폴더/파일에서 일어나는가 (파일 맵)
+1. ?대뼸寃?援ы쁽??寃껋씤媛 (?꾪궎?띿쿂/?④퀎)
+2. 臾댁뾿???댁빞 ?섎뒗媛 (?묒뾽 ??ぉ/?곗꽑?쒖쐞)
+3. 湲곕??섎뒗 寃곌낵??臾댁뾿?멸? (湲곕뒫/?댁쁺 ?④낵)
+4. ?묒뾽???ㅼ젣濡??대뒓 ?대뜑/?뚯씪?먯꽌 ?쇱뼱?섎뒗媛 (?뚯씪 留?
 
 ---
 
-## 2. 현재 상태와 갭 분석
+## 2. ?꾩옱 ?곹깭? 媛?遺꾩꽍
 
-### 2.1 이미 구현된 것 (기반)
-- 패키지 설치/삭제/가져오기/내보내기/레지스트리 소스 관리
+### 2.1 ?대? 援ы쁽??寃?(湲곕컲)
+- ?⑦궎吏 ?ㅼ튂/??젣/媛?몄삤湲??대낫?닿린/?덉??ㅽ듃由??뚯뒪 愿由?
   - `server/routes/packages.js`
-- 샌드박스 앱 정적 실행 + 권한 기반 데이터 API
+- ?뚮뱶諛뺤뒪 ???뺤쟻 ?ㅽ뻾 + 沅뚰븳 湲곕컲 ?곗씠??API
   - `server/routes/sandbox.js`
   - `client/src/core/components/SandboxAppFrame.svelte`
-- 내부 백엔드 서비스 생명주기 관리(시작/중지/재시작)
+- ?대? 諛깆뿏???쒕퉬???앸챸二쇨린 愿由??쒖옉/以묒?/?ъ떆??
   - `server/services/serviceManager.js`
   - `server/routes/services.js`
 
-### 2.2 아직 없는 것 (핵심 갭)
-- 대규모 앱(예: 장시간 백그라운드 서비스, 별도 프로세스 필요 앱)을 위한 **실행 엔진**
-- 앱 단위 프로세스 관리(시작/중지/재시작/상태/헬스체크/자동복구)
-- 서비스 로그/메트릭 수집 및 운영 UI
-- 런타임 타입별 실행 프로필(예: `sandbox-html`, `process-node`, `process-python`, `binary`)
-- 설치 후 실행준비(install hook, dependency check) 표준화
+### 2.2 ?꾩쭅 ?녿뒗 寃?(?듭떖 媛?
+- ?洹쒕え ???? ?μ떆媛?諛깃렇?쇱슫???쒕퉬?? 蹂꾨룄 ?꾨줈?몄뒪 ?꾩슂 ?????꾪븳 **?ㅽ뻾 ?붿쭊**
+- ???⑥쐞 ?꾨줈?몄뒪 愿由??쒖옉/以묒?/?ъ떆???곹깭/?ъ뒪泥댄겕/?먮룞蹂듦뎄)
+- ?쒕퉬??濡쒓렇/硫뷀듃由??섏쭛 諛??댁쁺 UI
+- ?고?????낅퀎 ?ㅽ뻾 ?꾨줈???? `sandbox-html`, `process-node`, `process-python`, `binary`)
+- ?ㅼ튂 ???ㅽ뻾以鍮?install hook, dependency check) ?쒖???
 
-정리하면: 현재는 **패키지 관리 + 샌드박스 UI 런타임**은 있지만,  
-요구한 **서비스 런타임 계층**은 아직 본격적으로 구현되지 않았다.
-
----
-
-## 3. 목표와 비목표
-
-### 3.1 목표
-- Docker 의존 없이도 앱 단위 서비스 실행을 관리하는 런타임 계층 제공
-- 패키지 매니저에서 서비스형 앱까지 설치→실행→중지→제거 라이프사이클 통합
-- 보안/권한/자원 제한이 있는 운영 가능한 로컬 앱 생태계 기반 구축
-
-### 3.2 비목표 (초기 단계에서 제외)
-- Kubernetes 수준 오케스트레이션
-- 멀티노드 분산 스케줄링
-- 루트 권한이 필요한 전역 시스템 수정 자동화
-- 완전한 컨테이너 격리 보장 (초기에는 프로세스 격리 + 정책 게이트 중심)
+?뺣━?섎㈃: ?꾩옱??**?⑦궎吏 愿由?+ ?뚮뱶諛뺤뒪 UI ?고???*? ?덉?留?  
+?붽뎄??**?쒕퉬???고???怨꾩링**? ?꾩쭅 蹂멸꺽?곸쑝濡?援ы쁽?섏? ?딆븯??
 
 ---
 
-## 4. 기대되는 결과
+## 3. 紐⑺몴? 鍮꾨ぉ??
 
-### 4.1 사용자 관점
-- 패키지 센터에서 서비스형 앱을 설치 후 즉시 실행/중지/재시작 가능
-- 앱이 창(UI)만 있는 형태인지, 백그라운드 서비스가 있는 형태인지 명확히 구분됨
-- 설치된 앱의 상태(실행중/중지/오류), 로그, 헬스 상태를 한 화면에서 확인 가능
+### 3.1 紐⑺몴
+- Docker ?섏〈 ?놁씠?????⑥쐞 ?쒕퉬???ㅽ뻾??愿由ы븯???고???怨꾩링 ?쒓났
+- ?⑦궎吏 留ㅻ땲??먯꽌 ?쒕퉬?ㅽ삎 ?깃퉴吏 ?ㅼ튂?믪떎?됤넂以묒??믪젣嫄??쇱씠?꾩궗?댄겢 ?듯빀
+- 蹂댁븞/沅뚰븳/?먯썝 ?쒗븳???덈뒗 ?댁쁺 媛?ν븳 濡쒖뺄 ???앺깭怨?湲곕컲 援ъ텞
 
-### 4.2 운영 관점
-- 장애 시 자동 재시작 정책으로 가용성 향상
-- 앱별 실행 이력/오류 로그 추적 가능
-- 설치/실행/삭제 흐름이 표준화되어 유지보수 비용 절감
-
-### 4.3 개발 관점
-- manifest에 런타임 정보를 선언하면 엔진이 동일 규칙으로 실행
-- 신규 런타임 타입 추가가 모듈 단위로 가능
-- 앱 제작자에게 요구되는 규약이 명확해짐
+### 3.2 鍮꾨ぉ??(珥덇린 ?④퀎?먯꽌 ?쒖쇅)
+- Kubernetes ?섏? ?ㅼ??ㅽ듃?덉씠??
+- 硫?곕끂??遺꾩궛 ?ㅼ?以꾨쭅
+- 猷⑦듃 沅뚰븳???꾩슂???꾩뿭 ?쒖뒪???섏젙 ?먮룞??
+- ?꾩쟾??而⑦뀒?대꼫 寃⑸━ 蹂댁옣 (珥덇린?먮뒗 ?꾨줈?몄뒪 寃⑸━ + ?뺤콉 寃뚯씠??以묒떖)
 
 ---
 
-## 5. 목표 아키텍처
+## 4. 湲곕??섎뒗 寃곌낵
 
-## 5.1 계층 구조
+### 4.1 ?ъ슜??愿??
+- ?⑦궎吏 ?쇳꽣?먯꽌 ?쒕퉬?ㅽ삎 ?깆쓣 ?ㅼ튂 ??利됱떆 ?ㅽ뻾/以묒?/?ъ떆??媛??
+- ?깆씠 李?UI)留??덈뒗 ?뺥깭?몄?, 諛깃렇?쇱슫???쒕퉬?ㅺ? ?덈뒗 ?뺥깭?몄? 紐낇솗??援щ텇??
+- ?ㅼ튂???깆쓽 ?곹깭(?ㅽ뻾以?以묒?/?ㅻ쪟), 濡쒓렇, ?ъ뒪 ?곹깭瑜????붾㈃?먯꽌 ?뺤씤 媛??
+
+### 4.2 ?댁쁺 愿??
+- ?μ븷 ???먮룞 ?ъ떆???뺤콉?쇰줈 媛?⑹꽦 ?μ긽
+- ?깅퀎 ?ㅽ뻾 ?대젰/?ㅻ쪟 濡쒓렇 異붿쟻 媛??
+- ?ㅼ튂/?ㅽ뻾/??젣 ?먮쫫???쒖??붾릺???좎?蹂댁닔 鍮꾩슜 ?덇컧
+
+### 4.3 媛쒕컻 愿??
+- manifest???고????뺣낫瑜??좎뼵?섎㈃ ?붿쭊???숈씪 洹쒖튃?쇰줈 ?ㅽ뻾
+- ?좉퇋 ?고??????異붽?媛 紐⑤뱢 ?⑥쐞濡?媛??
+- ???쒖옉?먯뿉寃??붽뎄?섎뒗 洹쒖빟??紐낇솗?댁쭚
+
+---
+
+## 5. 紐⑺몴 ?꾪궎?띿쿂
+
+## 5.1 怨꾩링 援ъ“
 1. **Package Layer**
-- 패키지 메타데이터/파일 관리
-- 설치, 제거, import/export
+- ?⑦궎吏 硫뷀??곗씠???뚯씪 愿由?
+- ?ㅼ튂, ?쒓굅, import/export
 
 2. **Runtime Definition Layer**
-- manifest 기반 실행 규칙 해석
-- 실행 프로필/권한/자원 제한 정책 계산
+- manifest 湲곕컲 ?ㅽ뻾 洹쒖튃 ?댁꽍
+- ?ㅽ뻾 ?꾨줈??沅뚰븳/?먯썝 ?쒗븳 ?뺤콉 怨꾩궛
 
-3. **Service Runtime Layer (신규 핵심)**
-- 앱 인스턴스 생성/시작/중지/재시작
-- 헬스체크/오토리커버리/로그 수집
-- 런타임 상태 저장 및 API 제공
+3. **Service Runtime Layer (?좉퇋 ?듭떖)**
+- ???몄뒪?댁뒪 ?앹꽦/?쒖옉/以묒?/?ъ떆??
+- ?ъ뒪泥댄겕/?ㅽ넗由ъ빱踰꾨━/濡쒓렇 ?섏쭛
+- ?고????곹깭 ???諛?API ?쒓났
 
 4. **UI Control Layer**
-- Package Center의 설치됨 탭에서 서비스 제어
-- 런타임 상태/로그 표시
+- Package Center???ㅼ튂????뿉???쒕퉬???쒖뼱
+- ?고????곹깭/濡쒓렇 ?쒖떆
 
-## 5.2 런타임 타입 (초기 권장)
-- `sandbox-html`: 기존 iframe 샌드박스
-- `process-node`: `node <entry>` 실행
-- `process-python`: `python <entry>` 실행
-- `binary`: 로컬 바이너리 실행(allowlist 기반)
-
----
-
-## 6. 구현 전략 (How)
-
-## Phase 0. 설계 고정
-### 해야 할 일
-- manifest 런타임 스펙 확정
-- 실행 상태 모델 정의(`stopped`, `starting`, `running`, `degraded`, `error`)
-- 런타임 API 스펙 확정
-
-### 기대 결과
-- 구현 중 스펙 변경 비용 최소화
-- 프론트/백엔드 동시 개발 가능
+## 5.2 ?고??????(珥덇린 沅뚯옣)
+- `sandbox-html`: 湲곗〈 iframe ?뚮뱶諛뺤뒪
+- `process-node`: `node <entry>` ?ㅽ뻾
+- `process-python`: `python <entry>` ?ㅽ뻾
+- `binary`: 濡쒖뺄 諛붿씠?덈━ ?ㅽ뻾(allowlist 湲곕컲)
 
 ---
 
-## Phase 1. 서비스 런타임 코어
-### 해야 할 일
-- `RuntimeManager`(앱 인스턴스 관리) 구현
-- `ProcessSupervisor`(spawn/stop/restart, exit 감시) 구현
-- 인스턴스 상태 영속화(JSON) 구현
+## 6. 援ы쁽 ?꾨왂 (How)
 
-### 기대 결과
-- 백엔드 단독으로 서비스형 앱 라이프사이클 관리 가능
+## Phase 0. ?ㅺ퀎 怨좎젙
+### ?댁빞 ????
+- manifest ?고????ㅽ럺 ?뺤젙
+- ?ㅽ뻾 ?곹깭 紐⑤뜽 ?뺤쓽(`stopped`, `starting`, `running`, `degraded`, `error`)
+- ?고???API ?ㅽ럺 ?뺤젙
 
----
-
-## Phase 2. manifest 확장 + 패키지 연동
-### 해야 할 일
-- manifest에 `runtime`, `service`, `healthcheck`, `resources` 필드 수용
-- 패키지 설치 시 런타임 검증(필수 필드, 엔트리 존재, 실행 가능성)
-- `/api/packages`와 런타임 상태 연결
-
-### 기대 결과
-- 설치 단계에서 실패를 사전 차단
-- 패키지/런타임 데이터 일관성 확보
+### 湲곕? 寃곌낵
+- 援ы쁽 以??ㅽ럺 蹂寃?鍮꾩슜 理쒖냼??
+- ?꾨줎??諛깆뿏???숈떆 媛쒕컻 媛??
 
 ---
 
-## Phase 3. 런타임 API
-### 해야 할 일
+## Phase 1. ?쒕퉬???고???肄붿뼱
+### ?댁빞 ????
+- `RuntimeManager`(???몄뒪?댁뒪 愿由? 援ы쁽
+- `ProcessSupervisor`(spawn/stop/restart, exit 媛먯떆) 援ы쁽
+- ?몄뒪?댁뒪 ?곹깭 ?곸냽??JSON) 援ы쁽
+
+### 湲곕? 寃곌낵
+- 諛깆뿏???⑤룆?쇰줈 ?쒕퉬?ㅽ삎 ???쇱씠?꾩궗?댄겢 愿由?媛??
+
+---
+
+## Phase 2. manifest ?뺤옣 + ?⑦궎吏 ?곕룞
+### ?댁빞 ????
+- manifest??`runtime`, `service`, `healthcheck`, `resources` ?꾨뱶 ?섏슜
+- ?⑦궎吏 ?ㅼ튂 ???고???寃利??꾩닔 ?꾨뱶, ?뷀듃由?議댁옱, ?ㅽ뻾 媛?μ꽦)
+- `/api/packages`? ?고????곹깭 ?곌껐
+
+### 湲곕? 寃곌낵
+- ?ㅼ튂 ?④퀎?먯꽌 ?ㅽ뙣瑜??ъ쟾 李⑤떒
+- ?⑦궎吏/?고????곗씠???쇨????뺣낫
+
+---
+
+## Phase 3. ?고???API
+### ?댁빞 ????
 - `GET /api/runtime/apps`
 - `GET /api/runtime/apps/:id`
 - `POST /api/runtime/apps/:id/start`
@@ -144,120 +144,120 @@
 - `POST /api/runtime/apps/:id/restart`
 - `GET /api/runtime/apps/:id/logs`
 
-### 기대 결과
-- UI와 CLI에서 동일 제어 인터페이스 사용 가능
+### 湲곕? 寃곌낵
+- UI? CLI?먯꽌 ?숈씪 ?쒖뼱 ?명꽣?섏씠???ъ슜 媛??
 
 ---
 
-## Phase 4. Package Center UI 통합
-### 해야 할 일
-- 설치됨 목록에 런타임 상태 배지 표시
-- 액션 분기:
-  - UI 앱: `열기`
-  - 서비스 앱: `시작/중지/재시작/로그`
-  - 하이브리드 앱: `열기 + 서비스 제어`
-- 오류 원인 표시(권한/의존성/실행 실패)
+## Phase 4. Package Center UI ?듯빀
+### ?댁빞 ????
+- ?ㅼ튂??紐⑸줉???고????곹깭 諛곗? ?쒖떆
+- ?≪뀡 遺꾧린:
+  - UI ?? `?닿린`
+  - ?쒕퉬???? `?쒖옉/以묒?/?ъ떆??濡쒓렇`
+  - ?섏씠釉뚮━???? `?닿린 + ?쒕퉬???쒖뼱`
+- ?ㅻ쪟 ?먯씤 ?쒖떆(沅뚰븳/?섏〈???ㅽ뻾 ?ㅽ뙣)
 
-### 기대 결과
-- 사용자 관점에서 “앱”과 “서비스”가 한 화면에서 관리됨
-
----
-
-## Phase 5. 보안/운영 강화
-### 해야 할 일
-- 실행 커맨드 allowlist
-- 환경변수 주입 정책(민감정보 마스킹)
-- 네트워크/파일 접근 범위 정책
-- 로그 보관/회전, 자동 재시작 정책, 크래시 루프 차단
-
-### 기대 결과
-- 프로덕션에 가까운 안정성/안전성 확보
+### 湲곕? 寃곌낵
+- ?ъ슜??愿?먯뿉???쒖빋?앷낵 ?쒖꽌鍮꾩뒪?앷? ???붾㈃?먯꽌 愿由щ맖
 
 ---
 
-## 7. 해야 하는 작업 상세 (체크리스트)
+## Phase 5. 蹂댁븞/?댁쁺 媛뺥솕
+### ?댁빞 ????
+- ?ㅽ뻾 而ㅻ㎤??allowlist
+- ?섍꼍蹂??二쇱엯 ?뺤콉(誘쇨컧?뺣낫 留덉뒪??
+- ?ㅽ듃?뚰겕/?뚯씪 ?묎렐 踰붿쐞 ?뺤콉
+- 濡쒓렇 蹂닿?/?뚯쟾, ?먮룞 ?ъ떆???뺤콉, ?щ옒??猷⑦봽 李⑤떒
 
-## 7.1 백엔드 코어
-- [ ] 런타임 상태 모델 정의
-- [ ] 프로세스 supervisor 모듈 구현
-- [ ] 런타임 manager 구현
-- [ ] 시작/중지/재시작 정책 구현
-- [ ] 헬스체크 훅 구현
-- [ ] 로그 버퍼/파일 저장 구현
+### 湲곕? 寃곌낵
+- ?꾨줈?뺤뀡??媛源뚯슫 ?덉젙???덉쟾???뺣낫
 
-## 7.2 패키지/manifest
-- [ ] manifest 스키마 확장
-- [ ] 설치 시 스키마 검증
-- [ ] 런타임 프로필 유효성 검사
-- [ ] 앱 유형(app/service/hybrid) 분기 로직 추가
+---
+
+## 7. ?댁빞 ?섎뒗 ?묒뾽 ?곸꽭 (泥댄겕由ъ뒪??
+
+## 7.1 諛깆뿏??肄붿뼱
+- [ ] ?고????곹깭 紐⑤뜽 ?뺤쓽
+- [ ] ?꾨줈?몄뒪 supervisor 紐⑤뱢 援ы쁽
+- [ ] ?고???manager 援ы쁽
+- [ ] ?쒖옉/以묒?/?ъ떆???뺤콉 援ы쁽
+- [ ] ?ъ뒪泥댄겕 ??援ы쁽
+- [ ] 濡쒓렇 踰꾪띁/?뚯씪 ???援ы쁽
+
+## 7.2 ?⑦궎吏/manifest
+- [ ] manifest ?ㅽ궎留??뺤옣
+- [ ] ?ㅼ튂 ???ㅽ궎留?寃利?
+- [ ] ?고????꾨줈???좏슚??寃??
+- [ ] ???좏삎(app/service/hybrid) 遺꾧린 濡쒖쭅 異붽?
 
 ## 7.3 API
-- [ ] 런타임 라우터 신규 작성
-- [ ] 기존 `/api/packages` 응답에 런타임 상태 연결
-- [ ] 권한 체크(관리자 인증 + 앱 권한) 적용
+- [ ] ?고????쇱슦???좉퇋 ?묒꽦
+- [ ] 湲곗〈 `/api/packages` ?묐떟???고????곹깭 ?곌껐
+- [ ] 沅뚰븳 泥댄겕(愿由ъ옄 ?몄쬆 + ??沅뚰븳) ?곸슜
 
-## 7.4 프론트
-- [ ] Package Center 설치됨 탭 UX 확장
-- [ ] 상태 배지/오류 패널/로그 뷰 추가
-- [ ] 장시간 작업(시작/중지) 로딩/타임아웃 UX 구현
+## 7.4 ?꾨줎??
+- [ ] Package Center ?ㅼ튂????UX ?뺤옣
+- [ ] ?곹깭 諛곗?/?ㅻ쪟 ?⑤꼸/濡쒓렇 酉?異붽?
+- [ ] ?μ떆媛??묒뾽(?쒖옉/以묒?) 濡쒕뵫/??꾩븘??UX 援ы쁽
 
-## 7.5 운영/품질
-- [ ] 테스트 시나리오(정상/오류/재시작 루프) 작성
-- [ ] 장애 복구 시나리오 작성
-- [ ] README/운영 문서 업데이트
+## 7.5 ?댁쁺/?덉쭏
+- [ ] ?뚯뒪???쒕굹由ъ삤(?뺤긽/?ㅻ쪟/?ъ떆??猷⑦봽) ?묒꽦
+- [ ] ?μ븷 蹂듦뎄 ?쒕굹由ъ삤 ?묒꽦
+- [ ] README/?댁쁺 臾몄꽌 ?낅뜲?댄듃
 
 ---
 
-## 8. 작업 폴더/파일 맵 (Where)
+## 8. ?묒뾽 ?대뜑/?뚯씪 留?(Where)
 
-아래는 실제로 수정/추가될 가능성이 높은 파일들이다.
+?꾨옒???ㅼ젣濡??섏젙/異붽???媛?μ꽦???믪? ?뚯씪?ㅼ씠??
 
-## 8.1 서버: 신규 파일(예정)
+## 8.1 ?쒕쾭: ?좉퇋 ?뚯씪(?덉젙)
 - `server/services/runtimeManager.js`
 - `server/services/processSupervisor.js`
 - `server/services/runtimeStateStore.js`
 - `server/services/runtimeProfiles.js`
 - `server/routes/runtime.js`
-- `server/utils/runtimePaths.js` (선택)
+- `server/utils/runtimePaths.js` (?좏깮)
 
-## 8.2 서버: 기존 파일 수정
+## 8.2 ?쒕쾭: 湲곗〈 ?뚯씪 ?섏젙
 - `server/index.js`
-  - 런타임 매니저 등록/초기화/종료 훅 연결
+  - ?고???留ㅻ땲? ?깅줉/珥덇린??醫낅즺 ???곌껐
 - `server/routes/packages.js`
-  - manifest 런타임 필드 파싱/검증
-  - 설치 결과와 런타임 상태 연결
+  - manifest ?고????꾨뱶 ?뚯떛/寃利?
+  - ?ㅼ튂 寃곌낵? ?고????곹깭 ?곌껐
 - `server/services/packageRegistryService.js`
-  - 앱 메타에 runtime/service 정보 병합
+  - ??硫뷀???runtime/service ?뺣낫 蹂묓빀
 - `server/config/defaults.json`
-  - 런타임 기본값(재시작 정책, 로그 제한 등) 추가
+  - ?고???湲곕낯媛??ъ떆???뺤콉, 濡쒓렇 ?쒗븳 ?? 異붽?
 - `server/config/serverConfig.js`
-  - 런타임 관련 설정 로딩
+  - ?고???愿???ㅼ젙 濡쒕뵫
 - `server/utils/inventoryPaths.js`
-  - 런타임 상태/로그 저장 경로 정의
+  - ?고????곹깭/濡쒓렇 ???寃쎈줈 ?뺤쓽
 
-## 8.3 저장소/인벤토리 구조
-- `server/storage/inventory/system/runtime-instances.json` (예정)
-- `server/storage/inventory/system/runtime-policies.json` (선택)
-- `server/storage/inventory/system/runtime-logs/` (예정)
+## 8.3 ??μ냼/?몃깽?좊━ 援ъ“
+- `server/storage/inventory/system/runtime-instances.json` (?덉젙)
+- `server/storage/inventory/system/runtime-policies.json` (?좏깮)
+- `server/storage/inventory/system/runtime-logs/` (?덉젙)
 
-## 8.4 클라이언트: 기존 파일 수정
+## 8.4 ?대씪?댁뼵?? 湲곗〈 ?뚯씪 ?섏젙
 - `client/src/apps/package-center/PackageCenter.svelte`
-  - 설치됨 탭 서비스 제어 UI
-  - 상태/로그 표시
+  - ?ㅼ튂?????쒕퉬???쒖뼱 UI
+  - ?곹깭/濡쒓렇 ?쒖떆
 - `client/src/utils/api.js`
-  - 런타임 API 호출 유틸 정리
+  - ?고???API ?몄텧 ?좏떥 ?뺣━
 - `client/src/core/components/SandboxAppFrame.svelte`
-  - 하이브리드 앱 실행/브리지 연계 보완 (필요 시)
+  - ?섏씠釉뚮━?????ㅽ뻾/釉뚮━吏 ?곌퀎 蹂댁셿 (?꾩슂 ??
 
-## 8.5 클라이언트: 신규 파일(선택)
+## 8.5 ?대씪?댁뼵?? ?좉퇋 ?뚯씪(?좏깮)
 - `client/src/apps/runtime-console/RuntimeConsole.svelte`
-  - 앱별 로그/상태 상세 뷰
+  - ?깅퀎 濡쒓렇/?곹깭 ?곸꽭 酉?
 - `client/src/apps/package-center/runtimeApi.js`
-  - 런타임 API 전용 호출 모듈
+  - ?고???API ?꾩슜 ?몄텧 紐⑤뱢
 
 ---
 
-## 9. manifest 확장안 (초안)
+## 9. manifest ?뺤옣??(珥덉븞)
 
 ```json
 {
@@ -289,109 +289,109 @@
 
 ---
 
-## 10. API 설계안 (초안)
+## 10. API ?ㅺ퀎??(珥덉븞)
 
-## 10.1 조회
+## 10.1 議고쉶
 - `GET /api/runtime/apps`
-  - 전체 앱 런타임 상태 목록
+  - ?꾩껜 ???고????곹깭 紐⑸줉
 - `GET /api/runtime/apps/:id`
-  - 단일 앱 상세 상태, 최근 에러, 리소스 요약
+  - ?⑥씪 ???곸꽭 ?곹깭, 理쒓렐 ?먮윭, 由ъ냼???붿빟
 
-## 10.2 제어
+## 10.2 ?쒖뼱
 - `POST /api/runtime/apps/:id/start`
 - `POST /api/runtime/apps/:id/stop`
 - `POST /api/runtime/apps/:id/restart`
 
-## 10.3 로그/진단
+## 10.3 濡쒓렇/吏꾨떒
 - `GET /api/runtime/apps/:id/logs?cursor=...`
 - `GET /api/runtime/apps/:id/events`
 
 ---
 
-## 11. 보안/안정성 기준
+## 11. 蹂댁븞/?덉젙??湲곗?
 
-### 11.1 보안
-- 실행 커맨드 화이트리스트(런타임 타입별)
-- 앱 루트 밖 경로 실행 금지
-- 민감 환경변수 기본 차단
-- 외부 레지스트리 소스 검증 강화(allowlist + 해시)
+### 11.1 蹂댁븞
+- ?ㅽ뻾 而ㅻ㎤???붿씠?몃━?ㅽ듃(?고?????낅퀎)
+- ??猷⑦듃 諛?寃쎈줈 ?ㅽ뻾 湲덉?
+- 誘쇨컧 ?섍꼍蹂??湲곕낯 李⑤떒
+- ?몃? ?덉??ㅽ듃由??뚯뒪 寃利?媛뺥솕(allowlist + ?댁떆)
 
-### 11.2 안정성
-- 크래시 루프 방지(`maxRetries`, cooldown)
-- 종료 시 graceful stop + timeout kill
-- 로그 파일 최대 크기/개수 제한
-- 서버 재시작 시 상태 복구
-
----
-
-## 12. 완료 기준 (Definition of Done)
-
-다음 조건을 충족하면 “서비스 런타임 계층 1차 완료”로 본다.
-
-1. 패키지 설치 후 서비스형 앱을 `start/stop/restart` 가능
-2. 설치됨 탭에서 실행 상태가 실시간(또는 polling) 반영
-3. 앱별 최근 로그 확인 가능
-4. 앱 crash 시 정책 기반 자동 재시작 동작
-5. 서버 재기동 후 런타임 상태 복구
-6. 권한/경로 위반 시 명확한 에러 코드 반환
+### 11.2 ?덉젙??
+- ?щ옒??猷⑦봽 諛⑹?(`maxRetries`, cooldown)
+- 醫낅즺 ??graceful stop + timeout kill
+- 濡쒓렇 ?뚯씪 理쒕? ?ш린/媛쒖닔 ?쒗븳
+- ?쒕쾭 ?ъ떆?????곹깭 蹂듦뎄
 
 ---
 
-## 13. 단계별 산출물
+## 12. ?꾨즺 湲곗? (Definition of Done)
 
-## Milestone A (코어)
+?ㅼ쓬 議곌굔??異⑹”?섎㈃ ?쒖꽌鍮꾩뒪 ?고???怨꾩링 1李??꾨즺?앸줈 蹂몃떎.
+
+1. ?⑦궎吏 ?ㅼ튂 ???쒕퉬?ㅽ삎 ?깆쓣 `start/stop/restart` 媛??
+2. ?ㅼ튂????뿉???ㅽ뻾 ?곹깭媛 ?ㅼ떆媛??먮뒗 polling) 諛섏쁺
+3. ?깅퀎 理쒓렐 濡쒓렇 ?뺤씤 媛??
+4. ??crash ???뺤콉 湲곕컲 ?먮룞 ?ъ떆???숈옉
+5. ?쒕쾭 ?ш린?????고????곹깭 蹂듦뎄
+6. 沅뚰븳/寃쎈줈 ?꾨컲 ??紐낇솗???먮윭 肄붾뱶 諛섑솚
+
+---
+
+## 13. ?④퀎蹂??곗텧臾?
+
+## Milestone A (肄붿뼱)
 - RuntimeManager/ProcessSupervisor
-- runtime 상태 저장소
-- 기본 API start/stop/restart
+- runtime ?곹깭 ??μ냼
+- 湲곕낯 API start/stop/restart
 
-## Milestone B (통합)
-- 패키지 manifest 런타임 확장
-- Package Center 설치됨 제어 UI
-- 로그 조회 API + 최소 UI
+## Milestone B (?듯빀)
+- ?⑦궎吏 manifest ?고????뺤옣
+- Package Center ?ㅼ튂???쒖뼱 UI
+- 濡쒓렇 議고쉶 API + 理쒖냼 UI
 
-## Milestone C (강화)
-- 헬스체크/오토리커버리
-- 보안 정책(allowlist/자원 제한)
-- 운영 문서/에러 코드 표준화
-
----
-
-## 14. 최종 결론
-
-이번 작업의 본질은 “패키지 관리”를 “실행 가능한 서비스 플랫폼”으로 끌어올리는 것이다.  
-즉, 현재의 `Package Center + Sandbox` 기반 위에 **Service Runtime Layer** 를 추가하여:
-
-- 대규모 앱도 Docker 없이 운영 가능하게 만들고
-- 사용자에게는 앱스토어형 UX를 유지하면서
-- 백엔드에는 운영 가능한 프로세스 관리 표준을 제공하는 것이 목표다.
-
-이 문서를 기준으로 구현을 시작하면,  
-1차는 안정적인 서비스 실행/제어, 2차는 보안·운영 고도화까지 연결된다.
+## Milestone C (媛뺥솕)
+- ?ъ뒪泥댄겕/?ㅽ넗由ъ빱踰꾨━
+- 蹂댁븞 ?뺤콉(allowlist/?먯썝 ?쒗븳)
+- ?댁쁺 臾몄꽌/?먮윭 肄붾뱶 ?쒖???
 
 ---
 
-## 15. 문서 단독 착수 가능성 분석
+## 14. 理쒖쥌 寃곕줎
 
-### 15.1 결론
-**조건부로 바로 착수 가능하다.**  
-정확히는 `Milestone A(코어)`는 문서만으로 구현 시작이 가능하고,  
-`Milestone B~C`는 일부 정책값 고정이 필요하다.
+?대쾲 ?묒뾽??蹂몄쭏? ?쒗뙣?ㅼ? 愿由р앸? ?쒖떎??媛?ν븳 ?쒕퉬???뚮옯?쇄앹쑝濡??뚯뼱?щ━??寃껋씠??  
+利? ?꾩옱??`Package Center + Sandbox` 湲곕컲 ?꾩뿉 **Service Runtime Layer** 瑜?異붽??섏뿬:
 
-### 15.2 바로 가능한 범위 (문서만으로 구현 가능)
-- `RuntimeManager`, `ProcessSupervisor`, `runtimeStateStore` 파일 생성
-- 런타임 기본 API (`start/stop/restart/status/logs`) 골격 구현
-- 서버 부트스트랩(`server/index.js`)에 런타임 매니저 연결
-- `Package Center` 설치됨 탭에 런타임 상태 배지 기본 표기
+- ?洹쒕え ?깅룄 Docker ?놁씠 ?댁쁺 媛?ν븯寃?留뚮뱾怨?
+- ?ъ슜?먯뿉寃뚮뒗 ?깆뒪?좎뼱??UX瑜??좎??섎㈃??
+- 諛깆뿏?쒖뿉???댁쁺 媛?ν븳 ?꾨줈?몄뒪 愿由??쒖????쒓났?섎뒗 寃껋씠 紐⑺몴??
 
-### 15.3 착수 전 고정이 필요한 항목 (미결정값)
-- `manifest.runtime` 허용값 최종 목록
-- `type=app/service/hybrid`의 동작 규칙
-- `service.autostart` 기본값(`false` 권장)
-- 재시작 정책 기본값(`on-failure`, `maxRetries`, `backoffMs`)
-- 로그 보존 정책(파일당 최대 크기, 보존 파일 수)
-- 헬스체크 기본 주기 및 timeout
+??臾몄꽌瑜?湲곗??쇰줈 援ы쁽???쒖옉?섎㈃,  
+1李⑤뒗 ?덉젙?곸씤 ?쒕퉬???ㅽ뻾/?쒖뼱, 2李⑤뒗 蹂댁븞쨌?댁쁺 怨좊룄?붽퉴吏 ?곌껐?쒕떎.
 
-### 15.4 권장 기본값 (새 세션에서 즉시 사용 가능)
+---
+
+## 15. 臾몄꽌 ?⑤룆 李⑹닔 媛?μ꽦 遺꾩꽍
+
+### 15.1 寃곕줎
+**議곌굔遺濡?諛붾줈 李⑹닔 媛?ν븯??**  
+?뺥솗?덈뒗 `Milestone A(肄붿뼱)`??臾몄꽌留뚯쑝濡?援ы쁽 ?쒖옉??媛?ν븯怨?  
+`Milestone B~C`???쇰? ?뺤콉媛?怨좎젙???꾩슂?섎떎.
+
+### 15.2 諛붾줈 媛?ν븳 踰붿쐞 (臾몄꽌留뚯쑝濡?援ы쁽 媛??
+- `RuntimeManager`, `ProcessSupervisor`, `runtimeStateStore` ?뚯씪 ?앹꽦
+- ?고???湲곕낯 API (`start/stop/restart/status/logs`) 怨④꺽 援ы쁽
+- ?쒕쾭 遺?몄뒪?몃옪(`server/index.js`)???고???留ㅻ땲? ?곌껐
+- `Package Center` ?ㅼ튂????뿉 ?고????곹깭 諛곗? 湲곕낯 ?쒓린
+
+### 15.3 李⑹닔 ??怨좎젙???꾩슂????ぉ (誘멸껐?뺢컪)
+- `manifest.runtime` ?덉슜媛?理쒖쥌 紐⑸줉
+- `type=app/service/hybrid`???숈옉 洹쒖튃
+- `service.autostart` 湲곕낯媛?`false` 沅뚯옣)
+- ?ъ떆???뺤콉 湲곕낯媛?`on-failure`, `maxRetries`, `backoffMs`)
+- 濡쒓렇 蹂댁〈 ?뺤콉(?뚯씪??理쒕? ?ш린, 蹂댁〈 ?뚯씪 ??
+- ?ъ뒪泥댄겕 湲곕낯 二쇨린 諛?timeout
+
+### 15.4 沅뚯옣 湲곕낯媛?(???몄뀡?먯꽌 利됱떆 ?ъ슜 媛??
 - `runtime`: `sandbox-html | process-node | process-python | binary`
 - `autostart`: `false`
 - `restart.policy`: `on-failure`
@@ -399,120 +399,120 @@
 - `restart.backoffMs`: `2000`
 - `healthcheck.intervalMs`: `10000`
 - `healthcheck.timeoutMs`: `3000`
-- 로그 파일 제한: `10MB x 5개`
+- 濡쒓렇 ?뚯씪 ?쒗븳: `10MB x 5媛?
 
 ---
 
-## 16. 새 세션 인수인계 문맥 (Context Pack)
+## 16. ???몄뀡 ?몄닔?멸퀎 臾몃㎘ (Context Pack)
 
-### 16.1 프로젝트 목적 요약
-- 목표: Docker 없이 패키지형 앱의 설치/실행/중지/제거를 통합 관리
-- 현재 강점: 패키지 센터 + 레지스트리 설치 + 샌드박스 런타임 기반은 존재
-- 현재 부족: 서비스형 앱의 백그라운드 실행 런타임 계층
+### 16.1 ?꾨줈?앺듃 紐⑹쟻 ?붿빟
+- 紐⑺몴: Docker ?놁씠 ?⑦궎吏???깆쓽 ?ㅼ튂/?ㅽ뻾/以묒?/?쒓굅瑜??듯빀 愿由?
+- ?꾩옱 媛뺤젏: ?⑦궎吏 ?쇳꽣 + ?덉??ㅽ듃由??ㅼ튂 + ?뚮뱶諛뺤뒪 ?고???湲곕컲? 議댁옱
+- ?꾩옱 遺議? ?쒕퉬?ㅽ삎 ?깆쓽 諛깃렇?쇱슫???ㅽ뻾 ?고???怨꾩링
 
-### 16.2 현재 구현 상태 핵심
-- 패키지/레지스트리 API: `server/routes/packages.js`
-- 샌드박스 데이터 권한 API: `server/routes/sandbox.js`
-- 내부 서비스 생명주기 관리: `server/services/serviceManager.js`, `server/routes/services.js`
-- 패키지 센터 UI: `client/src/apps/package-center/PackageCenter.svelte`
+### 16.2 ?꾩옱 援ы쁽 ?곹깭 ?듭떖
+- ?⑦궎吏/?덉??ㅽ듃由?API: `server/routes/packages.js`
+- ?뚮뱶諛뺤뒪 ?곗씠??沅뚰븳 API: `server/routes/sandbox.js`
+- ?대? ?쒕퉬???앸챸二쇨린 愿由? `server/services/serviceManager.js`, `server/routes/services.js`
+- ?⑦궎吏 ?쇳꽣 UI: `client/src/apps/package-center/PackageCenter.svelte`
 
-### 16.3 기술적 제약/주의사항
-- 파일 기반 영속화 구조 (`server/storage/inventory/system/*.json`)
-- 인증은 JWT 기반 관리자 중심
-- 보안 하드닝(allowlist/검증)은 아직 진행 중
-- 현재 워크트리는 dirty 상태일 수 있으므로 기존 변경을 덮어쓰지 말 것
+### 16.3 湲곗닠???쒖빟/二쇱쓽?ы빆
+- ?뚯씪 湲곕컲 ?곸냽??援ъ“ (`server/storage/inventory/system/*.json`)
+- ?몄쬆? JWT 湲곕컲 愿由ъ옄 以묒떖
+- 蹂댁븞 ?섎뱶??allowlist/寃利?? ?꾩쭅 吏꾪뻾 以?
+- ?꾩옱 ?뚰겕?몃━??dirty ?곹깭?????덉쑝誘濡?湲곗〈 蹂寃쎌쓣 ??뼱?곗? 留?寃?
 
-### 16.4 작업 기준 경로
-- 루트: `/home/inri/문서/web_os`
-- 서버 핵심: `/home/inri/문서/web_os/server`
-- 클라이언트 핵심: `/home/inri/문서/web_os/client`
-- 문서 기준: `/home/inri/문서/web_os/next.md`
+### 16.4 ?묒뾽 湲곗? 寃쎈줈
+- 猷⑦듃: `/home/inri/臾몄꽌/web_os`
+- ?쒕쾭 ?듭떖: `/home/inri/臾몄꽌/web_os/server`
+- ?대씪?댁뼵???듭떖: `/home/inri/臾몄꽌/web_os/client`
+- 臾몄꽌 湲곗?: `/home/inri/臾몄꽌/web_os/next.md`
 
 ---
 
-## 17. 새 세션 시작 절차 (실행 순서)
+## 17. ???몄뀡 ?쒖옉 ?덉감 (?ㅽ뻾 ?쒖꽌)
 
-### 17.1 1단계: 컨텍스트 로드
-1. `next.md` 전체 확인
-2. `server/index.js`, `server/routes/packages.js`, `server/services/packageRegistryService.js` 확인
-3. `client/src/apps/package-center/PackageCenter.svelte` 확인
+### 17.1 1?④퀎: 而⑦뀓?ㅽ듃 濡쒕뱶
+1. `next.md` ?꾩껜 ?뺤씤
+2. `server/index.js`, `server/routes/packages.js`, `server/services/packageRegistryService.js` ?뺤씤
+3. `client/src/apps/package-center/PackageCenter.svelte` ?뺤씤
 
-### 17.2 2단계: 미결정값 잠금
-아래 6개 값 먼저 고정 후 구현 시작:
-- 런타임 타입 목록
-- autostart 기본값
-- 재시작 기본 정책
-- 로그 보존 제한
-- 헬스체크 기본값
-- 앱 타입별 UI 액션 분기
+### 17.2 2?④퀎: 誘멸껐?뺢컪 ?좉툑
+?꾨옒 6媛?媛?癒쇱? 怨좎젙 ??援ы쁽 ?쒖옉:
+- ?고??????紐⑸줉
+- autostart 湲곕낯媛?
+- ?ъ떆??湲곕낯 ?뺤콉
+- 濡쒓렇 蹂댁〈 ?쒗븳
+- ?ъ뒪泥댄겕 湲곕낯媛?
+- ????낅퀎 UI ?≪뀡 遺꾧린
 
-### 17.3 3단계: Milestone A 즉시 구현
-1. `server/services/runtimeManager.js` 추가
-2. `server/services/processSupervisor.js` 추가
-3. `server/services/runtimeStateStore.js` 추가
-4. `server/routes/runtime.js` 추가
-5. `server/index.js`에 라우터/매니저 연결
-6. 최소 동작 검증 후 API 문서 업데이트
+### 17.3 3?④퀎: Milestone A 利됱떆 援ы쁽
+1. `server/services/runtimeManager.js` 異붽?
+2. `server/services/processSupervisor.js` 異붽?
+3. `server/services/runtimeStateStore.js` 異붽?
+4. `server/routes/runtime.js` 異붽?
+5. `server/index.js`???쇱슦??留ㅻ땲? ?곌껐
+6. 理쒖냼 ?숈옉 寃利???API 臾몄꽌 ?낅뜲?댄듃
 
-### 17.4 4단계: 최소 검증 명령
-- 서버 실행: `node server/index.js`
-- 클라이언트 실행: `cd client && npm run dev`
-- 빌드 검증: `cd client && npm run build`
-- API 스모크:
+### 17.4 4?④퀎: 理쒖냼 寃利?紐낅졊
+- ?쒕쾭 ?ㅽ뻾: `node server/index.js`
+- ?대씪?댁뼵???ㅽ뻾: `cd client && npm run dev`
+- 鍮뚮뱶 寃利? `cd client && npm run build`
+- API ?ㅻえ??
   - `GET /api/runtime/apps`
   - `POST /api/runtime/apps/:id/start`
   - `POST /api/runtime/apps/:id/stop`
 
 ---
 
-## 18. 새 세션 시작용 프롬프트 템플릿
+## 18. ???몄뀡 ?쒖옉???꾨＼?꾪듃 ?쒗뵆由?
 
-아래 문장을 새 세션 첫 메시지로 그대로 사용하면 문맥 손실을 줄일 수 있다.
+?꾨옒 臾몄옣?????몄뀡 泥?硫붿떆吏濡?洹몃?濡??ъ슜?섎㈃ 臾몃㎘ ?먯떎??以꾩씪 ???덈떎.
 
 ```text
-프로젝트 경로는 /home/inri/문서/web_os 이고, 기준 문서는 next.md 입니다.
-목표는 서비스 런타임 계층 Milestone A 구현입니다.
-먼저 next.md의 15~17장을 기준으로 미결정값 6개를 잠그고,
+?꾨줈?앺듃 寃쎈줈??/home/inri/臾몄꽌/web_os ?닿퀬, 湲곗? 臾몄꽌??next.md ?낅땲??
+紐⑺몴???쒕퉬???고???怨꾩링 Milestone A 援ы쁽?낅땲??
+癒쇱? next.md??15~17?μ쓣 湲곗??쇰줈 誘멸껐?뺢컪 6媛쒕? ?좉렇怨?
 server/services/runtimeManager.js, processSupervisor.js, runtimeStateStore.js,
-server/routes/runtime.js, server/index.js 연결까지 한 번에 구현하세요.
-기존 변경사항을 되돌리지 말고, 구현 후 client build와 runtime API 스모크 결과를 보고하세요.
+server/routes/runtime.js, server/index.js ?곌껐源뚯? ??踰덉뿉 援ы쁽?섏꽭??
+湲곗〈 蹂寃쎌궗??쓣 ?섎룎由ъ? 留먭퀬, 援ы쁽 ??client build? runtime API ?ㅻえ??寃곌낵瑜?蹂닿퀬?섏꽭??
 ```
 
 ---
 
-## 19. 시작 전 리스크 체크
+## 19. ?쒖옉 ??由ъ뒪??泥댄겕
 
-- 기존 워크트리에 이미 수정된 파일이 다수 존재할 수 있음
-- `server/storage/index.json` 같은 자동 생성 파일이 diff에 포함될 수 있음
-- 새 런타임 도입 시 기존 `serviceManager`와 역할 충돌이 생길 수 있으므로
-  - `serviceManager`: 서버 내부 서비스
-  - `runtimeManager`: 앱 인스턴스 런타임
-  로 역할을 분리해 유지해야 함
-
----
-
-## 20. 최종 실행 판단
-
-현재 `next.md`는 **새 세션에서 바로 구현 시작 가능한 수준**이다.  
-단, 17.2의 미결정값을 첫 15~30분 내 확정해야 일정 지연이 없다.
+- 湲곗〈 ?뚰겕?몃━???대? ?섏젙???뚯씪???ㅼ닔 議댁옱?????덉쓬
+- `server/storage/index.json` 媛숈? ?먮룞 ?앹꽦 ?뚯씪??diff???ы븿?????덉쓬
+- ???고????꾩엯 ??湲곗〈 `serviceManager`? ??븷 異⑸룎???앷만 ???덉쑝誘濡?
+  - `serviceManager`: ?쒕쾭 ?대? ?쒕퉬??
+  - `runtimeManager`: ???몄뒪?댁뒪 ?고???
+  濡???븷??遺꾨━???좎??댁빞 ??
 
 ---
 
-## 12. 진행 현황 업데이트 (2026-04-21)
+## 20. 理쒖쥌 ?ㅽ뻾 ?먮떒
 
-### 완료
-- [x] 런타임 이벤트 조회 API(`GET /api/runtime/apps/:id/events`) 및 버퍼 보존
-- [x] 런타임 로그 파일 보존/회전 정책 반영
-- [x] 헬스체크 임계치 기반 상태 전이(`running/degraded/recovered`) 구현
-- [x] 런타임 검증/복구 API 추가(`validate`, `recover`)
-- [x] 패키지 lifecycle 저장소 구축(채널/히스토리/백업/롤백)
-- [x] overwrite 설치(import/registry) 시 사전 백업 + 실패 자동 복구
-- [x] 패키지 건강도 리포트 API(`GET /api/packages/:id/health`) 추가
+?꾩옱 `next.md`??**???몄뀡?먯꽌 諛붾줈 援ы쁽 ?쒖옉 媛?ν븳 ?섏?**?대떎.  
+?? 17.2??誘멸껐?뺢컪??泥?15~30遺????뺤젙?댁빞 ?쇱젙 吏?곗씠 ?녿떎.
 
-### 진행중
-- [ ] Package Center UI에 lifecycle/health/rollback 패널 연결
+---
 
-### 잔여
-- [ ] SemVer range 수준 의존성 판정기
-- [ ] 채널별 자동 업데이트 정책(승격/지연 배포)
-- [ ] 복구 시나리오 E2E 테스트 스위트
+## 12. 吏꾪뻾 ?꾪솴 ?낅뜲?댄듃 (2026-04-21)
+
+### ?꾨즺
+- [x] ?고????대깽??議고쉶 API(`GET /api/runtime/apps/:id/events`) 諛?踰꾪띁 蹂댁〈
+- [x] ?고???濡쒓렇 ?뚯씪 蹂댁〈/?뚯쟾 ?뺤콉 諛섏쁺
+- [x] ?ъ뒪泥댄겕 ?꾧퀎移?湲곕컲 ?곹깭 ?꾩씠(`running/degraded/recovered`) 援ы쁽
+- [x] ?고???寃利?蹂듦뎄 API 異붽?(`validate`, `recover`)
+- [x] ?⑦궎吏 lifecycle ??μ냼 援ъ텞(梨꾨꼸/?덉뒪?좊━/諛깆뾽/濡ㅻ갚)
+- [x] overwrite ?ㅼ튂(import/registry) ???ъ쟾 諛깆뾽 + ?ㅽ뙣 ?먮룞 蹂듦뎄
+- [x] ?⑦궎吏 嫄닿컯??由ы룷??API(`GET /api/packages/:id/health`) 異붽?
+
+### 吏꾪뻾以?
+- [x] Package Center UI??lifecycle/health/rollback ?⑤꼸 ?곌껐
+
+### ?붿뿬
+- [x] SemVer range ?섏? ?섏〈???먯젙湲?
+- [x] 梨꾨꼸蹂??먮룞 ?낅뜲?댄듃 ?뺤콉(?밴꺽/吏??諛고룷)
+- [x] 蹂듦뎄 ?쒕굹由ъ삤 E2E ?뚯뒪???ㅼ쐞??

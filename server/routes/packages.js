@@ -5,9 +5,12 @@ const multer = require('multer');
 const AdmZip = require('adm-zip');
 
 const auth = require('../middleware/auth');
+const serverConfig = require('../config/serverConfig');
 const auditService = require('../services/auditService');
 const packageRegistryService = require('../services/packageRegistryService');
 const packageLifecycleService = require('../services/packageLifecycleService');
+const channelUpdatePolicyService = require('../services/channelUpdatePolicyService');
+const templateQualityGate = require('../services/templateQualityGate');
 const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
 const { normalizeRuntimeProfile, assertValidRuntimeProfile, toManifestRuntimeFields } = require('../services/runtimeProfiles');
@@ -85,6 +88,7 @@ const REGISTRY_SOURCES_FILE = 'package-registries.json';
 const APP_ID_ROUTE = ':id';
 const ROOT_PACKAGE_JSON_PATH = path.join(__dirname, '../../package.json');
 let cachedServerVersion = '';
+let cachedAdminUsername = '';
 
 const ECOSYSTEM_TEMPLATES = [
   {
@@ -168,6 +172,13 @@ async function getServerVersion() {
   const rootPackage = await fs.readJson(ROOT_PACKAGE_JSON_PATH).catch(() => null);
   cachedServerVersion = String(rootPackage?.version || '0.0.0').trim() || '0.0.0';
   return cachedServerVersion;
+}
+
+async function getAdminUsername() {
+  if (cachedAdminUsername) return cachedAdminUsername;
+  const value = await serverConfig.get('auth.adminUsername').catch(() => process.env.ADMIN_USERNAME || '');
+  cachedAdminUsername = String(value || process.env.ADMIN_USERNAME || '').trim();
+  return cachedAdminUsername;
 }
 
 async function getManifestFilePath(appId) {
@@ -385,6 +396,14 @@ function normalizeRemotePackage(item = {}, source) {
   const iconUrl = rawIconUrl || (isHttpUrl(rawIcon) || /^data:image\//i.test(rawIcon) ? rawIcon : '');
   const iconType = iconUrl ? 'image' : (String(item.iconType || '').trim() || 'lucide');
 
+  const releaseInput = item.release && typeof item.release === 'object' ? item.release : {};
+  const releaseChannel = normalizeManifestChannel(item.channel || releaseInput.channel || 'stable');
+  const publishedAt = String(item.publishedAt || releaseInput.publishedAt || item.updatedAt || item.createdAt || '').trim();
+  const rolloutDelayRaw = item.rolloutDelayMs ?? releaseInput.rolloutDelayMs;
+  const rolloutDelayMs = Number.isFinite(Number(rolloutDelayRaw))
+    ? Math.max(0, Number(rolloutDelayRaw))
+    : (channelUpdatePolicyService.CHANNEL_DELAY_MS[releaseChannel] || 0);
+
   return {
     id,
     title,
@@ -399,6 +418,11 @@ function normalizeRemotePackage(item = {}, source) {
     iconType,
     permissions: Array.isArray(item.permissions) ? item.permissions.map((permission) => String(permission)).filter(Boolean) : [],
     capabilities: Array.isArray(item.capabilities) ? item.capabilities.map((capability) => String(capability)).filter(Boolean) : [],
+    release: {
+      channel: releaseChannel,
+      publishedAt,
+      rolloutDelayMs
+    },
     source: {
       id: source.id,
       title: source.title,
@@ -417,6 +441,54 @@ function listEcosystemTemplates() {
 function getEcosystemTemplate(templateId) {
   const key = String(templateId || '').trim();
   return ECOSYSTEM_TEMPLATES.find((item) => item.id === key) || null;
+}
+
+function buildTemplateManifestInput(template, requestBody = {}) {
+  const body = requestBody && typeof requestBody === 'object' ? requestBody : {};
+  const manifestPatch = body.manifestPatch && typeof body.manifestPatch === 'object'
+    ? body.manifestPatch
+    : {};
+
+  const requestedId = String(body.appId || manifestPatch.id || '').trim();
+  const appId = requestedId || `${template.id}-${Date.now()}`;
+  appPaths.assertSafeAppId(appId);
+
+  const baseInput = {
+    id: appId,
+    title: String(body.title || manifestPatch.title || `${template.title} (${appId})`).trim(),
+    description: String(body.description || manifestPatch.description || template.description || '').trim(),
+    version: String(body.version || manifestPatch.version || '0.1.0').trim() || '0.1.0',
+    type: template.defaults.appType,
+    runtime: {
+      type: template.defaults.runtimeType,
+      entry: template.defaults.entry
+    },
+    permissions: Array.isArray(body.permissions)
+      ? body.permissions
+      : (Array.isArray(manifestPatch.permissions) ? manifestPatch.permissions : template.defaults.permissions)
+  };
+
+  const mergedInput = {
+    ...baseInput,
+    ...manifestPatch,
+    id: appId,
+    title: baseInput.title
+  };
+
+  if (manifestPatch.runtime && typeof manifestPatch.runtime === 'object') {
+    mergedInput.runtime = {
+      ...baseInput.runtime,
+      ...manifestPatch.runtime
+    };
+  } else {
+    mergedInput.runtime = baseInput.runtime;
+  }
+
+  if (Array.isArray(baseInput.permissions)) {
+    mergedInput.permissions = [...baseInput.permissions];
+  }
+
+  return normalizeManifestInput(mergedInput);
 }
 
 async function fetchRegistryPackagesFromSource(source) {
@@ -441,6 +513,22 @@ async function fetchRegistryPackagesFromSource(source) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function buildLifecycleMap(installedApps = []) {
+  const entries = await Promise.all(
+    installedApps.map(async (item) => {
+      const appId = String(item?.id || '').trim();
+      if (!appId) return [appId, null];
+      try {
+        const lifecycle = await packageLifecycleService.getLifecycle(appId);
+        return [appId, lifecycle];
+      } catch (_err) {
+        return [appId, null];
+      }
+    })
+  );
+  return new Map(entries);
 }
 
 async function downloadRegistryPackageZip(zipUrl) {
@@ -734,23 +822,52 @@ async function computePackageHealthReport(appId, options = {}) {
   const dependencies = normalizeManifestDependencies(manifest.dependencies);
   if (dependencies.length > 0) {
     const installed = await packageRegistryService.listSandboxApps();
-    const installedIds = new Set(installed.map((item) => item.id));
+    const installedMap = new Map(
+      installed.map((item) => [
+        String(item.id || '').trim(),
+        String(item.version || '0.0.0').trim() || '0.0.0'
+      ])
+    );
 
     for (const dependency of dependencies) {
-      const exists = installedIds.has(dependency.id);
-      if (exists) {
+      const installedVersion = installedMap.get(dependency.id) || '';
+      const exists = Boolean(installedVersion);
+      const versionMatches = exists
+        ? packageLifecycleService.matchesVersionRange(installedVersion, dependency.version || '*')
+        : false;
+
+      if (exists && versionMatches) {
         checks.push({
           id: `dependency.${dependency.id}`,
           level: 'pass',
-          message: `Dependency "${dependency.id}" is installed.`,
-          versionRange: dependency.version
+          message: `Dependency "${dependency.id}" is installed (${installedVersion}).`,
+          installedVersion,
+          versionRange: dependency.version || '*'
+        });
+      } else if (exists && dependency.optional) {
+        checks.push({
+          id: `dependency.${dependency.id}`,
+          level: 'warn',
+          code: 'DEPENDENCY_VERSION_MISMATCH',
+          message: `Optional dependency "${dependency.id}" version ${installedVersion} does not satisfy ${dependency.version || '*'}.`,
+          installedVersion,
+          versionRange: dependency.version || '*'
+        });
+      } else if (exists) {
+        checks.push({
+          id: `dependency.${dependency.id}`,
+          level: 'fail',
+          code: 'DEPENDENCY_VERSION_MISMATCH',
+          message: `Required dependency "${dependency.id}" version ${installedVersion} does not satisfy ${dependency.version || '*'}.`,
+          installedVersion,
+          versionRange: dependency.version || '*'
         });
       } else if (dependency.optional) {
         checks.push({
           id: `dependency.${dependency.id}`,
           level: 'warn',
           message: `Optional dependency "${dependency.id}" is not installed.`,
-          versionRange: dependency.version
+          versionRange: dependency.version || '*'
         });
       } else {
         checks.push({
@@ -758,7 +875,7 @@ async function computePackageHealthReport(appId, options = {}) {
           level: 'fail',
           code: 'DEPENDENCY_MISSING',
           message: `Required dependency "${dependency.id}" is not installed.`,
-          versionRange: dependency.version
+          versionRange: dependency.version || '*'
         });
       }
     }
@@ -1264,7 +1381,8 @@ router.get('/registry', async (req, res) => {
       ? sources.filter((item) => item.id === sourceId)
       : sources.filter((item) => item.enabled !== false);
     const installedApps = await packageRegistryService.listSandboxApps();
-    const installedIds = new Set(installedApps.map((item) => item.id));
+    const installedMap = new Map(installedApps.map((item) => [item.id, item]));
+    const lifecycleMap = await buildLifecycleMap(installedApps);
 
     const results = await Promise.all(
       enabledSources.map(async (source) => {
@@ -1275,7 +1393,21 @@ router.get('/registry', async (req, res) => {
             ok: true,
             packages: packages.map((pkg) => ({
               ...pkg,
-              installed: installedIds.has(pkg.id)
+              installed: installedMap.has(pkg.id),
+              installedVersion: installedMap.get(pkg.id)?.version || '',
+              targetChannel: channelUpdatePolicyService.normalizeChannel(
+                lifecycleMap.get(pkg.id)?.channel || lifecycleMap.get(pkg.id)?.current?.channel || 'stable'
+              ),
+              updatePolicy: installedMap.has(pkg.id)
+                ? channelUpdatePolicyService.evaluateCandidate({
+                  installedVersion: installedMap.get(pkg.id)?.version || '0.0.0',
+                  candidateVersion: pkg.version,
+                  targetChannel: lifecycleMap.get(pkg.id)?.channel || lifecycleMap.get(pkg.id)?.current?.channel || 'stable',
+                  candidateChannel: pkg.release?.channel || 'stable',
+                  publishedAt: pkg.release?.publishedAt,
+                  rolloutDelayMs: pkg.release?.rolloutDelayMs
+                })
+                : null
             }))
           };
         } catch (err) {
@@ -1302,6 +1434,102 @@ router.get('/registry', async (req, res) => {
   }
 });
 
+router.get('/registry/updates', async (req, res) => {
+  try {
+    const sourceId = String(req.query.source || '').trim();
+    const includeBlocked = String(req.query.includeBlocked || '').toLowerCase() === 'true';
+    const sources = await readRegistrySources();
+    const enabledSources = sourceId
+      ? sources.filter((item) => item.id === sourceId)
+      : sources.filter((item) => item.enabled !== false);
+
+    const installedApps = await packageRegistryService.listSandboxApps();
+    const installedMap = new Map(installedApps.map((item) => [item.id, item]));
+    const lifecycleMap = await buildLifecycleMap(installedApps);
+
+    const sourceResults = await Promise.all(
+      enabledSources.map(async (source) => {
+        try {
+          const packages = await fetchRegistryPackagesFromSource(source);
+          return {
+            sourceId: source.id,
+            ok: true,
+            packages
+          };
+        } catch (err) {
+          return {
+            sourceId: source.id,
+            ok: false,
+            error: err.message,
+            packages: []
+          };
+        }
+      })
+    );
+
+    const failedSources = sourceResults.filter((item) => !item.ok).map((item) => ({
+      sourceId: item.sourceId,
+      error: item.error
+    }));
+
+    const candidatesById = new Map();
+    for (const sourceResult of sourceResults) {
+      if (!sourceResult.ok) continue;
+      for (const pkg of sourceResult.packages) {
+        if (!installedMap.has(pkg.id)) continue;
+        const current = candidatesById.get(pkg.id) || [];
+        current.push({
+          id: pkg.id,
+          version: pkg.version,
+          channel: pkg.release?.channel || 'stable',
+          publishedAt: pkg.release?.publishedAt || '',
+          rolloutDelayMs: pkg.release?.rolloutDelayMs,
+          zipUrl: pkg.zipUrl,
+          sourceId: pkg.source?.id || sourceResult.sourceId || ''
+        });
+        candidatesById.set(pkg.id, current);
+      }
+    }
+
+    const updates = [];
+    for (const [appId, candidates] of candidatesById.entries()) {
+      const installed = installedMap.get(appId);
+      const lifecycle = lifecycleMap.get(appId);
+      const targetChannel = lifecycle?.channel || lifecycle?.current?.channel || 'stable';
+      const summary = channelUpdatePolicyService.selectBestUpdate({
+        installedVersion: installed?.version || '0.0.0',
+        targetChannel,
+        candidates
+      });
+
+      if (!summary.hasUpdate && !includeBlocked) {
+        continue;
+      }
+
+      updates.push({
+        appId,
+        installedVersion: installed?.version || '0.0.0',
+        targetChannel: channelUpdatePolicyService.normalizeChannel(targetChannel, 'stable'),
+        hasUpdate: summary.hasUpdate,
+        selected: summary.selected,
+        evaluations: summary.evaluations
+      });
+    }
+
+    return res.json({
+      success: true,
+      updates,
+      failedSources
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: true,
+      code: 'REGISTRY_UPDATES_FETCH_FAILED',
+      message: err.message
+    });
+  }
+});
+
 router.post('/registry/install', async (req, res) => {
   let tempZipFile = '';
   try {
@@ -1309,7 +1537,9 @@ router.post('/registry/install', async (req, res) => {
     const sourceId = String(body.sourceId || '').trim();
     const packageId = String(body.packageId || '').trim();
     const overwrite = String(body.overwrite || '').toLowerCase() === 'true' || body.overwrite === true;
+    const forcePolicyBypass = String(body.forcePolicyBypass || '').toLowerCase() === 'true' || body.forcePolicyBypass === true;
     let zipUrl = String(body.zipUrl || '').trim();
+    let targetPackage = null;
 
     if (!zipUrl) {
       if (!sourceId || !packageId) {
@@ -1331,7 +1561,7 @@ router.post('/registry/install', async (req, res) => {
       }
 
       const packages = await fetchRegistryPackagesFromSource(source);
-      const targetPackage = packages.find((item) => item.id === packageId);
+      targetPackage = packages.find((item) => item.id === packageId);
       if (!targetPackage) {
         return res.status(404).json({
           error: true,
@@ -1358,6 +1588,40 @@ router.post('/registry/install', async (req, res) => {
     const existing = await packageRegistryService.getSandboxApp(appId);
     const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
     const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
+
+    if (overwrite && existing && targetPackage) {
+      const lifecycle = await packageLifecycleService.getLifecycle(appId).catch(() => null);
+      const policy = channelUpdatePolicyService.evaluateCandidate({
+        installedVersion: String(existing.version || '0.0.0').trim() || '0.0.0',
+        candidateVersion: incomingManifest.version,
+        targetChannel: lifecycle?.channel || lifecycle?.current?.channel || 'stable',
+        candidateChannel: targetPackage.release?.channel || incomingManifest.release?.channel || 'stable',
+        publishedAt: targetPackage.release?.publishedAt || '',
+        rolloutDelayMs: targetPackage.release?.rolloutDelayMs
+      });
+
+      if (!policy.allowed && !forcePolicyBypass) {
+        return res.status(409).json({
+          error: true,
+          code: 'REGISTRY_UPDATE_POLICY_BLOCKED',
+          message: `Update blocked by channel policy (${policy.blockedReason || 'policy-blocked'}).`,
+          policy
+        });
+      }
+
+      if (!policy.allowed && forcePolicyBypass) {
+        const adminUsername = await getAdminUsername();
+        const isAdminUser = Boolean(adminUsername) && req.user?.username === adminUsername;
+        if (!isAdminUser) {
+          return res.status(403).json({
+            error: true,
+            code: 'REGISTRY_UPDATE_POLICY_BYPASS_FORBIDDEN',
+            message: 'Only admin can bypass channel update policy.',
+            policy
+          });
+        }
+      }
+    }
 
     let backup = null;
     if (overwrite && existing) {
@@ -1440,6 +1704,49 @@ router.get('/ecosystem/templates', async (_req, res) => {
   });
 });
 
+router.post('/ecosystem/templates/:templateId/quality-check', async (req, res) => {
+  try {
+    const template = getEcosystemTemplate(req.params.templateId);
+    if (!template) {
+      return res.status(404).json({
+        error: true,
+        code: 'ECOSYSTEM_TEMPLATE_NOT_FOUND',
+        message: 'Requested ecosystem template was not found.'
+      });
+    }
+
+    const manifest = buildTemplateManifestInput(template, req.body || {});
+    const report = await templateQualityGate.evaluate({
+      templateId: template.id,
+      appId: manifest.id,
+      manifest,
+      allowFsMutation: false
+    });
+
+    return res.json({
+      success: true,
+      template: {
+        id: template.id,
+        namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
+      },
+      report
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID' ||
+      err.code?.startsWith('PACKAGE_') ||
+      err.code === 'RUNTIME_PROFILE_INVALID' ||
+      err.code?.startsWith('TEMPLATE_QUALITY_')
+        ? 400
+        : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'ECOSYSTEM_TEMPLATE_QUALITY_CHECK_FAILED',
+      message: err.message
+    });
+  }
+});
+
 router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
   try {
     const template = getEcosystemTemplate(req.params.templateId);
@@ -1451,24 +1758,7 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
       });
     }
 
-    const requestedId = String(req.body?.appId || '').trim();
-    const appId = requestedId || `${template.id}-${Date.now()}`;
-    appPaths.assertSafeAppId(appId);
-
-    const manifest = normalizeManifestInput({
-      id: appId,
-      title: String(req.body?.title || `${template.title} (${appId})`).trim(),
-      description: String(req.body?.description || template.description || '').trim(),
-      version: String(req.body?.version || '0.1.0').trim() || '0.1.0',
-      type: template.defaults.appType,
-      runtime: {
-        type: template.defaults.runtimeType,
-        entry: template.defaults.entry
-      },
-      permissions: Array.isArray(req.body?.permissions)
-        ? req.body.permissions
-        : template.defaults.permissions
-    });
+    const manifest = buildTemplateManifestInput(template, req.body || {});
 
     const appRoot = await appPaths.getAppRoot(manifest.id);
     if (await fs.pathExists(appRoot)) {
@@ -1476,6 +1766,41 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
         error: true,
         code: 'PACKAGE_ALREADY_EXISTS',
         message: `Package "${manifest.id}" already exists.`
+      });
+    }
+
+    const report = await templateQualityGate.evaluate({
+      templateId: template.id,
+      appId: manifest.id,
+      manifest,
+      allowFsMutation: false
+    });
+    if (report.status === 'fail') {
+      return res.status(409).json({
+        error: true,
+        code: 'TEMPLATE_QUALITY_GATE_FAILED',
+        message: 'Template scaffold blocked by quality gate.',
+        report
+      });
+    }
+
+    const forceRequested = req.body?.force === true || String(req.body?.force || '').toLowerCase() === 'true';
+    const adminUsername = await getAdminUsername();
+    const isAdminUser = Boolean(adminUsername) && req.user?.username === adminUsername;
+    if (report.status === 'warn' && !forceRequested) {
+      return res.status(409).json({
+        error: true,
+        code: 'TEMPLATE_QUALITY_WARN_REVIEW_REQUIRED',
+        message: 'Quality gate produced warnings. Set force=true as admin to proceed.',
+        report
+      });
+    }
+    if (report.status === 'warn' && forceRequested && !isAdminUser) {
+      return res.status(403).json({
+        error: true,
+        code: 'TEMPLATE_QUALITY_FORCE_FORBIDDEN',
+        message: 'Only admin can bypass warn-level template quality checks.',
+        report
       });
     }
 
@@ -1505,13 +1830,21 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
     await packageLifecycleService.recordInstall(manifest.id, {
       manifest,
       reason: 'ecosystem-scaffold',
-      source: `ecosystem:${template.id}`
+      source: `ecosystem:${template.id}`,
+      qaReport: report
     });
 
     await auditService.log(
       'PACKAGES',
       `Scaffold Ecosystem Template: ${template.id} -> ${manifest.id}`,
-      { templateId: template.id, appId: manifest.id, user: req.user?.username },
+      {
+        templateId: template.id,
+        appId: manifest.id,
+        qualityStatus: report.status,
+        qualityScore: report.score,
+        forceBypass: report.status === 'warn' && forceRequested,
+        user: req.user?.username
+      },
       'INFO'
     );
 
@@ -1522,10 +1855,17 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
         id: template.id,
         namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
       },
-      package: created
+      package: created,
+      report
     });
   } catch (err) {
-    const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') ? 400 : 500;
+    const status =
+      err.code === 'APP_ID_INVALID' ||
+      err.code?.startsWith('PACKAGE_') ||
+      err.code === 'RUNTIME_PROFILE_INVALID' ||
+      err.code?.startsWith('TEMPLATE_QUALITY_')
+        ? 400
+        : 500;
     return res.status(status).json({
       error: true,
       code: err.code || 'ECOSYSTEM_TEMPLATE_SCAFFOLD_FAILED',

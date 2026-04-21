@@ -1,4 +1,4 @@
-<script>
+﻿<script>
   import { get } from 'svelte/store';
   import { onMount } from 'svelte';
   import { LayoutGrid, Store, Link2, RefreshCw, Download, Play, Square, RotateCcw, Trash2 } from 'lucide-svelte';
@@ -26,9 +26,19 @@
   let storeSourceErrors = $state([]);
   let runtimeStatusByApp = $state({});
   let runtimeLogsByApp = $state({});
+  let runtimeEventsByApp = $state({});
+  let lifecycleByApp = $state({});
+  let healthByApp = $state({});
+  let consoleOpenByApp = $state({});
   let runtimeActioning = $state('');
   let runtimeLogsLoading = $state('');
+  let runtimeEventsLoading = $state('');
+  let lifecycleLoading = $state('');
+  let lifecycleActioning = $state('');
+  let healthLoading = $state('');
   let scaffoldingTemplateId = $state('');
+  let backupNotesByApp = $state({});
+  let selectedBackupByApp = $state({});
 
   let sourceForm = $state({
     id: '',
@@ -56,7 +66,7 @@
         promise,
         new Promise((_, reject) => {
           timer = setTimeout(() => {
-            const err = new Error(timeoutMessage || '요청 시간이 초과되었습니다.');
+            const err = new Error(timeoutMessage || '?붿껌 ?쒓컙??珥덇낵?섏뿀?듬땲??');
             err.code = 'REQUEST_TIMEOUT';
             reject(err);
           }, timeoutMs);
@@ -141,6 +151,68 @@
     runtimeLogsByApp = next;
   }
 
+  function clearRuntimeEvents(appId) {
+    const next = { ...runtimeEventsByApp };
+    delete next[appId];
+    runtimeEventsByApp = next;
+  }
+
+  function getLifecycle(pkg) {
+    return lifecycleByApp[pkg.id] || null;
+  }
+
+  function getHealthReport(pkg) {
+    return healthByApp[pkg.id] || getLifecycle(pkg)?.lastQaReport || null;
+  }
+
+  function getHealthStatus(pkg) {
+    return String(getHealthReport(pkg)?.status || 'unknown').toLowerCase();
+  }
+
+  function isConsoleOpen(pkg) {
+    return Boolean(consoleOpenByApp[pkg.id]);
+  }
+
+  function getLifecycleCurrentChannel(pkg) {
+    return getLifecycle(pkg)?.channel || 'stable';
+  }
+
+  function getAvailableBackups(pkg) {
+    const lifecycle = getLifecycle(pkg);
+    const backups = Array.isArray(lifecycle?.backups) ? lifecycle.backups : [];
+    return [...backups].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }
+
+  function formatDateTime(value) {
+    if (!value) return '-';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '-';
+    return parsed.toLocaleString();
+  }
+
+  function formatEventLabel(event) {
+    if (!event) return '-';
+    return String(event.action || event.type || event.id || 'event');
+  }
+
+  function getBackupNote(appId) {
+    return String(backupNotesByApp[appId] || '');
+  }
+
+  function setBackupNote(appId, value) {
+    backupNotesByApp = {
+      ...backupNotesByApp,
+      [appId]: String(value || '')
+    };
+  }
+
+  function setSelectedBackup(appId, backupId) {
+    selectedBackupByApp = {
+      ...selectedBackupByApp,
+      [appId]: String(backupId || '')
+    };
+  }
+
   function getSourcePackageCount(sourceId) {
     return storePackages.filter((pkg) => pkg.source?.id === sourceId).length;
   }
@@ -150,9 +222,16 @@
     try {
       const response = await apiFetch('/api/packages');
       installedPackages = Array.isArray(response.packages) ? response.packages : [];
+      const activeIds = new Set(installedPackages.map((item) => item.id));
+      for (const appId of Object.keys(consoleOpenByApp)) {
+        if (!activeIds.has(appId)) {
+          clearRuntimeLogs(appId);
+          clearRuntimeEvents(appId);
+        }
+      }
     } catch (err) {
       installedPackages = [];
-      error = err.message || '설치된 패키지 목록을 가져오지 못했습니다.';
+      error = err.message || '?ㅼ튂???⑦궎吏 紐⑸줉??媛?몄삤吏 紐삵뻽?듬땲??';
     } finally {
       loadingInstalled = false;
     }
@@ -201,7 +280,7 @@
         .map((result) => ({
           id: result.source?.id || 'unknown',
           title: result.source?.title || result.source?.id || 'Unknown Source',
-          error: result.error || '스토어를 읽지 못했습니다.'
+          error: result.error || '?ㅽ넗?대? ?쎌? 紐삵뻽?듬땲??'
         }));
       storePackages = results
         .filter((result) => result.ok)
@@ -217,7 +296,7 @@
     } catch (err) {
       storePackages = [];
       storeSourceErrors = [];
-      error = err.message || '스토어 목록을 불러오지 못했습니다.';
+      error = err.message || '?ㅽ넗??紐⑸줉??遺덈윭?ㅼ? 紐삵뻽?듬땲??';
     } finally {
       loadingStore = false;
     }
@@ -238,11 +317,11 @@
     const sourceId = sourceForm.id.trim() || slugify(sourceForm.title || normalizedUrl);
 
     if (!normalizedUrl) {
-      error = '스토어 주소를 입력하세요.';
+      error = '?ㅽ넗??二쇱냼瑜??낅젰?섏꽭??';
       return;
     }
     if (!sourceId) {
-      error = '스토어 ID를 입력하세요.';
+      error = '?ㅽ넗??ID瑜??낅젰?섏꽭??';
       return;
     }
 
@@ -257,12 +336,12 @@
         })
       });
 
-      message = `스토어 "${sourceId}"를 추가했습니다.`;
+      message = `?ㅽ넗??"${sourceId}"瑜?異붽??덉뒿?덈떎.`;
       sourceForm = { id: '', title: '', url: '' };
       await loadRegistrySources();
       await loadStorePackages();
     } catch (err) {
-      error = err.message || '스토어 주소 저장에 실패했습니다.';
+      error = err.message || '?ㅽ넗??二쇱냼 ??μ뿉 ?ㅽ뙣?덉뒿?덈떎.';
     } finally {
       savingSource = false;
     }
@@ -274,14 +353,14 @@
       await apiFetch(`/api/packages/registry/sources/${encodeURIComponent(sourceId)}`, {
         method: 'DELETE'
       });
-      message = `스토어 "${sourceId}"를 제거했습니다.`;
+      message = `?ㅽ넗??"${sourceId}"瑜??쒓굅?덉뒿?덈떎.`;
       if (activeStoreSource === sourceId) {
         activeStoreSource = 'all';
       }
       await loadRegistrySources();
       await loadStorePackages();
     } catch (err) {
-      error = err.message || '스토어 제거에 실패했습니다.';
+      error = err.message || '?ㅽ넗???쒓굅???ㅽ뙣?덉뒿?덈떎.';
     }
   }
 
@@ -295,33 +374,39 @@
         method: 'POST',
         body: JSON.stringify({ appId, title })
       });
-      message = `템플릿 "${template.title}"로 "${appId}" 생성 완료`;
+      message = `?쒗뵆由?"${template.title}"濡?"${appId}" ?앹꽦 ?꾨즺`;
       await Promise.all([loadInstalledPackages(), loadRuntimeStatuses()]);
       activeCategory = CATEGORY.INSTALLED;
     } catch (err) {
-      error = err.message || '템플릿 생성에 실패했습니다.';
+      error = err.message || '?쒗뵆由??앹꽦???ㅽ뙣?덉뒿?덈떎.';
     } finally {
       scaffoldingTemplateId = '';
     }
   }
 
-  async function installPackage(pkg) {
+  async function installPackage(pkg, options = {}) {
     installingPackageId = pkg.id;
     clearFeedback();
     try {
+      const overwrite = options.overwrite === true;
+      const forcePolicyBypass = options.forcePolicyBypass === true;
       await apiFetch('/api/packages/registry/install', {
         method: 'POST',
         body: JSON.stringify({
           sourceId: pkg.source?.id,
           packageId: pkg.id,
-          zipUrl: pkg.zipUrl || ''
+          zipUrl: pkg.zipUrl || '',
+          overwrite,
+          forcePolicyBypass
         })
       });
-      message = `패키지 "${pkg.title}" 설치 완료`;
+      message = overwrite
+        ? `Package "${pkg.title}" updated successfully.`
+        : `Package "${pkg.title}" installed successfully.`;
       await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
       activeCategory = CATEGORY.INSTALLED;
     } catch (err) {
-      error = err.message || '패키지 설치에 실패했습니다.';
+      error = err.message || 'Package install/update failed.';
     } finally {
       installingPackageId = '';
     }
@@ -339,14 +424,14 @@
   function stopInstalledPackage(pkg) {
     const active = get(windows).filter((item) => item.appId === pkg.id);
     if (active.length === 0) {
-      message = `"${pkg.title}" 실행 중인 창이 없습니다.`;
+      message = `"${pkg.title}" ?ㅽ뻾 以묒씤 李쎌씠 ?놁뒿?덈떎.`;
       return;
     }
 
     for (const win of active) {
       closeWindow(win.id);
     }
-    message = `"${pkg.title}" 창 ${active.length}개를 중지했습니다.`;
+    message = `"${pkg.title}" 李?${active.length}媛쒕? 以묒??덉뒿?덈떎.`;
   }
 
   async function controlRuntime(pkg, action) {
@@ -358,12 +443,13 @@
           method: 'POST'
         }),
         15000,
-        '런타임 제어 요청이 지연되고 있습니다. 잠시 후 다시 시도하세요.'
+        'Runtime control request timed out.'
       );
       await loadRuntimeStatuses();
-      message = `"${pkg.title}" ${action === 'start' ? '시작' : action === 'stop' ? '중지' : '재시작'} 완료`;
+      const actionLabel = action === 'start' ? 'started' : action === 'stop' ? 'stopped' : 'restarted';
+      message = `"${pkg.title}" ${actionLabel}.`;
     } catch (err) {
-      error = err.message || `런타임 ${action} 처리에 실패했습니다.`;
+      error = err.message || `Failed to ${action} runtime.`;
     } finally {
       runtimeActioning = '';
     }
@@ -381,22 +467,177 @@
       const response = await withTimeout(
         apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/logs?limit=200`),
         10000,
-        '로그 조회가 지연되고 있습니다.'
+        '濡쒓렇 議고쉶媛 吏?곕릺怨??덉뒿?덈떎.'
       );
       runtimeLogsByApp = {
         ...runtimeLogsByApp,
         [pkg.id]: Array.isArray(response.logs) ? response.logs : []
       };
     } catch (err) {
-      error = err.message || '런타임 로그를 불러오지 못했습니다.';
+      error = err.message || '?고???濡쒓렇瑜?遺덈윭?ㅼ? 紐삵뻽?듬땲??';
     } finally {
       runtimeLogsLoading = '';
     }
   }
 
+  async function loadRuntimeEvents(appId) {
+    runtimeEventsLoading = appId;
+    try {
+      const response = await withTimeout(
+        apiFetch(`/api/runtime/apps/${encodeURIComponent(appId)}/events?limit=120`),
+        10000,
+        'Runtime events request timed out.'
+      );
+      runtimeEventsByApp = {
+        ...runtimeEventsByApp,
+        [appId]: Array.isArray(response.events) ? response.events : []
+      };
+    } catch (err) {
+      clearRuntimeEvents(appId);
+      error = err.message || 'Failed to load runtime events.';
+    } finally {
+      runtimeEventsLoading = '';
+    }
+  }
+
+  async function loadLifecycle(appId) {
+    lifecycleLoading = appId;
+    try {
+      const response = await withTimeout(
+        apiFetch(`/api/packages/${encodeURIComponent(appId)}/lifecycle`),
+        10000,
+        'Lifecycle request timed out.'
+      );
+      lifecycleByApp = {
+        ...lifecycleByApp,
+        [appId]: response.lifecycle || null
+      };
+    } catch (err) {
+      lifecycleByApp = {
+        ...lifecycleByApp,
+        [appId]: null
+      };
+      error = err.message || 'Failed to load lifecycle.';
+    } finally {
+      lifecycleLoading = '';
+    }
+  }
+
+  async function runHealthCheck(pkg) {
+    healthLoading = pkg.id;
+    clearFeedback();
+    try {
+      const response = await withTimeout(
+        apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}/health`),
+        12000,
+        'Health check timed out.'
+      );
+      healthByApp = {
+        ...healthByApp,
+        [pkg.id]: response.report || null
+      };
+      await loadLifecycle(pkg.id);
+      message = `"${pkg.title}" health check completed.`;
+    } catch (err) {
+      error = err.message || 'Health check failed.';
+    } finally {
+      healthLoading = '';
+    }
+  }
+
+  async function setReleaseChannel(pkg, channel) {
+    lifecycleActioning = `${pkg.id}:channel:${channel}`;
+    clearFeedback();
+    try {
+      await apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}/channel`, {
+        method: 'PUT',
+        body: JSON.stringify({ channel })
+      });
+      await loadLifecycle(pkg.id);
+      message = `"${pkg.title}" channel changed to ${channel}.`;
+    } catch (err) {
+      error = err.message || 'Failed to change channel.';
+    } finally {
+      lifecycleActioning = '';
+    }
+  }
+
+  async function createLifecycleBackup(pkg) {
+    lifecycleActioning = `${pkg.id}:backup`;
+    clearFeedback();
+    try {
+      await apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}/backup`, {
+        method: 'POST',
+        body: JSON.stringify({ note: getBackupNote(pkg.id) || 'Manual backup from Package Center' })
+      });
+      setBackupNote(pkg.id, '');
+      await loadLifecycle(pkg.id);
+      message = `"${pkg.title}" backup created.`;
+    } catch (err) {
+      error = err.message || 'Failed to create backup.';
+    } finally {
+      lifecycleActioning = '';
+    }
+  }
+
+  async function rollbackToBackup(pkg) {
+    const backupId = selectedBackupByApp[pkg.id] || '';
+    if (!backupId) {
+      error = 'Select a backup to rollback.';
+      return;
+    }
+
+    lifecycleActioning = `${pkg.id}:rollback`;
+    clearFeedback();
+    try {
+      await apiFetch(`/api/packages/${encodeURIComponent(pkg.id)}/rollback`, {
+        method: 'POST',
+        body: JSON.stringify({ backupId })
+      });
+      await Promise.all([loadLifecycle(pkg.id), loadRuntimeStatuses()]);
+      message = `"${pkg.title}" rollback completed.`;
+    } catch (err) {
+      error = err.message || 'Rollback failed.';
+    } finally {
+      lifecycleActioning = '';
+    }
+  }
+
+  async function recoverRuntime(pkg) {
+    lifecycleActioning = `${pkg.id}:recover`;
+    clearFeedback();
+    try {
+      await apiFetch(`/api/runtime/apps/${encodeURIComponent(pkg.id)}/recover`, {
+        method: 'POST'
+      });
+      await Promise.all([loadRuntimeStatuses(), loadRuntimeEvents(pkg.id)]);
+      message = `"${pkg.title}" runtime recover requested.`;
+    } catch (err) {
+      error = err.message || 'Runtime recover failed.';
+    } finally {
+      lifecycleActioning = '';
+    }
+  }
+
+  async function toggleOpsConsole(pkg) {
+    const currentlyOpen = isConsoleOpen(pkg);
+    consoleOpenByApp = {
+      ...consoleOpenByApp,
+      [pkg.id]: !currentlyOpen
+    };
+    if (currentlyOpen) {
+      return;
+    }
+
+    await Promise.all([
+      loadLifecycle(pkg.id),
+      loadRuntimeEvents(pkg.id)
+    ]);
+  }
+
   async function removeInstalledPackage(pkg) {
     clearFeedback();
-    const ok = globalThis.confirm(`"${pkg.title}" 패키지를 제거하시겠습니까?`);
+    const ok = globalThis.confirm(`"${pkg.title}" ?⑦궎吏瑜??쒓굅?섏떆寃좎뒿?덇퉴?`);
     if (!ok) return;
 
     try {
@@ -407,11 +648,16 @@
         method: 'DELETE'
       });
       stopInstalledPackage(pkg);
-      message = `"${pkg.title}" 제거 완료`;
+      message = `"${pkg.title}" ?쒓굅 ?꾨즺`;
       clearRuntimeLogs(pkg.id);
+      clearRuntimeEvents(pkg.id);
+      lifecycleByApp = { ...lifecycleByApp, [pkg.id]: null };
+      healthByApp = { ...healthByApp, [pkg.id]: null };
+      consoleOpenByApp = { ...consoleOpenByApp, [pkg.id]: false };
+      selectedBackupByApp = { ...selectedBackupByApp, [pkg.id]: '' };
       await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
     } catch (err) {
-      error = err.message || '패키지 제거에 실패했습니다.';
+      error = err.message || '?⑦궎吏 ?쒓굅???ㅽ뙣?덉뒿?덈떎.';
     }
   }
 
@@ -420,6 +666,12 @@
     const timer = setInterval(() => {
       if (activeCategory === CATEGORY.INSTALLED) {
         loadRuntimeStatuses().catch(() => {});
+        const openIds = Object.entries(consoleOpenByApp)
+          .filter(([, opened]) => opened)
+          .map(([appId]) => appId);
+        for (const appId of openIds) {
+          loadLifecycle(appId).catch(() => {});
+        }
       }
     }, 5000);
     return () => clearInterval(timer);
@@ -435,7 +687,7 @@
     </button>
     <button class="category {activeCategory === CATEGORY.INSTALLED ? 'active' : ''}" onclick={() => activeCategory = CATEGORY.INSTALLED}>
       <LayoutGrid size={16} />
-      <span>설치됨</span>
+      <span>Installed</span>
     </button>
   </aside>
 
@@ -450,20 +702,20 @@
     {#if activeCategory === CATEGORY.STORE}
       <div class="block glass-effect">
         <div class="block-head">
-          <h3>Store 주소 추가</h3>
+          <h3>Store 二쇱냼 異붽?</h3>
           <button class="btn ghost" onclick={loadStorePackages} disabled={loadingStore}>
             <RefreshCw size={14} />
-            새로고침
+            ?덈줈怨좎묠
           </button>
         </div>
 
         <div class="source-form">
-          <input type="text" bind:value={sourceForm.url} oninput={syncSourceId} placeholder="GitHub URL 또는 raw JSON URL" />
-          <input type="text" bind:value={sourceForm.title} oninput={syncSourceId} placeholder="Store 이름" />
+          <input type="text" bind:value={sourceForm.url} oninput={syncSourceId} placeholder="GitHub URL ?먮뒗 raw JSON URL" />
+          <input type="text" bind:value={sourceForm.title} oninput={syncSourceId} placeholder="Store ?대쫫" />
           <input type="text" bind:value={sourceForm.id} placeholder="store-id" />
           <button class="btn primary" onclick={saveStoreSource} disabled={savingSource}>
             <Link2 size={14} />
-            {savingSource ? '저장 중...' : '스토어 추가'}
+            {savingSource ? '???以?..' : '?ㅽ넗??異붽?'}
           </button>
         </div>
 
@@ -472,7 +724,7 @@
             {#each registrySources as source}
               <div class="source-pill">
                 <span>{source.title} ({source.id})</span>
-                <button class="btn tiny" onclick={() => removeStoreSource(source.id)}>제거</button>
+                <button class="btn tiny" onclick={() => removeStoreSource(source.id)}>?쒓굅</button>
               </div>
             {/each}
           </div>
@@ -481,12 +733,12 @@
 
       <div class="block glass-effect">
         <div class="block-head">
-          <h3>Store 목록</h3>
+          <h3>Store 紐⑸줉</h3>
         </div>
 
         {#if ecosystemTemplates.length > 0}
           <div class="ecosystem-templates">
-            <div class="section-title">공식 생태계 템플릿</div>
+            <div class="section-title">Official Ecosystem Templates</div>
             <div class="template-list">
               {#each ecosystemTemplates as template}
                 <article class="template-card">
@@ -500,7 +752,7 @@
                     onclick={() => scaffoldTemplate(template)}
                     disabled={scaffoldingTemplateId === template.id}
                   >
-                    {scaffoldingTemplateId === template.id ? '생성 중...' : '템플릿 생성'}
+                    {scaffoldingTemplateId === template.id ? '?앹꽦 以?..' : '?쒗뵆由??앹꽦'}
                   </button>
                 </article>
               {/each}
@@ -510,7 +762,7 @@
 
         <div class="store-categories">
           <button class="store-filter {activeStoreSource === 'all' ? 'active' : ''}" onclick={() => activeStoreSource = 'all'}>
-            전체 ({storePackages.length})
+            ?꾩껜 ({storePackages.length})
           </button>
           {#each registrySources as source}
             <button class="store-filter {activeStoreSource === source.id ? 'active' : ''}" onclick={() => activeStoreSource = source.id}>
@@ -531,9 +783,9 @@
         {/if}
 
         {#if loadingStore}
-          <div class="empty">스토어 목록 로딩 중...</div>
+          <div class="empty">?ㅽ넗??紐⑸줉 濡쒕뵫 以?..</div>
         {:else if getVisibleStorePackages().length === 0}
-          <div class="empty">표시할 스토어 패키지가 없습니다.</div>
+          <div class="empty">?쒖떆???ㅽ넗???⑦궎吏媛 ?놁뒿?덈떎.</div>
         {:else}
           <div class="grid">
             {#each getVisibleStorePackages() as pkg}
@@ -557,16 +809,28 @@
                 </div>
                 <div class="actions">
                   {#if pkg.installed}
-                    <button class="btn ghost" disabled>설치됨</button>
+                    {#if pkg.updatePolicy?.allowed}
+                      <button class="btn primary" onclick={() => installPackage(pkg, { overwrite: true })} disabled={installingPackageId === pkg.id}>
+                        <Download size={14} />
+                        {installingPackageId === pkg.id ? 'Updating...' : 'Update'}
+                      </button>
+                    {:else}
+                      <button class="btn ghost" disabled>Installed</button>
+                    {/if}
                   {:else if !pkg.zipUrl}
-                    <button class="btn ghost" disabled>설치 불가</button>
+                    <button class="btn ghost" disabled>No Zip</button>
                   {:else}
                     <button class="btn primary" onclick={() => installPackage(pkg)} disabled={installingPackageId === pkg.id}>
                       <Download size={14} />
-                      {installingPackageId === pkg.id ? '설치 중...' : '설치'}
+                      {installingPackageId === pkg.id ? 'Installing...' : 'Install'}
                     </button>
                   {/if}
                 </div>
+                {#if pkg.installed && pkg.updatePolicy && !pkg.updatePolicy.allowed}
+                  <div class="runtime-log-empty">
+                    update blocked: {pkg.updatePolicy.blockedReason || 'policy'}
+                  </div>
+                {/if}
               </article>
             {/each}
           </div>
@@ -577,17 +841,17 @@
     {#if activeCategory === CATEGORY.INSTALLED}
       <div class="block glass-effect">
         <div class="block-head">
-          <h3>설치됨</h3>
+          <h3>Installed</h3>
           <button class="btn ghost" onclick={() => Promise.all([loadInstalledPackages(), loadRuntimeStatuses()])} disabled={loadingInstalled}>
             <RefreshCw size={14} />
-            새로고침
+            Refresh
           </button>
         </div>
 
         {#if loadingInstalled}
-          <div class="empty">설치된 패키지 로딩 중...</div>
+          <div class="empty">Loading installed packages...</div>
         {:else if installedPackages.length === 0}
-          <div class="empty">설치된 패키지가 없습니다.</div>
+          <div class="empty">No installed packages.</div>
         {:else}
           <div class="grid">
             {#each installedPackages as pkg}
@@ -608,6 +872,8 @@
                 <div class="chips">
                   <span>v{pkg.version}</span>
                   <span>{pkg.runtime}</span>
+                  <span>channel:{getLifecycleCurrentChannel(pkg)}</span>
+                  <span class="health {getHealthStatus(pkg)}">health:{String(getHealthStatus(pkg)).toUpperCase()}</span>
                   {#if isServicePackage(pkg)}
                     <span class="runtime {getRuntimeState(pkg)?.status || 'stopped'}">{getRuntimeStatusLabel(pkg)}</span>
                   {/if}
@@ -616,39 +882,166 @@
                   {#if canOpenPackage(pkg)}
                     <button class="btn primary" onclick={() => openInstalledPackage(pkg)}>
                       <Play size={14} />
-                      열기
+                      Open
                     </button>
                     <button class="btn ghost" onclick={() => stopInstalledPackage(pkg)}>
                       <Square size={14} />
-                      창 중지
+                      Close Windows
                     </button>
                   {/if}
                   {#if isServicePackage(pkg)}
                     <button class="btn ghost" onclick={() => controlRuntime(pkg, 'start')} disabled={runtimeActioning === `${pkg.id}:start` || isRuntimeRunning(pkg)}>
                       <Play size={14} />
-                      시작
+                      Start
                     </button>
                     <button class="btn ghost" onclick={() => controlRuntime(pkg, 'stop')} disabled={runtimeActioning === `${pkg.id}:stop` || !isRuntimeRunning(pkg)}>
                       <Square size={14} />
-                      서비스 중지
+                      Stop Service
                     </button>
                     <button class="btn ghost" onclick={() => controlRuntime(pkg, 'restart')} disabled={runtimeActioning === `${pkg.id}:restart`}>
                       <RotateCcw size={14} />
-                      재시작
+                      Restart
                     </button>
                     <button class="btn ghost" onclick={() => toggleRuntimeLogs(pkg)} disabled={runtimeLogsLoading === pkg.id}>
-                      {runtimeLogsByApp[pkg.id] ? '로그 닫기' : (runtimeLogsLoading === pkg.id ? '로그 로딩...' : '로그')}
+                      {runtimeLogsByApp[pkg.id] ? 'Hide Logs' : (runtimeLogsLoading === pkg.id ? 'Loading Logs...' : 'Logs')}
                     </button>
                   {/if}
+                  <button class="btn ghost" onclick={() => runHealthCheck(pkg)} disabled={healthLoading === pkg.id}>
+                    {healthLoading === pkg.id ? 'Health...' : 'Health'}
+                  </button>
+                  <button class="btn ghost" onclick={() => toggleOpsConsole(pkg)} disabled={lifecycleLoading === pkg.id || runtimeEventsLoading === pkg.id}>
+                    {isConsoleOpen(pkg) ? 'Ops Close' : 'Ops Console'}
+                  </button>
                   <button class="btn danger" onclick={() => removeInstalledPackage(pkg)}>
                     <Trash2 size={14} />
-                    제거
+                    Remove
                   </button>
                 </div>
+                {#if isConsoleOpen(pkg)}
+                  <div class="ops-console">
+                    <div class="ops-row">
+                      <div class="ops-group">
+                        <label>Release Channel</label>
+                        <div class="ops-inline">
+                          {#each ['stable', 'beta', 'alpha', 'canary'] as channel}
+                            <button
+                              class="btn tiny {getLifecycleCurrentChannel(pkg) === channel ? 'primary' : 'ghost'}"
+                              onclick={() => setReleaseChannel(pkg, channel)}
+                              disabled={Boolean(lifecycleActioning)}
+                            >
+                              {channel}
+                            </button>
+                          {/each}
+                        </div>
+                      </div>
+                      <div class="ops-group">
+                        <label>Recover Flow</label>
+                        <div class="ops-inline">
+                          <button class="btn tiny ghost" onclick={() => recoverRuntime(pkg)} disabled={lifecycleActioning === `${pkg.id}:recover`}>
+                            {lifecycleActioning === `${pkg.id}:recover` ? 'Recovering...' : 'Recover'}
+                          </button>
+                          <button class="btn tiny ghost" onclick={() => loadRuntimeEvents(pkg.id)} disabled={runtimeEventsLoading === pkg.id}>
+                            {runtimeEventsLoading === pkg.id ? 'Loading events...' : 'Reload events'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="ops-row">
+                      <div class="ops-group">
+                        <label>Create Backup</label>
+                        <div class="ops-inline">
+                          <input
+                            type="text"
+                            placeholder="backup note"
+                            value={getBackupNote(pkg.id)}
+                            oninput={(event) => setBackupNote(pkg.id, event.currentTarget.value)}
+                          />
+                          <button class="btn tiny ghost" onclick={() => createLifecycleBackup(pkg)} disabled={lifecycleActioning === `${pkg.id}:backup`}>
+                            {lifecycleActioning === `${pkg.id}:backup` ? 'Backing up...' : 'Backup'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="ops-row">
+                      <div class="ops-group">
+                        <label>Rollback</label>
+                        <div class="ops-inline">
+                          <select
+                            onchange={(event) => setSelectedBackup(pkg.id, event.currentTarget.value)}
+                            value={selectedBackupByApp[pkg.id] || ''}
+                          >
+                            <option value="">select backup</option>
+                            {#each getAvailableBackups(pkg) as backup}
+                              <option value={backup.id}>
+                                {backup.id} | {backup.version} | {formatDateTime(backup.createdAt)}
+                              </option>
+                            {/each}
+                          </select>
+                          <button class="btn tiny danger" onclick={() => rollbackToBackup(pkg)} disabled={lifecycleActioning === `${pkg.id}:rollback`}>
+                            {lifecycleActioning === `${pkg.id}:rollback` ? 'Rolling back...' : 'Rollback'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="ops-row split">
+                      <div class="ops-panel">
+                        <div class="ops-panel-title">Lifecycle Summary</div>
+                        {#if lifecycleLoading === pkg.id}
+                          <div class="runtime-log-empty">Loading lifecycle...</div>
+                        {:else if !getLifecycle(pkg)}
+                          <div class="runtime-log-empty">No lifecycle data.</div>
+                        {:else}
+                          <div class="ops-meta-list">
+                            <div>Current: {getLifecycle(pkg)?.current?.version || '-'}</div>
+                            <div>Installed: {formatDateTime(getLifecycle(pkg)?.current?.installedAt)}</div>
+                            <div>Source: {getLifecycle(pkg)?.current?.source || '-'}</div>
+                            <div>Backups: {getAvailableBackups(pkg).length}</div>
+                          </div>
+                        {/if}
+                      </div>
+                      <div class="ops-panel">
+                        <div class="ops-panel-title">Recent Runtime Events</div>
+                        {#if runtimeEventsLoading === pkg.id}
+                          <div class="runtime-log-empty">Loading events...</div>
+                        {:else if !runtimeEventsByApp[pkg.id] || runtimeEventsByApp[pkg.id].length === 0}
+                          <div class="runtime-log-empty">No events.</div>
+                        {:else}
+                          <div class="event-list">
+                            {#each runtimeEventsByApp[pkg.id].slice(-10).reverse() as event}
+                              <div class="event-row">
+                                <span>{formatDateTime(event.timestamp)}</span>
+                                <span>{formatEventLabel(event)}</span>
+                                <span>{event.reason || event.message || '-'}</span>
+                              </div>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+
+                    <div class="ops-row">
+                      <div class="ops-group">
+                        <label>Last Health/QA</label>
+                        {#if getHealthReport(pkg)}
+                          <div class="ops-meta-list">
+                            <div>Status: {String(getHealthStatus(pkg)).toUpperCase()}</div>
+                            <div>Checked: {formatDateTime(getHealthReport(pkg)?.checkedAt)}</div>
+                            <div>Summary: {getHealthReport(pkg)?.summary || '-'}</div>
+                          </div>
+                        {:else}
+                          <div class="runtime-log-empty">No health report yet.</div>
+                        {/if}
+                      </div>
+                    </div>
+                  </div>
+                {/if}
                 {#if runtimeLogsByApp[pkg.id]}
                   <div class="runtime-log-panel">
                     {#if runtimeLogsByApp[pkg.id].length === 0}
-                      <div class="runtime-log-empty">로그가 없습니다.</div>
+                      <div class="runtime-log-empty">No logs.</div>
                     {:else}
                       {#each runtimeLogsByApp[pkg.id] as row}
                         <div class="runtime-log-line">
@@ -980,6 +1373,27 @@
     background: rgba(51, 65, 85, 0.25);
   }
 
+  .chips .health.pass {
+    color: #bbf7d0;
+    background: rgba(22, 163, 74, 0.18);
+  }
+
+  .chips .health.warn {
+    color: #fde68a;
+    background: rgba(202, 138, 4, 0.18);
+  }
+
+  .chips .health.fail,
+  .chips .health.error {
+    color: #fecaca;
+    background: rgba(185, 28, 28, 0.2);
+  }
+
+  .chips .health.unknown {
+    color: #cbd5e1;
+    background: rgba(51, 65, 85, 0.25);
+  }
+
   .actions {
     margin-top: auto;
     display: flex;
@@ -1037,12 +1451,103 @@
     font-size: 13px;
   }
 
+  .ops-console {
+    margin-top: 2px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    padding: 10px;
+    background: rgba(2, 6, 23, 0.5);
+    display: grid;
+    gap: 10px;
+  }
+
+  .ops-row {
+    display: grid;
+    gap: 8px;
+  }
+
+  .ops-row.split {
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .ops-group {
+    display: grid;
+    gap: 6px;
+  }
+
+  .ops-group label {
+    font-size: 11px;
+    color: #93c5fd;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .ops-inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .ops-inline input,
+  .ops-inline select {
+    min-width: 160px;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.65);
+    color: #e2e8f0;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .ops-panel {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 10px;
+    padding: 8px;
+    background: rgba(15, 23, 36, 0.45);
+    display: grid;
+    gap: 8px;
+  }
+
+  .ops-panel-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #dbeafe;
+  }
+
+  .ops-meta-list {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    color: #cbd5e1;
+  }
+
+  .event-list {
+    max-height: 170px;
+    overflow: auto;
+    display: grid;
+    gap: 6px;
+  }
+
+  .event-row {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr 1fr;
+    gap: 8px;
+    font-size: 11px;
+    color: #cbd5e1;
+  }
+
   @media (max-width: 1000px) {
     .package-center {
       grid-template-columns: 1fr;
     }
 
     .source-form {
+      grid-template-columns: 1fr;
+    }
+
+    .ops-row.split {
       grid-template-columns: 1fr;
     }
   }
@@ -1086,3 +1591,4 @@
     color: var(--text-dim);
   }
 </style>
+
