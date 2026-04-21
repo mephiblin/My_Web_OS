@@ -171,6 +171,31 @@ npm install
 npm run dev
 ```
 
+### 2-1. Docker 실행 (Portability Profile)
+`docker-compose.yml`은 다음 분리 원칙을 사용합니다.
+
+- `webos_storage` 볼륨: Web OS 내부 상태/인벤토리 영속화 (`/app/server/storage`)
+- 호스트 바인드 경로:
+  - `./data -> /workspace/data`
+  - `./media -> /workspace/media`
+- `ALLOWED_ROOTS`는 컨테이너 내부 경로(`/workspace/data`, `/workspace/media`) 기준으로 설정
+
+실행:
+```bash
+docker compose up --build -d
+```
+
+로그 확인:
+```bash
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+중지:
+```bash
+docker compose down
+```
+
 ### 3. 접속 정보
 인스턴스가 실행되면 브라우저를 통해 다음 주소로 접속합니다.
 - **주소**: `http://localhost:5173` (Vite 기본 포트)

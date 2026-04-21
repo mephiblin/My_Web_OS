@@ -32,6 +32,7 @@ const shareRouter = require('./routes/share');
 const servicesRouter = require('./routes/services');
 const sandboxRouter = require('./routes/sandbox');
 const runtimeRouter = require('./routes/runtime');
+const transferRouter = require('./routes/transfer');
 
 async function bootstrap() {
   const config = await serverConfig.getAll();
@@ -96,6 +97,7 @@ async function bootstrap() {
   app.use('/api/services', servicesRouter);
   app.use('/api/sandbox', sandboxRouter);
   app.use('/api/runtime', runtimeRouter);
+  app.use('/api/transfer', transferRouter);
 
   app.set('serviceManager', serviceManager);
   app.set('runtimeManager', runtimeManager);

@@ -673,8 +673,6 @@ Do not automatically start the next backlog item after finishing the current one
 ### P3
 
 - (worked items migrated) See `완료.md` -> `P3 작업 이관`
-- download/transfer manager
-- Docker packaging and portability
 
 ## Verification
 
