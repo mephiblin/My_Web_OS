@@ -1,10 +1,11 @@
 <script>
-  import { Shield, Search, Settings, Bell, LayoutGrid } from 'lucide-svelte';
+  import { Shield, Search, Settings, Bell, LayoutGrid, Bot, AlertTriangle, XCircle, CheckCircle, Loader, Terminal, Ear, Play } from 'lucide-svelte';
   import { windows, activeWindowId, focusWindow, toggleMinimize } from '../stores/windowStore.js';
   import { desktops, currentDesktopId, switchDesktop, layoutEditMode, toggleLayoutEditMode } from '../stores/desktopStore.js';
   import { notifications } from '../stores/notificationStore.js';
   import { openSpotlight } from '../stores/spotlightStore.js';
   import { taskbarSettings } from '../stores/taskbarStore.js';
+  import { agentStore } from '../stores/agentStore.js';
 
   let {
     time,
@@ -24,11 +25,32 @@
     $taskbarSettings.iconSize === 'sm' ? 16 : $taskbarSettings.iconSize === 'lg' ? 20 : 18
   );
   const taskbarHeight = $derived($taskbarSettings.compactMode ? 42 : 48);
+  const agentStatusColor = $derived(
+    $agentStore.status === 'listening' ? '#38bdf8' :
+    $agentStore.status === 'thinking' ? '#a78bfa' :
+    $agentStore.status === 'executing' ? '#60a5fa' :
+    $agentStore.status === 'success' ? '#10b981' :
+    $agentStore.status === 'warning' ? '#f59e0b' :
+    $agentStore.status === 'error' ? '#ef4444' :
+    $agentStore.status === 'terminal' ? '#eab308' :
+    'var(--accent-blue)'
+  );
 
   function resolveWindowIcon(win) {
     if (win.iconComponent) return win.iconComponent;
     if (typeof win.icon === 'function') return win.icon;
     return LayoutGrid;
+  }
+
+  function resolveAgentIcon() {
+    if ($agentStore.status === 'listening') return Ear;
+    if ($agentStore.status === 'thinking') return Loader;
+    if ($agentStore.status === 'executing') return Play;
+    if ($agentStore.status === 'success') return CheckCircle;
+    if ($agentStore.status === 'warning') return AlertTriangle;
+    if ($agentStore.status === 'error') return XCircle;
+    if ($agentStore.status === 'terminal') return Terminal;
+    return Bot;
   }
 
   $effect(() => {
@@ -46,6 +68,17 @@
       bind:this={startButtonEl}
     >
       <Shield size={iconPixel + 2} />
+    </button>
+  {/if}
+  {#if $agentStore.visible}
+    <button
+      class="start-menu-btn agent-task-btn {$agentStore.isOpen ? 'active' : ''}"
+      onclick={() => agentStore.togglePanel()}
+      title="Agent Chat"
+      aria-label="Agent Chat"
+      style="--agent-status-color: {agentStatusColor};"
+    >
+      <svelte:component this={resolveAgentIcon()} size={iconPixel + 1} class={$agentStore.status === 'thinking' ? 'spin' : ''} />
     </button>
   {/if}
 
@@ -153,11 +186,30 @@
     color: white;
     border: none;
     background: transparent;
+    position: relative;
   }
   .start-menu-btn:hover { background: rgba(255,255,255,0.1); }
   .start-menu-btn.active {
     background: rgba(88, 166, 255, 0.2);
     color: var(--accent-blue);
+  }
+  .agent-task-btn {
+    border: 1px solid color-mix(in srgb, var(--agent-status-color) 55%, transparent);
+  }
+  .agent-task-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: 4px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--agent-status-color);
+  }
+  .spin {
+    animation: spinArea 1.5s linear infinite;
+  }
+  @keyframes spinArea {
+    100% { transform: rotate(360deg); }
   }
 
   .desktop-switcher { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-right: 1px solid rgba(255,255,255,0.1); }

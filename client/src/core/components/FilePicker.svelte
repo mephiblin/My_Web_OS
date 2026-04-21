@@ -11,16 +11,48 @@
   let searchQuery = $state('');
   let isLoading = $state(false);
   let selectedItem = $state(null);
+  let loadError = $state('');
+
+  function withTimeout(promise, timeoutMs = 10000, message = 'Request timed out.') {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]).finally(() => clearTimeout(timer));
+  }
+
+  function normalizeUserDirs(response) {
+    if (!response || typeof response !== 'object') return [];
+    const orderedKeys = ['desktop', 'documents', 'downloads', 'pictures', 'videos', 'music'];
+    return orderedKeys
+      .map((key) => ({
+        key,
+        name: key.charAt(0).toUpperCase() + key.slice(1),
+        path: response?.[key]?.path || ''
+      }))
+      .filter((item) => Boolean(item.path));
+  }
 
   async function loadPath(path = '') {
     isLoading = true;
+    loadError = '';
     try {
-      const data = await apiFetch(`/fs/list?path=${encodeURIComponent(path)}`);
+      const data = await withTimeout(
+        apiFetch(`/fs/list?path=${encodeURIComponent(path)}`),
+        10000,
+        'Directory load timed out.'
+      );
       currentPath = data.path;
-      items = data.items;
+      items = Array.isArray(data.items) ? data.items : [];
       selectedItem = null;
+      return true;
     } catch (e) {
       console.error(e);
+      items = [];
+      loadError = e?.message || 'Failed to load this folder.';
+      return false;
     } finally {
       isLoading = false;
     }
@@ -28,14 +60,38 @@
 
   async function loadUserDirs() {
     try {
-      userDirs = await apiFetch('/fs/user-dirs');
+      const data = await withTimeout(
+        apiFetch('/fs/user-dirs'),
+        5000,
+        'User directory discovery timed out.'
+      );
+      userDirs = normalizeUserDirs(data);
+      return true;
     } catch (e) { console.error(e); }
+    userDirs = [];
+    return false;
   }
 
   onMount(async () => {
-    const config = await apiFetch('/fs/config');
+    let initialPath = '';
+    try {
+      const config = await withTimeout(apiFetch('/fs/config'), 5000, 'FS config request timed out.');
+      initialPath = String(config?.initialPath || '');
+    } catch (e) {
+      console.error(e);
+    }
+
     await loadUserDirs();
-    await loadPath(config.initialPath);
+
+    const candidates = [initialPath, userDirs[0]?.path, '/home/inri', '/']
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    const uniqueCandidates = [...new Set(candidates)];
+
+    for (const candidate of uniqueCandidates) {
+      const ok = await loadPath(candidate);
+      if (ok) return;
+    }
   });
 
   function handleItemClick(item) {
@@ -113,13 +169,6 @@
     <div class="body">
       <aside class="sidebar">
         <div class="section">
-          <label>Inventory</label>
-          <button class="side-item {currentPath.includes('wallpapers') ? 'active' : ''}" onclick={() => loadPath('/home/inri/문서/web_os/server/storage/inventory/wallpapers')}>
-            <ImageIcon size={16} /> <span>Wallpapers</span>
-          </button>
-        </div>
-
-        <div class="section">
           <label>Locations</label>
           <button class="side-item {currentPath === '/home/inri' ? 'active' : ''}" onclick={() => loadPath('/home/inri')}>
             <Home size={16} /> <span>Home</span>
@@ -131,7 +180,7 @@
             <label>Shortcuts</label>
             {#each userDirs as dir}
               <button class="side-item" onclick={() => loadPath(dir.path)}>
-                <svelte:component this={getIcon({isDirectory: true})} size={16} />
+                <Folder size={16} />
                 <span>{dir.name}</span>
               </button>
             {/each}
@@ -142,6 +191,8 @@
       <main class="grid-area">
         {#if isLoading}
           <div class="loading">Loading...</div>
+        {:else if loadError}
+          <div class="loading">{loadError}</div>
         {:else}
           <div class="file-grid">
             {#each filteredItems as item}

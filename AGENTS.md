@@ -664,27 +664,15 @@ Do not automatically start the next backlog item after finishing the current one
 
 ### P1
 
-- Code Editor and Package Center file editing integration
-- Theme presets
-- desktop layout persistence and edit mode
-- Agent status expansion and approval cards
-- Wrapped Assistant Mode UI skeleton
 - (worked items migrated) See `완료.md` -> `P1 작업 이관`
 
 ### P2
 
-- Context menu customization
-- app-specific window backgrounds
-- Docker logs/ports/volumes/Compose
-- Media playlist/background audio
-- Document Viewer controls/search
-- Model Viewer advanced inspection
+- (worked items migrated) See `완료.md` -> `P2 작업 이관`
 
 ### P3
 
-- WebDAV/cloud write and mount status
-- backup job manager
-- service/runtime/package dashboard
+- (worked items migrated) See `완료.md` -> `P3 작업 이관`
 - download/transfer manager
 - Docker packaging and portability
 

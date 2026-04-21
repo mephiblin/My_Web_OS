@@ -232,7 +232,7 @@
         promise,
         new Promise((_, reject) => {
           timer = setTimeout(() => {
-            const err = new Error(timeoutMessage || '?붿껌 ?쒓컙??珥덇낵?섏뿀?듬땲??');
+            const err = new Error(timeoutMessage || 'Request timed out.');
             err.code = 'REQUEST_TIMEOUT';
             reject(err);
           }, timeoutMs);
@@ -914,7 +914,7 @@
       }
     } catch (err) {
       installedPackages = [];
-      error = err.message || '?ㅼ튂???⑦궎吏 紐⑸줉??媛?몄삤吏 紐삵뻽?듬땲??';
+      error = err.message || 'Failed to load installed packages.';
     } finally {
       loadingInstalled = false;
     }
@@ -963,7 +963,7 @@
         .map((result) => ({
           id: result.source?.id || 'unknown',
           title: result.source?.title || result.source?.id || 'Unknown Source',
-          error: result.error || '?ㅽ넗?대? ?쎌? 紐삵뻽?듬땲??'
+          error: result.error || 'Failed to load source.'
         }));
       storePackages = results
         .filter((result) => result.ok)
@@ -979,7 +979,7 @@
     } catch (err) {
       storePackages = [];
       storeSourceErrors = [];
-      error = err.message || '?ㅽ넗??紐⑸줉??遺덈윭?ㅼ? 紐삵뻽?듬땲??';
+      error = err.message || 'Failed to load store packages.';
     } finally {
       loadingStore = false;
     }
@@ -1000,11 +1000,11 @@
     const sourceId = sourceForm.id.trim() || slugify(sourceForm.title || normalizedUrl);
 
     if (!normalizedUrl) {
-      error = '?ㅽ넗??二쇱냼瑜??낅젰?섏꽭??';
+      error = 'Please enter a store URL.';
       return;
     }
     if (!sourceId) {
-      error = '?ㅽ넗??ID瑜??낅젰?섏꽭??';
+      error = 'Please enter a store ID.';
       return;
     }
 
@@ -1019,12 +1019,12 @@
         })
       });
 
-      message = `?ㅽ넗??"${sourceId}"瑜?異붽??덉뒿?덈떎.`;
+      message = `Store source "${sourceId}" added.`;
       sourceForm = { id: '', title: '', url: '' };
       await loadRegistrySources();
       await loadStorePackages();
     } catch (err) {
-      error = err.message || '?ㅽ넗??二쇱냼 ??μ뿉 ?ㅽ뙣?덉뒿?덈떎.';
+      error = err.message || 'Failed to save store source.';
     } finally {
       savingSource = false;
     }
@@ -1036,14 +1036,14 @@
       await apiFetch(`/api/packages/registry/sources/${encodeURIComponent(sourceId)}`, {
         method: 'DELETE'
       });
-      message = `?ㅽ넗??"${sourceId}"瑜??쒓굅?덉뒿?덈떎.`;
+      message = `Store source "${sourceId}" removed.`;
       if (activeStoreSource === sourceId) {
         activeStoreSource = 'all';
       }
       await loadRegistrySources();
       await loadStorePackages();
     } catch (err) {
-      error = err.message || '?ㅽ넗???쒓굅???ㅽ뙣?덉뒿?덈떎.';
+      error = err.message || 'Failed to remove store source.';
     }
   }
 
@@ -1052,16 +1052,16 @@
     clearFeedback();
     try {
       const appId = `${template.id}-${Math.random().toString(36).slice(2, 8)}`;
-      const title = `${template.title} ${new Date().toLocaleTimeString('ko-KR', { hour12: false })}`;
+      const title = `${template.title} ${new Date().toLocaleTimeString('en-US', { hour12: false })}`;
       await apiFetch(`/api/packages/ecosystem/templates/${encodeURIComponent(template.id)}/scaffold`, {
         method: 'POST',
         body: JSON.stringify({ appId, title })
       });
-      message = `?쒗뵆由?"${template.title}"濡?"${appId}" ?앹꽦 ?꾨즺`;
+      message = `Created "${appId}" from template "${template.title}".`;
       await Promise.all([loadInstalledPackages(), loadRuntimeStatuses()]);
       activeCategory = CATEGORY.INSTALLED;
     } catch (err) {
-      error = err.message || '?쒗뵆由??앹꽦???ㅽ뙣?덉뒿?덈떎.';
+      error = err.message || 'Template scaffold failed.';
     } finally {
       scaffoldingTemplateId = '';
     }
@@ -1109,14 +1109,14 @@
   function stopInstalledPackage(pkg) {
     const active = get(windows).filter((item) => item.appId === pkg.id);
     if (active.length === 0) {
-      message = `"${pkg.title}" ?ㅽ뻾 以묒씤 李쎌씠 ?놁뒿?덈떎.`;
+      message = `No running window found for "${pkg.title}".`;
       return;
     }
 
     for (const win of active) {
       closeWindow(win.id);
     }
-    message = `"${pkg.title}" 李?${active.length}媛쒕? 以묒??덉뒿?덈떎.`;
+    message = `Closed ${active.length} window(s) for "${pkg.title}".`;
   }
 
   async function controlRuntime(pkg, action) {
@@ -1150,14 +1150,14 @@
       const response = await withTimeout(
         fetchRuntimeLogs(pkg.id, 200),
         10000,
-        '濡쒓렇 議고쉶媛 吏?곕릺怨??덉뒿?덈떎.'
+        'Runtime log request timed out.'
       );
       runtimeLogsByApp = {
         ...runtimeLogsByApp,
         [pkg.id]: Array.isArray(response.logs) ? response.logs : []
       };
     } catch (err) {
-      error = err.message || '?고???濡쒓렇瑜?遺덈윭?ㅼ? 紐삵뻽?듬땲??';
+      error = err.message || 'Failed to load runtime logs.';
     } finally {
       runtimeLogsLoading = '';
     }
@@ -1514,7 +1514,7 @@
 
   async function removeInstalledPackage(pkg) {
     clearFeedback();
-    const ok = globalThis.confirm(`"${pkg.title}" ?⑦궎吏瑜??쒓굅?섏떆寃좎뒿?덇퉴?`);
+    const ok = globalThis.confirm(`Remove package "${pkg.title}"?`);
     if (!ok) return;
 
     try {
@@ -1523,7 +1523,7 @@
       }
       await removeInstalledPackageRequest(pkg.id);
       stopInstalledPackage(pkg);
-      message = `"${pkg.title}" ?쒓굅 ?꾨즺`;
+      message = `Package "${pkg.title}" removed.`;
       clearRuntimeLogs(pkg.id);
       clearRuntimeEvents(pkg.id);
       lifecycleByApp = { ...lifecycleByApp, [pkg.id]: null };
@@ -1552,7 +1552,7 @@
       }
       await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
     } catch (err) {
-      error = err.message || '?⑦궎吏 ?쒓굅???ㅽ뙣?덉뒿?덈떎.';
+      error = err.message || 'Failed to remove package.';
     }
   }
 
@@ -1597,20 +1597,20 @@
     {#if activeCategory === CATEGORY.STORE}
       <div class="block glass-effect">
         <div class="block-head">
-          <h3>Store 二쇱냼 異붽?</h3>
+          <h3>Add Store Source</h3>
           <button class="btn ghost" onclick={loadStorePackages} disabled={loadingStore}>
             <RefreshCw size={14} />
-            ?덈줈怨좎묠
+            Reload
           </button>
         </div>
 
         <div class="source-form">
-          <input type="text" bind:value={sourceForm.url} oninput={syncSourceId} placeholder="GitHub URL ?먮뒗 raw JSON URL" />
-          <input type="text" bind:value={sourceForm.title} oninput={syncSourceId} placeholder="Store ?대쫫" />
+          <input type="text" bind:value={sourceForm.url} oninput={syncSourceId} placeholder="GitHub URL or raw JSON URL" />
+          <input type="text" bind:value={sourceForm.title} oninput={syncSourceId} placeholder="Store title" />
           <input type="text" bind:value={sourceForm.id} placeholder="store-id" />
           <button class="btn primary" onclick={saveStoreSource} disabled={savingSource}>
             <Link2 size={14} />
-            {savingSource ? '???以?..' : '?ㅽ넗??異붽?'}
+            {savingSource ? 'Saving...' : 'Add Source'}
           </button>
         </div>
 
@@ -1619,7 +1619,7 @@
             {#each registrySources as source}
               <div class="source-pill">
                 <span>{source.title} ({source.id})</span>
-                <button class="btn tiny" onclick={() => removeStoreSource(source.id)}>?쒓굅</button>
+                <button class="btn tiny" onclick={() => removeStoreSource(source.id)}>Remove</button>
               </div>
             {/each}
           </div>
@@ -1628,7 +1628,7 @@
 
       <div class="block glass-effect">
         <div class="block-head">
-          <h3>Store 紐⑸줉</h3>
+          <h3>Store Packages</h3>
         </div>
 
         {#if ecosystemTemplates.length > 0}
@@ -1647,7 +1647,7 @@
                     onclick={() => scaffoldTemplate(template)}
                     disabled={scaffoldingTemplateId === template.id}
                   >
-                    {scaffoldingTemplateId === template.id ? '?앹꽦 以?..' : '?쒗뵆由??앹꽦'}
+                    {scaffoldingTemplateId === template.id ? 'Creating...' : 'Create From Template'}
                   </button>
                 </article>
               {/each}
@@ -1760,7 +1760,7 @@
 
         <div class="store-categories">
           <button class="store-filter {activeStoreSource === 'all' ? 'active' : ''}" onclick={() => activeStoreSource = 'all'}>
-            ?꾩껜 ({storePackages.length})
+            All ({storePackages.length})
           </button>
           {#each registrySources as source}
             <button class="store-filter {activeStoreSource === source.id ? 'active' : ''}" onclick={() => activeStoreSource = source.id}>
@@ -1781,9 +1781,9 @@
         {/if}
 
         {#if loadingStore}
-          <div class="empty">?ㅽ넗??紐⑸줉 濡쒕뵫 以?..</div>
+          <div class="empty">Loading store packages...</div>
         {:else if getVisibleStorePackages().length === 0}
-          <div class="empty">?쒖떆???ㅽ넗???⑦궎吏媛 ?놁뒿?덈떎.</div>
+          <div class="empty">No packages found for the selected source.</div>
         {:else}
           <div class="grid">
             {#each getVisibleStorePackages() as pkg}
