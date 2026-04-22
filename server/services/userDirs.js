@@ -239,4 +239,42 @@ function detectUserDirs() {
   return response;
 }
 
-module.exports = { detectUserDirs };
+/**
+ * Build preferred file-station places from detected user dirs.
+ * Intended for boot-time defaults when ALLOWED_ROOTS/INITIAL_PATH are not set.
+ */
+function detectPreferredPlaces() {
+  const detected = detectUserDirs();
+  const preferredOrder = ['documents', 'desktop', 'downloads', 'pictures', 'music', 'videos'];
+  const allowedRoots = [];
+  const seen = new Set();
+
+  for (const key of preferredOrder) {
+    const candidate = detected?.[key]?.path;
+    if (!candidate) continue;
+    const normalized = path.resolve(candidate);
+    if (seen.has(normalized.toLowerCase())) continue;
+    seen.add(normalized.toLowerCase());
+    allowedRoots.push(normalized);
+  }
+
+  const homePath = detected?.home ? path.resolve(detected.home) : '';
+  if (homePath && !seen.has(homePath.toLowerCase())) {
+    allowedRoots.push(homePath);
+  }
+
+  const initialPath =
+    detected?.documents?.path ||
+    detected?.downloads?.path ||
+    detected?.desktop?.path ||
+    detected?.home ||
+    '/';
+
+  return {
+    allowedRoots,
+    initialPath: initialPath ? path.resolve(initialPath) : '/',
+    homePath
+  };
+}
+
+module.exports = { detectUserDirs, detectPreferredPlaces };

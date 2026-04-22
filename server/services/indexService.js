@@ -57,7 +57,10 @@ const indexService = {
         ],
         persistent: true,
         ignoreInitial: false,
-        depth: currentIndexDepth
+        depth: currentIndexDepth,
+        // Windows junctions (e.g. "My Music") can throw EPERM.
+        // Keep the indexer alive instead of crashing the whole server.
+        ignorePermissionErrors: true
       });
 
       watcher
@@ -65,7 +68,11 @@ const indexService = {
         .on('addDir', (filePath) => this.queueUpdate(filePath, 'dir'))
         .on('unlink', (filePath) => this.remove(filePath))
         .on('unlinkDir', (filePath) => this.remove(filePath))
-        .on('change', (filePath) => this.queueUpdate(filePath, 'file'));
+        .on('change', (filePath) => this.queueUpdate(filePath, 'file'))
+        .on('error', (err) => {
+          lastError = err?.message || 'Unknown watcher error';
+          console.warn('[INDEX] Watcher warning:', lastError);
+        });
 
       saveInterval = setInterval(() => this.save(), 60000);
       startedAt = Date.now();

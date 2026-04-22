@@ -1,6 +1,7 @@
 const fs = require('fs').promises;
 const path = require('path');
 const dotenv = require('dotenv');
+const { detectPreferredPlaces } = require('../services/userDirs');
 
 const DEFAULTS_PATH = path.join(__dirname, 'defaults.json');
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -8,7 +9,7 @@ const SERVER_ROOT = path.join(PROJECT_ROOT, 'server');
 const ENV_PATH = path.join(PROJECT_ROOT, '.env');
 
 const SENSITIVE_KEYS = new Set(['JWT_SECRET', 'ADMIN_PASSWORD']);
-const REQUIRED_KEYS = ['JWT_SECRET', 'ALLOWED_ROOTS'];
+const REQUIRED_KEYS = ['JWT_SECRET'];
 const UI_SETTINGS_KEYS = [
   'PORT',
   'NODE_ENV',
@@ -73,6 +74,10 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeComparablePath(value) {
+  return path.resolve(String(value || '')).replace(/[\\/]+/g, path.sep).toLowerCase();
+}
+
 function getByPath(obj, keyPath) {
   return keyPath.split('.').reduce((acc, key) => (acc ? acc[key] : undefined), obj);
 }
@@ -125,8 +130,48 @@ async function writeEnvFile(envObj) {
 }
 
 function buildResolved(envObj, defaults) {
-  const allowedRoots = parseAllowedRoots(envObj.ALLOWED_ROOTS, defaults.paths.allowedRoots || []);
+  const fallbackPlaces = detectPreferredPlaces();
+  let allowedRoots = parseAllowedRoots(
+    envObj.ALLOWED_ROOTS,
+    (defaults.paths.allowedRoots && defaults.paths.allowedRoots.length > 0)
+      ? defaults.paths.allowedRoots
+      : fallbackPlaces.allowedRoots
+  );
+  const projectRootComparable = normalizeComparablePath(PROJECT_ROOT);
+  const legacyWorkspaceLock =
+    Array.isArray(allowedRoots) &&
+    allowedRoots.length === 1 &&
+    normalizeComparablePath(allowedRoots[0]) === projectRootComparable &&
+    Array.isArray(fallbackPlaces.allowedRoots) &&
+    fallbackPlaces.allowedRoots.length > 0;
+  if (legacyWorkspaceLock) {
+    allowedRoots = fallbackPlaces.allowedRoots;
+  }
+  const homePath = fallbackPlaces.homePath ? path.resolve(fallbackPlaces.homePath) : '';
+  const hasHomeRoot = homePath
+    ? allowedRoots.some((root) => normalizeComparablePath(root) === normalizeComparablePath(homePath))
+    : false;
+  const shouldAutoIncludeHome =
+    Boolean(homePath) &&
+    !hasHomeRoot &&
+    allowedRoots.length > 0 &&
+    allowedRoots.every((root) => {
+      const normalizedRoot = normalizeComparablePath(root);
+      const normalizedHome = normalizeComparablePath(homePath);
+      return normalizedRoot === normalizedHome || normalizedRoot.startsWith(`${normalizedHome}${path.sep}`);
+    });
+  if (shouldAutoIncludeHome) {
+    allowedRoots = [...allowedRoots, homePath];
+  }
   const corsOrigin = parseCorsOrigin(envObj.CORS_ORIGIN, defaults.server.corsOrigin || '*');
+  const envInitialPath = typeof envObj.INITIAL_PATH === 'string' && envObj.INITIAL_PATH.trim()
+    ? envObj.INITIAL_PATH
+    : '';
+  const initialPathRaw = envInitialPath
+    ? (legacyWorkspaceLock ? fallbackPlaces.initialPath : envInitialPath)
+    : (defaults.paths.initialPath && String(defaults.paths.initialPath).trim() && defaults.paths.initialPath !== '/'
+      ? defaults.paths.initialPath
+      : fallbackPlaces.initialPath);
 
   return {
     server: {
@@ -150,7 +195,7 @@ function buildResolved(envObj, defaults) {
       storageRoot: path.join(PROJECT_ROOT, 'storage'),
       serverStorageRoot: path.join(SERVER_ROOT, 'storage'),
       inventoryRoot: path.join(SERVER_ROOT, 'storage', 'inventory'),
-      initialPath: envObj.INITIAL_PATH || defaults.paths.initialPath,
+      initialPath: initialPathRaw,
       allowedRoots,
       indexDepth: parseNumber(envObj.INDEX_DEPTH, defaults.paths.indexDepth)
     }
