@@ -1,4 +1,4 @@
-# AGENTS.md
+﻿# AGENTS.md
 
 This file is the repository-level operating guide for coding agents.
 It must be enough to start work without rereading every planning document, while still pointing to the right source when the task is ambiguous.
@@ -10,9 +10,9 @@ An agent should be able to read only this file and start safely.
 1. Classify the request into one or more layers: Host Layer, Web Desktop Layer, Sandbox / Package Layer.
 2. Inspect the relevant existing files before inventing new structure. Look for current routes, services, stores, components, and API helpers first.
 3. If product direction is unclear, read only the relevant source document:
-   - Identity, boundaries, operational reliability: `기획서.md`
-   - Feature scope, priorities, Package Center, local workstation features: `기획서2.md`
-   - UI/UX, customization, Start Menu, Taskbar, Window, Agent/CLI: `기획서3.md`
+   - Identity, boundaries, operational reliability: `doc/legacy/기획서.md`
+   - Feature scope, priorities, Package Center, local workstation features: `doc/legacy/기획서2.md`
+   - UI/UX, customization, Start Menu, Taskbar, Window, Agent/CLI: `doc/legacy/기획서3.md`
 4. Implement in this order: `API/service contract -> store/helper -> minimal UI -> verification -> docs update`.
 5. Before coding UI polish, handle Host/Sandbox boundaries, backup/rollback behavior, explicit error codes, and user approval flows.
 6. For Package Center work, prioritize the Installed operations console over Store browsing: lifecycle, runtime, health, logs, events, backup, rollback.
@@ -80,9 +80,9 @@ Core principles:
 
 The source of truth for product direction is the three planning documents below.
 
-1. `기획서.md`: project identity, Host/Sandbox philosophy, operational reliability rules
-2. `기획서2.md`: feature definitions, Package Center direction, local workstation direction, feature priorities
-3. `기획서3.md`: UI/UX, customization, Start Menu, Taskbar, Window, Agent/CLI direction
+1. `doc/legacy/기획서.md`: project identity, Host/Sandbox philosophy, operational reliability rules
+2. `doc/legacy/기획서2.md`: feature definitions, Package Center direction, local workstation direction, feature priorities
+3. `doc/legacy/기획서3.md`: UI/UX, customization, Start Menu, Taskbar, Window, Agent/CLI direction
 
 `AGENTS.md` translates those planning documents into execution order and working rules.
 
@@ -96,9 +96,9 @@ The documents below are references, not source of truth. Read them only when nee
 
 Conflict resolution:
 
-- Product direction follows `기획서.md`.
-- Feature priority follows the P0/P1/P2/P3 sections in `기획서2.md`.
-- UI/customization/Agent direction follows `기획서3.md`.
+- Product direction follows `doc/legacy/기획서.md`.
+- Feature priority follows the P0/P1/P2/P3 sections in `doc/legacy/기획서2.md`.
+- UI/customization/Agent direction follows `doc/legacy/기획서3.md`.
 - If current code conflicts with the planning documents, inspect the code and move it gradually toward the planning direction.
 - If `README.md`, `next.md`, or `doc/계획표8.md` conflict with the three planning documents, prefer the planning documents and update references only when needed.
 
@@ -426,9 +426,9 @@ Read first:
 - `package.json`
 - `client/package.json`
 - `README.md`
-- `기획서.md`
-- `기획서2.md`
-- `기획서3.md`
+- `doc/legacy/기획서.md`
+- `doc/legacy/기획서2.md`
+- `doc/legacy/기획서3.md`
 
 Keep modular:
 
@@ -487,7 +487,7 @@ Priority order:
 
 ### 4. UI Customization Foundation
 
-Implement `기획서3.md` customization in this order.
+Implement `doc/legacy/기획서3.md` customization in this order.
 
 1. Basic Start Menu
 2. Persist `desktopStore.js` state through backend system state
@@ -676,11 +676,7 @@ Do not automatically start the next backlog item after finishing the current one
 
 ### P4
 
-- Media Library boundary model (Inventory vs User Media)
-- Browse Local Files -> Import to Library UX unification
-- media-library API contract and explicit MEDIA_LIBRARY_* errors
-- package manifest media scopes + approval/audit integration
-- migration guide for legacy wallpaper/media path references
+- (worked items migrated) See `완료.md` -> `P4 작업 이관`
 
 ## Verification
 
@@ -741,3 +737,4 @@ A good change:
 
 This repository uses `AGENTS.md` as the canonical agent guide.
 If another tool needs `CLAUDE.md` or `.github/copilot-instructions.md`, mirror this file rather than maintaining conflicting instructions.
+

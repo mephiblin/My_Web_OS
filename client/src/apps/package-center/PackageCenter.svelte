@@ -397,6 +397,9 @@
       parseError: '',
       preflightLoading: false,
       preflight: null,
+      approvals: {
+        mediaScopesAccepted: false
+      },
       saving: false
     };
     const next = typeof updater === 'function' ? updater(previous) : { ...previous, ...updater };
@@ -809,7 +812,88 @@
           'message'
         ], blocked ? 'Manifest preflight is blocked.' : 'Manifest preflight completed.')
       ),
+      mediaScopeReview: normalizeManifestMediaScopeReview(raw),
       source: payload ? 'preflight-endpoint' : 'fallback'
+    };
+  }
+
+  function normalizeManifestMediaScopeReview(source) {
+    if (!source || typeof source !== 'object') return null;
+
+    const raw = readPreflightField(
+      source,
+      [
+        'mediaScopeReview',
+        'mediaScopesReview',
+        'mediaScope',
+        'mediaScopes',
+        ['approvalReview', 'mediaScopeReview'],
+        ['approvals', 'mediaScopeReview']
+      ],
+      source
+    );
+
+    if (!raw || typeof raw !== 'object') return null;
+
+    const approvalRequired = Boolean(
+      readPreflightField(
+        raw,
+        [
+          'approvalRequired',
+          'requiresApproval',
+          'needsApproval',
+          'approvalNeeded',
+          ['approval', 'required'],
+          ['approval', 'needsApproval']
+        ],
+        false
+      )
+    );
+
+    const approvalAccepted = Boolean(
+      readPreflightField(
+        raw,
+        [
+          'approvalAccepted',
+          'approved',
+          'accepted',
+          'isApproved',
+          ['approval', 'accepted'],
+          ['approval', 'approved']
+        ],
+        false
+      )
+    );
+
+    const scopes = normalizeReviewItems(
+      readPreflightField(raw, ['scopes', 'items', 'permissions', 'checks', 'entries', 'mediaScopes'], []),
+      'media-scope'
+    );
+    const normalizedStatus = normalizeReviewDecision(
+      readPreflightField(raw, ['status', 'decision', 'result', 'overallStatus'], approvalRequired && !approvalAccepted ? 'warn' : 'pass')
+    );
+    const status = approvalRequired && !approvalAccepted && normalizedStatus === 'pass' ? 'warn' : normalizedStatus;
+    const risk = normalizeReviewText(
+      readPreflightField(raw, ['risk', 'riskLevel', 'severity', 'level'], approvalRequired && !approvalAccepted ? 'review' : 'low')
+    );
+    const summary = normalizeReviewText(
+      readPreflightField(
+        raw,
+        ['summary', 'message', 'reason', 'note'],
+        approvalRequired && !approvalAccepted
+          ? 'Media scope approval is required before saving this manifest.'
+          : 'Media scope review completed.'
+      )
+    );
+
+    return {
+      status,
+      risk,
+      summary,
+      approvalRequired,
+      approvalAccepted,
+      scopes,
+      source: source ? 'preflight-endpoint' : 'fallback'
     };
   }
 
@@ -898,6 +982,38 @@
     if (review.decision === 'pass' && !review.blocked) return 'PASS';
     if (review.decision === 'blocked' || review.blocked) return 'BLOCKED';
     return 'WARN';
+  }
+
+  function getManifestEditorApprovals(state) {
+    const approvals = state?.approvals && typeof state.approvals === 'object' ? state.approvals : {};
+    return {
+      mediaScopesAccepted: approvals.mediaScopesAccepted === true
+    };
+  }
+
+  function getManifestMediaScopeReview(state) {
+    const review = state?.preflight?.mediaScopeReview || null;
+    if (!review || typeof review !== 'object') return null;
+
+    const approvals = getManifestEditorApprovals(state);
+    return {
+      ...review,
+      approvalRequired: review.approvalRequired === true,
+      approvalAccepted: review.approvalAccepted === true || approvals.mediaScopesAccepted === true,
+      scopes: Array.isArray(review.scopes) ? review.scopes : []
+    };
+  }
+
+  function getManifestMediaScopeStatusLabel(review) {
+    if (!review) return 'REVIEW';
+    if (review.approvalRequired && !review.approvalAccepted) return 'APPROVAL REQUIRED';
+    if (review.approvalAccepted) return 'APPROVED';
+    return String(review.status || 'review').toUpperCase();
+  }
+
+  function getManifestMediaScopeApprovalHint(review) {
+    if (!review?.approvalRequired) return 'Approval not required.';
+    return review.approvalAccepted ? 'Approved for save.' : 'Approval required before save.';
   }
 
   async function loadInstalledPackages() {
@@ -1301,6 +1417,9 @@
       parseError: '',
       preflightLoading: false,
       preflight: null,
+      approvals: {
+        mediaScopesAccepted: false
+      },
       saving: false
     });
 
@@ -1321,7 +1440,10 @@
         text: JSON.stringify(manifestValue, null, 2),
         parsed: manifestValue,
         parseError: '',
-        preflight: null
+        preflight: null,
+        approvals: {
+          mediaScopesAccepted: false
+        }
       });
     } catch (err) {
       updateManifestEditorState(pkg.id, {
@@ -1353,8 +1475,21 @@
       text: value,
       parsed,
       parseError,
-      preflight: null
+      preflight: null,
+      approvals: {
+        mediaScopesAccepted: false
+      }
     });
+  }
+
+  function setManifestMediaScopesAccepted(pkg, checked) {
+    updateManifestEditorState(pkg.id, (current) => ({
+      ...current,
+      approvals: {
+        ...(current?.approvals && typeof current.approvals === 'object' ? current.approvals : {}),
+        mediaScopesAccepted: checked === true
+      }
+    }));
   }
 
   async function runManifestPreflight(pkg) {
@@ -1370,7 +1505,7 @@
 
     try {
       const response = await withTimeout(
-        preflightPackageManifestUpdate(pkg.id, current.parsed),
+        preflightPackageManifestUpdate(pkg.id, current.parsed, getManifestEditorApprovals(current)),
         12000,
         'Manifest preflight timed out.'
       );
@@ -1399,8 +1534,13 @@
     if (!current || current.loading || current.saving || current.parseError || !current.parsed) {
       return;
     }
+    const mediaScopeReview = getManifestMediaScopeReview(current);
     if (current.preflight?.blocked) {
       error = 'Manifest preflight is blocked. Resolve blockers before saving.';
+      return;
+    }
+    if (mediaScopeReview?.approvalRequired && !mediaScopeReview.approvalAccepted) {
+      error = 'Media scope approval is required before saving this manifest.';
       return;
     }
 
@@ -1411,7 +1551,7 @@
 
     try {
       await withTimeout(
-        updatePackageManifest(pkg.id, current.parsed),
+        updatePackageManifest(pkg.id, current.parsed, getManifestEditorApprovals(current)),
         15000,
         'Manifest update timed out.'
       );
@@ -2157,6 +2297,48 @@
                                   </span>
                                   <span class="preflight-summary-inline">{getManifestEditorState(pkg.id)?.preflight?.summary}</span>
                                 </div>
+                                {#if getManifestMediaScopeReview(getManifestEditorState(pkg.id))}
+                                  <div class="preflight-group">
+                                    <label>Media Scope Review</label>
+                                    <div class="preflight-summary-inline">
+                                      {getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.summary}
+                                    </div>
+                                    <div class="manifest-review-meta">
+                                      <span class="preflight-decision {getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalRequired && !getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted ? 'warn' : getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted ? 'pass' : getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.status}">
+                                        {getManifestMediaScopeStatusLabel(getManifestMediaScopeReview(getManifestEditorState(pkg.id)))}
+                                      </span>
+                                      <span class="manifest-review-chip">
+                                        Risk: {getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.risk || 'unknown'}
+                                      </span>
+                                      <span class="manifest-review-chip">
+                                        {getManifestMediaScopeApprovalHint(getManifestMediaScopeReview(getManifestEditorState(pkg.id)))}
+                                      </span>
+                                    </div>
+                                    {#if getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.scopes?.length}
+                                      <div class="preflight-list">
+                                        {#each getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.scopes || [] as scope}
+                                          <div class="preflight-item">
+                                            <span class="preflight-item-status {scope.status}">{String(scope.status || 'info').toUpperCase()}</span>
+                                            <span>{scope.label}</span>
+                                            {#if scope.detail}
+                                              <span class="preflight-item-detail">{scope.detail}</span>
+                                            {/if}
+                                          </div>
+                                        {/each}
+                                      </div>
+                                    {/if}
+                                    {#if getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalRequired}
+                                      <label class="preflight-bypass manifest-approval-toggle">
+                                        <input
+                                          type="checkbox"
+                                          checked={getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted === true}
+                                          onchange={(event) => setManifestMediaScopesAccepted(pkg, event.currentTarget.checked)}
+                                        />
+                                        I reviewed and approve the media scope changes
+                                      </label>
+                                    {/if}
+                                  </div>
+                                {/if}
                                 {#if getManifestEditorState(pkg.id)?.preflight?.blockers?.length}
                                   <div class="preflight-list">
                                     {#each getManifestEditorState(pkg.id)?.preflight?.blockers || [] as blocker}
@@ -2188,12 +2370,16 @@
                                   class="btn tiny primary"
                                   onclick={() => saveManifestUpdate(pkg)}
                                   disabled={
-                                    Boolean(getManifestEditorState(pkg.id)?.saving)
-                                    || Boolean(getManifestEditorState(pkg.id)?.preflightLoading)
-                                    || Boolean(getManifestEditorState(pkg.id)?.parseError)
-                                    || !getManifestEditorState(pkg.id)?.parsed
-                                    || Boolean(getManifestEditorState(pkg.id)?.preflight?.blocked)
-                                  }
+                                  Boolean(getManifestEditorState(pkg.id)?.saving)
+                                  || Boolean(getManifestEditorState(pkg.id)?.preflightLoading)
+                                  || Boolean(getManifestEditorState(pkg.id)?.parseError)
+                                  || !getManifestEditorState(pkg.id)?.parsed
+                                  || Boolean(getManifestEditorState(pkg.id)?.preflight?.blocked)
+                                  || (
+                                    getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalRequired
+                                    && !getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted
+                                  )
+                                }
                                 >
                                   {getManifestEditorState(pkg.id)?.saving ? 'Saving...' : 'Save Manifest'}
                                 </button>
@@ -3008,6 +3194,21 @@
     gap: 6px;
   }
 
+  .manifest-review-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .manifest-review-chip {
+    border-radius: 999px;
+    padding: 3px 8px;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(51, 65, 85, 0.24);
+    color: #cbd5e1;
+    font-size: 11px;
+  }
+
   .preflight-item {
     display: grid;
     gap: 2px;
@@ -3070,6 +3271,10 @@
     margin: 0;
     padding: 0;
     border-radius: 4px;
+  }
+
+  .manifest-approval-toggle {
+    margin-top: 2px;
   }
 
   .preflight-buttons {

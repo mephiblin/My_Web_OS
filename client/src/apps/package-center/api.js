@@ -4,6 +4,23 @@ function encodeAppId(appId) {
   return encodeURIComponent(String(appId || ''));
 }
 
+function buildManifestApprovalEnvelope(manifest, options = {}) {
+  const approvals =
+    options.approvals && typeof options.approvals === 'object'
+      ? options.approvals
+      : {
+          mediaScopesAccepted: options.mediaScopesAccepted === true
+        };
+
+  return {
+    manifest: manifest || {},
+    approvals: {
+      ...approvals,
+      mediaScopesAccepted: approvals.mediaScopesAccepted === true
+    }
+  };
+}
+
 export async function fetchInstalledPackages() {
   return apiFetch('/api/packages');
 }
@@ -43,19 +60,17 @@ export async function fetchPackageFileEntries(appId, relativePath = '') {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/files${query ? `?${query}` : ''}`);
 }
 
-export async function preflightPackageManifestUpdate(appId, manifest) {
+export async function preflightPackageManifestUpdate(appId, manifest, options = {}) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/manifest/preflight`, {
     method: 'POST',
-    body: JSON.stringify({
-      manifest: manifest || {}
-    })
+    body: JSON.stringify(buildManifestApprovalEnvelope(manifest, options))
   });
 }
 
-export async function updatePackageManifest(appId, manifest) {
+export async function updatePackageManifest(appId, manifest, options = {}) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/manifest`, {
     method: 'PUT',
-    body: JSON.stringify(manifest || {})
+    body: JSON.stringify(buildManifestApprovalEnvelope(manifest, options))
   });
 }
 

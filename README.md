@@ -231,6 +231,19 @@ docker compose down
 
 ---
 
+## 🔁 레거시 경로 마이그레이션 (P4)
+
+배경화면/미디어 참조를 기존 직접 경로 방식에서 Media Library 표준 경로로 옮길 때는 아래 가이드를 사용하세요.
+
+- [Media Library 마이그레이션 가이드](MEDIA_LIBRARY_MIGRATION.md)
+
+핵심 기준:
+
+- `image`/`video` 배경화면은 `/api/media-library-files/wallpapers/<filename>` 형식을 사용
+- 로컬 절대경로, `/api/fs/raw?path=...` 같은 레거시 참조는 `Browse Local Files -> Import` 흐름으로 전환
+
+---
+
 ## ⚠️ 현재 강점과 유의점
 
 ### **강점**

@@ -11,6 +11,7 @@ const DEFAULT_WINDOW = {
   minHeight: 320
 };
 const ICON_FILE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
+const MEDIA_SCOPE_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 
 function normalizeBuiltinIcon(iconValue) {
   if (typeof iconValue !== 'string') {
@@ -110,6 +111,63 @@ function normalizeSandboxIcon(iconValue, appId) {
   };
 }
 
+function normalizeManifestMediaScopes(input, options = {}) {
+  const strict = Boolean(options.strict);
+  let rawScopes = [];
+
+  if (Array.isArray(input)) {
+    rawScopes = input;
+  } else if (input && typeof input === 'object') {
+    if (Array.isArray(input.scopes)) {
+      rawScopes = input.scopes;
+    } else if (input.media && typeof input.media === 'object' && Array.isArray(input.media.scopes)) {
+      rawScopes = input.media.scopes;
+    } else if (Array.isArray(input.mediaScopes)) {
+      rawScopes = input.mediaScopes;
+    } else if (strict && Object.prototype.hasOwnProperty.call(input, 'media')) {
+      if (input.media === null || typeof input.media !== 'object' || Array.isArray(input.media)) {
+        const err = new Error('Manifest media scopes must be an array of strings.');
+        err.code = 'PACKAGE_MEDIA_SCOPES_INVALID';
+        throw err;
+      }
+      if (Object.prototype.hasOwnProperty.call(input.media, 'scopes') && !Array.isArray(input.media.scopes)) {
+        const err = new Error('Manifest media.scopes must be an array of strings.');
+        err.code = 'PACKAGE_MEDIA_SCOPES_INVALID';
+        throw err;
+      }
+    } else if (strict && Object.prototype.hasOwnProperty.call(input, 'mediaScopes') && !Array.isArray(input.mediaScopes)) {
+      const err = new Error('Manifest mediaScopes must be an array of strings.');
+      err.code = 'PACKAGE_MEDIA_SCOPES_INVALID';
+      throw err;
+    }
+  } else if (strict && input !== undefined && input !== null) {
+    const err = new Error('Manifest media scopes must be an array of strings.');
+    err.code = 'PACKAGE_MEDIA_SCOPES_INVALID';
+    throw err;
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (const scopeValue of rawScopes) {
+    const scope = String(scopeValue || '').trim().toLowerCase();
+    if (!scope) continue;
+    if (!MEDIA_SCOPE_RE.test(scope)) {
+      if (strict) {
+        const err = new Error(`Invalid media scope "${scopeValue}".`);
+        err.code = 'PACKAGE_MEDIA_SCOPE_INVALID';
+        throw err;
+      }
+      continue;
+    }
+
+    if (seen.has(scope)) continue;
+    seen.add(scope);
+    normalized.push(scope);
+  }
+
+  return normalized;
+}
+
 async function readBuiltinRegistry() {
   await inventoryPaths.ensureInventoryStructure();
   const [appsFile, legacyAppsFile] = await Promise.all([
@@ -172,6 +230,7 @@ function normalizeSandboxManifest(manifest) {
   if (!manifest || typeof manifest !== 'object') return null;
   const runtimeProfile = normalizeRuntimeProfile(manifest);
   const resolvedEntry = runtimeProfile.entry;
+  const mediaScopes = normalizeManifestMediaScopes(manifest);
 
   if (typeof manifest.id !== 'string' || typeof manifest.title !== 'string') {
     return null;
@@ -206,6 +265,9 @@ function normalizeSandboxManifest(manifest) {
     singleton: Boolean(manifest.singleton),
     permissions: Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : [],
     capabilities: Array.isArray(manifest.capabilities) ? manifest.capabilities.map(String).filter(Boolean) : [],
+    media: {
+      scopes: mediaScopes
+    },
     author: manifest.author || '',
     repository: manifest.repository || '',
     window: normalizeWindow(manifest.window)
@@ -281,6 +343,8 @@ async function listSandboxApps() {
 }
 
 const packageRegistryService = {
+  normalizeManifestMediaScopes,
+
   async listDesktopApps() {
     const [builtinApps, sandboxApps] = await Promise.all([
       readBuiltinRegistry(),

@@ -1,7 +1,6 @@
-# Dependency folders
+﻿# Dependency folders
 node_modules/
 client/node_modules/
-doc/
 
 # Environment variables (Sensitive)
 .env

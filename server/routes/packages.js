@@ -653,11 +653,78 @@ done
 
   return `'use strict';
 
-console.log('Service ${appId} started');
+  console.log('Service ${appId} started');
 setInterval(() => {
   console.log('heartbeat');
 }, 5000);
 `;
+}
+
+function resolveManifestRequestBody(body = {}) {
+  const requestBody = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const hasWrappedManifest = Object.prototype.hasOwnProperty.call(requestBody, 'manifest');
+  const wrappedManifest = hasWrappedManifest ? requestBody.manifest : null;
+
+  if (hasWrappedManifest && (!wrappedManifest || typeof wrappedManifest !== 'object' || Array.isArray(wrappedManifest))) {
+    const err = new Error('Body "manifest" object is required.');
+    err.code = 'PACKAGE_MANIFEST_REQUIRED';
+    throw err;
+  }
+
+  const approvals = requestBody.approvals && typeof requestBody.approvals === 'object' && !Array.isArray(requestBody.approvals)
+    ? requestBody.approvals
+    : {};
+
+  return {
+    manifestInput: hasWrappedManifest ? wrappedManifest : requestBody,
+    approvals,
+    wrapped: hasWrappedManifest
+  };
+}
+
+function compareMediaScopes(previousScopes = [], nextScopes = []) {
+  const previous = Array.isArray(previousScopes) ? previousScopes : [];
+  const next = Array.isArray(nextScopes) ? nextScopes : [];
+  const previousSet = new Set(previous);
+  const nextSet = new Set(next);
+
+  return {
+    previous,
+    next,
+    added: next.filter((scope) => !previousSet.has(scope)),
+    removed: previous.filter((scope) => !nextSet.has(scope))
+  };
+}
+
+function buildMediaScopeReview(manifest = {}, options = {}) {
+  const previousScopes = packageRegistryService.normalizeManifestMediaScopes(options.previousManifest || {});
+  const scopes = packageRegistryService.normalizeManifestMediaScopes(manifest, { strict: true });
+  const approvalReceived = Boolean(options.approvalReceived);
+  const scopeChanges = compareMediaScopes(previousScopes, scopes);
+  const requiresApproval = scopes.length > 0;
+  const blockers = requiresApproval && !approvalReceived
+    ? [
+        {
+          code: 'PACKAGE_MEDIA_SCOPE_APPROVAL_REQUIRED',
+          message: 'Media scopes require explicit approval before this update can be saved.',
+          area: 'media'
+        }
+      ]
+    : [];
+
+  return {
+    scopes,
+    summary: {
+      total: scopes.length,
+      previous: previousScopes.length,
+      added: scopeChanges.added.length,
+      removed: scopeChanges.removed.length
+    },
+    requiresApproval,
+    approvalReceived,
+    blockers,
+    changes: scopeChanges
+  };
 }
 
 function normalizeManifestInput(input, fallbackAppId) {
@@ -709,6 +776,7 @@ function normalizeManifestInput(input, fallbackAppId) {
   const runtimeFields = toManifestRuntimeFields(runtimeProfile);
   const dependencies = normalizeManifestDependencies(input?.dependencies);
   const compatibility = normalizeManifestCompatibility(input?.compatibility);
+  const mediaScopes = packageRegistryService.normalizeManifestMediaScopes(input, { strict: true });
   const release = {
     channel: normalizeManifestChannel(input?.release?.channel || input?.channel || 'stable')
   };
@@ -734,6 +802,9 @@ function normalizeManifestInput(input, fallbackAppId) {
     capabilities: Array.isArray(input?.capabilities)
       ? input.capabilities.map((capability) => String(capability)).filter(Boolean)
       : [],
+    media: {
+      scopes: mediaScopes
+    },
     dependencies,
     compatibility,
     release,
@@ -2848,6 +2919,9 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
     const routeAppId = appPaths.assertSafeAppId(req.params.id);
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const manifestInput = body.manifest;
+    const approvals = body.approvals && typeof body.approvals === 'object' && !Array.isArray(body.approvals)
+      ? body.approvals
+      : {};
 
     if (!manifestInput || typeof manifestInput !== 'object' || Array.isArray(manifestInput)) {
       return res.status(400).json({
@@ -2886,6 +2960,11 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
     }
 
     const permissionsReview = buildPermissionReview(manifest);
+    const previousManifest = await readManifestRaw(routeAppId);
+    const mediaScopeReview = buildMediaScopeReview(manifest, {
+      previousManifest,
+      approvalReceived: approvals.mediaScopesAccepted === true
+    });
 
     let dependencyCompatibility = null;
     try {
@@ -2898,6 +2977,7 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
     }
 
     const blockers = [];
+    blockers.push(...mediaScopeReview.blockers);
     let runtimeProfile = null;
     try {
       runtimeProfile = normalizeRuntimeProfile(manifest);
@@ -2941,6 +3021,7 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
           appId: routeAppId
         },
         permissionsReview,
+        mediaScopeReview,
         dependencyCompatibility,
         executionReadiness: {
           ready: blockers.length === 0,
@@ -2971,7 +3052,9 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
 router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
   try {
     const routeAppId = appPaths.assertSafeAppId(req.params.id);
-    const manifest = normalizeManifestInput(req.body || {}, routeAppId);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const { manifestInput, approvals } = resolveManifestRequestBody(body);
+    const manifest = normalizeManifestInput(manifestInput, routeAppId);
     if (manifest.id !== routeAppId) {
       return res.status(400).json({
         error: true,
@@ -2990,6 +3073,18 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
     }
 
     const previousManifest = await readManifestRaw(routeAppId);
+    const mediaScopeReview = buildMediaScopeReview(manifest, {
+      previousManifest,
+      approvalReceived: approvals.mediaScopesAccepted === true
+    });
+    if (mediaScopeReview.requiresApproval && !mediaScopeReview.approvalReceived) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_MEDIA_SCOPE_APPROVAL_REQUIRED',
+        message: 'Media scopes require explicit approval before this update can be saved.',
+        mediaScopeReview
+      });
+    }
     const runtimeProfile = normalizeRuntimeProfile(manifest);
     assertValidRuntimeProfile(manifest, runtimeProfile);
     const shouldValidateUiEntry = runtimeProfile.appType !== 'service';
@@ -3015,7 +3110,16 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
     await auditService.log(
       'PACKAGES',
       `Update Manifest: ${routeAppId}`,
-      { appId: routeAppId, user: req.user?.username },
+      {
+        appId: routeAppId,
+        user: req.user?.username,
+        mediaScopeChanges: mediaScopeReview.changes,
+        mediaScopeApproval: {
+          required: mediaScopeReview.requiresApproval,
+          received: mediaScopeReview.approvalReceived,
+          accepted: approvals.mediaScopesAccepted === true
+        }
+      },
       'INFO'
     );
 
@@ -3023,7 +3127,8 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
     return res.json({
       success: true,
       package: updated,
-      manifest
+      manifest,
+      mediaScopeReview
     });
   } catch (err) {
     const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') || err.code === 'RUNTIME_PROFILE_INVALID' ? 400 : 500;
