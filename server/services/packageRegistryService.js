@@ -10,6 +10,24 @@ const DEFAULT_WINDOW = {
   minWidth: 480,
   minHeight: 320
 };
+const APP_MODELS = Object.freeze({
+  SYSTEM: 'system',
+  STANDARD: 'standard',
+  PACKAGE: 'package'
+});
+const OWNERSHIP_CONTRACT_VERSION = '1.0.0';
+const BUILTIN_SYSTEM_APP_IDS = new Set([
+  'files',
+  'terminal',
+  'monitor',
+  'docker',
+  'control-panel',
+  'settings',
+  'logs',
+  'package-center',
+  'transfer'
+]);
+const BUILTIN_DEFAULT_VERSION = '0.0.0';
 const ICON_FILE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
 const MEDIA_SCOPE_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 
@@ -212,18 +230,146 @@ function normalizeWindow(value) {
 
 function normalizeBuiltinApp(app) {
   const iconMeta = normalizeBuiltinIcon(app.icon);
+  const appModel = classifyBuiltinAppModel(app);
+  const normalizedTitle = String(app.title || app.name || app.id || '').trim() || 'Untitled App';
+  const normalizedDescription = String(app.description || '').trim();
+  const normalizedVersion = String(app.version || BUILTIN_DEFAULT_VERSION).trim() || BUILTIN_DEFAULT_VERSION;
+  const normalizedEntry = typeof app.entry === 'string' && app.entry.trim() ? app.entry.trim() : '';
+  const normalizedPermissions = Array.isArray(app.permissions) ? app.permissions.map(String).filter(Boolean) : [];
+  const normalizedWindow = normalizeWindow(app.window);
+  const builtinType = appModel === APP_MODELS.SYSTEM ? 'system' : 'app';
+
   return {
     ...app,
+    title: normalizedTitle,
+    description: normalizedDescription,
+    version: normalizedVersion,
+    appModel,
+    type: app.type || builtinType,
+    appType: app.appType || builtinType,
+    entry: normalizedEntry,
     runtime: 'builtin',
+    runtimeType: 'builtin',
     source: 'system-registry',
-    permissions: Array.isArray(app.permissions) ? app.permissions : [],
+    permissions: normalizedPermissions,
     singleton: Boolean(app.singleton),
     icon: iconMeta.icon,
     iconType: iconMeta.iconType,
     iconName: iconMeta.iconName,
     iconUrl: iconMeta.iconUrl,
-    window: normalizeWindow(app.window)
+    window: normalizedWindow,
+    launch: {
+      mode: 'component',
+      componentId: String(app.componentId || app.id || '').trim() || String(app.id || '').trim(),
+      singleton: Boolean(app.singleton)
+    },
+    manifestLike: {
+      id: String(app.id || '').trim(),
+      title: normalizedTitle,
+      description: normalizedDescription,
+      version: normalizedVersion,
+      type: builtinType,
+      runtime: {
+        type: 'builtin',
+        entry: normalizedEntry
+      },
+      permissions: normalizedPermissions,
+      window: normalizedWindow
+    }
   };
+}
+
+function normalizeAppModel(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === APP_MODELS.SYSTEM ||
+    normalized === APP_MODELS.STANDARD ||
+    normalized === APP_MODELS.PACKAGE
+  ) {
+    return normalized;
+  }
+
+  return null;
+}
+
+function classifyBuiltinAppModel(app) {
+  const explicitModel = normalizeAppModel(app?.appModel);
+  if (explicitModel && explicitModel !== APP_MODELS.PACKAGE) {
+    return explicitModel;
+  }
+
+  const explicitType = String(app?.type || app?.appType || app?.kind || '').trim().toLowerCase();
+  if (explicitType === 'system' || explicitType === 'core' || explicitType === 'host') {
+    return APP_MODELS.SYSTEM;
+  }
+  if (explicitType === 'standard' || explicitType === 'app' || explicitType === 'builtin') {
+    return APP_MODELS.STANDARD;
+  }
+
+  if (BUILTIN_SYSTEM_APP_IDS.has(app?.id)) {
+    return APP_MODELS.SYSTEM;
+  }
+
+  return APP_MODELS.STANDARD;
+}
+
+function resolveOwnerTier(appModel) {
+  if (appModel === APP_MODELS.SYSTEM) {
+    return 'core-system';
+  }
+  if (appModel === APP_MODELS.STANDARD) {
+    return 'core-addon';
+  }
+  if (appModel === APP_MODELS.PACKAGE) {
+    return 'package-addon';
+  }
+  return 'unknown';
+}
+
+function resolveLaunchContract(app) {
+  const launch = app && typeof app.launch === 'object' ? app.launch : null;
+  const runtimeType = String(app?.runtimeType || '').trim().toLowerCase();
+  const mode = launch?.mode || (runtimeType === 'builtin' ? 'component' : runtimeType === 'sandbox-html' ? 'sandbox' : 'unknown');
+
+  return {
+    mode,
+    componentId: launch?.componentId ?? null,
+    entryUrl: launch?.entryUrl ?? null,
+    singleton: Boolean(launch?.singleton ?? app?.singleton)
+  };
+}
+
+function resolveDataBoundary(ownerTier, launch) {
+  if (ownerTier === 'package-addon') {
+    return 'inventory-app-data';
+  }
+  if (launch.mode === 'component') {
+    return 'host-shared';
+  }
+  return 'none';
+}
+
+function buildOwnershipMatrixItems(apps) {
+  return apps.map((app) => {
+    const appModel = normalizeAppModel(app?.appModel) || null;
+    const ownerTier = resolveOwnerTier(appModel);
+    const launch = resolveLaunchContract(app);
+
+    return {
+      id: String(app?.id || '').trim(),
+      title: String(app?.title || '').trim(),
+      appModel,
+      ownerTier,
+      source: String(app?.source || '').trim(),
+      runtimeType: String(app?.runtimeType || app?.runtime || '').trim(),
+      launch,
+      dataBoundary: resolveDataBoundary(ownerTier, launch)
+    };
+  });
 }
 
 function normalizeSandboxManifest(manifest) {
@@ -249,6 +395,7 @@ function normalizeSandboxManifest(manifest) {
     id: manifest.id,
     title: manifest.title,
     description: manifest.description || '',
+    appModel: APP_MODELS.PACKAGE,
     icon: iconMeta.icon,
     iconType: iconMeta.iconType,
     iconName: iconMeta.iconName,
@@ -318,6 +465,12 @@ async function readSandboxManifest(appId) {
 
   return {
     ...safeNormalized,
+    launch: {
+      mode: 'sandbox',
+      componentId: null,
+      singleton: Boolean(safeNormalized.singleton),
+      entryUrl: `/api/sandbox/${encodeURIComponent(appId)}/${normalized.entry.replace(/^[/\\]+/, '')}`
+    },
     sandbox: {
       routeBase: `/api/sandbox/${encodeURIComponent(appId)}/`,
       entryUrl: `/api/sandbox/${encodeURIComponent(appId)}/${normalized.entry.replace(/^[/\\]+/, '')}`
@@ -344,6 +497,7 @@ async function listSandboxApps() {
 
 const packageRegistryService = {
   normalizeManifestMediaScopes,
+  OWNERSHIP_CONTRACT_VERSION,
 
   async listDesktopApps() {
     const [builtinApps, sandboxApps] = await Promise.all([
@@ -380,6 +534,14 @@ const packageRegistryService = {
 
   async listSandboxApps() {
     return listSandboxApps();
+  },
+
+  async getAppsOwnershipMatrix() {
+    const apps = await this.listDesktopApps();
+    return {
+      contractVersion: OWNERSHIP_CONTRACT_VERSION,
+      items: buildOwnershipMatrixItems(apps)
+    };
   }
 };
 

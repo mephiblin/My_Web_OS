@@ -4,7 +4,7 @@
   import { spotlightVisible, spotlightQuery, closeSpotlight } from './stores/spotlightStore.js';
   import { openWindow } from './stores/windowStore.js';
   import { addToast } from './stores/toastStore.js';
-  import * as fsApi from '../apps/file-explorer/api.js';
+  import * as fsApi from '../apps/system/file-explorer/api.js';
 
   let inputEl;
   let results = $state([]);

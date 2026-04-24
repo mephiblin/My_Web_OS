@@ -1,127 +1,86 @@
-﻿# AGENTS.md
+# AGENTS.md
 
-This file is the repository-level operating guide for coding agents.
-It must be enough to start work without rereading every planning document, while still pointing to the right source when the task is ambiguous.
+This is the repository-level preset for coding agents working on My Web OS.
+It should be enough to begin work safely without rereading every document, while still pointing to the right source when product direction is unclear.
 
-## Immediate Work Protocol
+## Operating Mode
 
-An agent should be able to read only this file and start safely.
+Default behavior:
 
-1. Classify the request into one or more layers: Host Layer, Web Desktop Layer, Sandbox / Package Layer.
-2. Inspect the relevant existing files before inventing new structure. Look for current routes, services, stores, components, and API helpers first.
-3. If product direction is unclear, read only the relevant source document:
-   - Identity, boundaries, operational reliability: `doc/legacy/기획서.md`
-   - Feature scope, priorities, Package Center, local workstation features: `doc/legacy/기획서2.md`
-   - UI/UX, customization, Start Menu, Taskbar, Window, Agent/CLI: `doc/legacy/기획서3.md`
-4. Implement in this order: `API/service contract -> store/helper -> minimal UI -> verification -> docs update`.
-5. Before coding UI polish, handle Host/Sandbox boundaries, backup/rollback behavior, explicit error codes, and user approval flows.
-6. For Package Center work, prioritize the Installed operations console over Store browsing: lifecycle, runtime, health, logs, events, backup, rollback.
-7. For UI work, preserve the current dark glassmorphism desktop language and do not push feature logic into `Desktop.svelte` or `Window.svelte`.
-8. After changes, run the smallest useful verification for the touched area, or state clearly why it was not run.
+1. Classify the request into one or more layers: `Host`, `Web Desktop`, `Sandbox / Package`.
+2. Inspect existing code before inventing structure. Reuse current routes, services, stores, components, and API helpers.
+3. Work in this order: `API/service contract -> store/helper -> minimal UI -> verification -> docs update`.
+4. Handle boundaries, explicit errors, approvals, backup/rollback, and recovery before UI polish.
+5. Run the smallest useful verification for the touched area, or state why it was skipped.
+6. Never revert unrelated dirty work.
 
 Default development priority:
 
 `reliability/boundary -> Package Center operations -> local workstation core -> UI customization -> Agent/LLM -> media/home lab -> Docker portability`
 
-## Codex Multi-Agent Orchestration
-
-Codex may use sub-agents only when the user explicitly asks for parallel agents, delegation, orchestration, or multi-agent collaboration.
-Do not spawn sub-agents just because a task is large or requires investigation.
-
-Use this pattern when multi-agent work is requested:
-
-1. The main agent owns the plan, critical path, final integration, and final answer.
-2. Delegate only bounded side tasks that can run in parallel without blocking the main agent's immediate next step.
-3. Use explorer agents for read-only codebase questions with specific outputs.
-4. Use worker agents for implementation tasks with explicit file/module ownership.
-5. Never assign overlapping write areas to multiple workers.
-6. Tell workers they are not alone in the codebase and must not revert unrelated changes.
-7. Review returned changes before integrating or reporting completion.
-8. Close or ignore sub-agents once their result is no longer needed.
-
-Good delegation examples:
-
-- Explorer A checks Package Center UI flow while the main agent inspects backend package routes.
-- Explorer B checks runtime manager state transitions while the main agent edits Package Center UI.
-- Worker A owns `server/routes/packages.js` and package services while Worker B owns `client/src/apps/package-center/` UI.
-- Worker A owns Agent store/backend action mapping while Worker B owns Agent chat panel UI.
-
-Avoid delegation when:
-
-- The next step depends immediately on the delegated answer.
-- The task is a small single-file edit.
-- The work requires one tightly coupled design decision.
-- Multiple agents would touch the same file or same fragile state model.
-
-Suggested orchestration prompt shape:
-
-```text
-Use two sub-agents in parallel.
-Explorer 1: inspect <area> and report exact files, risks, and recommended changes. Do not edit files.
-Worker 1: implement <bounded change> in <explicit files/modules>. Do not touch other areas or revert unrelated changes.
-Main agent: keep the critical path locally, review both results, integrate, verify, and summarize.
-```
-
 ## Project Identity
 
-My Web OS is not a kernel-level replacement for Windows, macOS, or Linux.
-It is a personal Web OS layer that wraps an existing local PC with a browser-based work environment for files, terminal access, system status, Docker, packages, runtimes, backup/recovery, and customization.
+My Web OS is not a kernel-level OS replacement.
+It is a personal Web OS layer around an existing local PC, exposed through a browser-based desktop for files, terminal access, system status, Docker, packages, runtimes, backup/recovery, and customization.
 
 Core principles:
 
-- Expose local PC capabilities through clear UI/API boundaries instead of hiding them.
-- The web desktop is not decoration; it must reduce real local workflow friction.
+- Local PC capabilities must be exposed through clear UI/API boundaries.
+- The web desktop should reduce real workflow friction, not only look like a desktop.
 - Package Center is a workshop and maintenance console, not only an app store.
-- Failures, logs, health, backup, rollback, and recovery options must be visible to the user.
-- Customization means storing and reshaping workflows, not only changing colors.
-- Agent/LLM features should start with explanation, summary, approval, and result reporting before autonomous execution.
+- Failures, logs, health, backup, rollback, and recovery options should be visible.
+- Customization means storing and reshaping workflows, not only colors.
+- Agent/LLM features start with explanation, summary, approval, and result reporting before autonomous execution.
 
-## Source Of Truth
+## Source Documents
 
-The source of truth for product direction is the three planning documents below.
+Source of truth:
 
-1. `doc/legacy/기획서.md`: project identity, Host/Sandbox philosophy, operational reliability rules
-2. `doc/legacy/기획서2.md`: feature definitions, Package Center direction, local workstation direction, feature priorities
-3. `doc/legacy/기획서3.md`: UI/UX, customization, Start Menu, Taskbar, Window, Agent/CLI direction
+- `doc/planning/project-identity-boundaries.md`: identity, Host/Sandbox boundaries, operational reliability
+- `doc/planning/feature-scope-priorities.md`: feature scope, priorities, Package Center, local workstation direction
+- `doc/planning/ui-ux-customization-agent.md`: UI/UX, customization, Start Menu, Taskbar, Window, Agent/CLI direction
 
-`AGENTS.md` translates those planning documents into execution order and working rules.
+Reference documents:
 
-## Reference Documents
-
-The documents below are references, not source of truth. Read them only when needed.
-
-- `README.md`: current implemented features, execution guide, user-facing overview
-- `next.md`: historical/runtime-layer implementation context for package lifecycle, recovery, rollback, and runtime details
-- `doc/계획표8.md`: older roadmap context for the Host/Sandbox dual-layer architecture
+- `README.md`: user-facing overview, current features, run guide
+- `doc/README.md`: documentation index
+- `doc/reference/architecture-api-reference.md`: compact architecture and API map
+- `doc/reference/app-development-model.md`: built-in, system, sandbox/package app development model
+- `doc/reference/core-addon-separation-remediation.md`: full remediation plan for core/addon separation and legacy cleanup
+- `doc/operations/completed-backlog-log.md`: completed/worked backlog migration log
+- `doc/operations/local-run-guide.md`: local run and process checks
+- `doc/policies/file-station-places-policy.md`: File Station Places policy
+- `doc/migrations/media-library-path-migration.md`: legacy wallpaper/media path migration
+- `만들것들.md`: future package/widget/app ideas
 
 Conflict resolution:
 
-- Product direction follows `doc/legacy/기획서.md`.
-- Feature priority follows the P0/P1/P2/P3 sections in `doc/legacy/기획서2.md`.
-- UI/customization/Agent direction follows `doc/legacy/기획서3.md`.
-- If current code conflicts with the planning documents, inspect the code and move it gradually toward the planning direction.
-- If `README.md`, `next.md`, or `doc/계획표8.md` conflict with the three planning documents, prefer the planning documents and update references only when needed.
+- Product direction follows the three `doc/planning/*` documents.
+- If docs conflict with current code, inspect the code and move gradually toward the planning direction.
+- Update docs only when behavior, scope, priority, or operating guidance materially changes.
 
-## Architecture Boundaries
-
-The system has three layers. Do not blur these boundaries casually.
+## Architecture Layers
 
 ### Host Layer
 
-This layer touches the real local machine.
+Touches the real local machine.
 
-- File system: `server/routes/fs.js`, `client/src/apps/file-explorer/`
-- Terminal: `server/services/terminal.js`, `client/src/apps/terminal/`
-- System status: `server/routes/system.js`, `client/src/apps/resource-monitor/`
-- Docker: `server/routes/docker.js`, `client/src/apps/docker-manager/`
-- Server settings: `server/config/*`, `server/routes/settings.js`, `client/src/apps/settings/`
-- Logs/audit: `server/services/auditService.js`, `server/routes/logs.js`, `client/src/apps/log-viewer/`
+- File system: `server/routes/fs.js`, `client/src/apps/system/file-explorer/`
+- Terminal: `server/services/terminal.js`, `client/src/apps/system/terminal/`
+- System status: `server/routes/system.js`, `client/src/apps/system/resource-monitor/`
+- Docker: `server/routes/docker.js`, `client/src/apps/system/docker-manager/`
+- Server settings: `server/config/*`, `server/routes/settings.js`, `client/src/apps/system/settings/`
+- Logs/audit: `server/services/auditService.js`, `server/routes/logs.js`, `client/src/apps/system/log-viewer/`
 
-Host features are powerful. Prefer explicit error codes, user-facing explanations, approval flows, and recoverable behavior.
+Rules:
+
+- Return explicit `code` and `message` for recoverable failures.
+- Use user-facing explanations and approval flows for risky actions.
+- Keep filesystem policy in backend guards/services, not UI-only checks.
 
 ### Web Desktop Layer
 
-This is the user-facing operating surface.
+The user-facing operating surface.
 
 - Entry/auth: `client/src/App.svelte`
 - Desktop shell: `client/src/core/Desktop.svelte`
@@ -130,36 +89,45 @@ This is the user-facing operating surface.
 - State stores: `client/src/core/stores/*`
 - Shared API: `client/src/utils/api.js`
 
-`Desktop.svelte` should orchestrate the desktop, not contain heavy feature logic. Put feature logic in app modules, stores, services, or API helpers.
+Rules:
+
+- `Desktop.svelte` orchestrates layers and window hosting only.
+- `Window.svelte` owns move, resize, focus, maximize, minimize, and snap behavior.
+- Feature logic belongs in app modules, stores, services, or API helpers.
 
 ### Sandbox / Package Layer
 
-This layer owns installed apps, package assets, app-owned data, runtime state, and lifecycle operations.
+Owns installed apps, package assets, app-owned data, runtime state, and lifecycle operations.
 
 - Inventory root: `server/storage/inventory/`
 - Package APIs: `server/routes/packages.js`
 - Runtime APIs: `server/routes/runtime.js`
 - Sandbox APIs: `server/routes/sandbox.js`
-- Package lifecycle: `server/services/packageLifecycleService.js`
-- Runtime manager: `server/services/runtimeManager.js`
-- Runtime profile: `server/services/runtimeProfiles.js`
-- Template quality gate: `server/services/templateQualityGate.js`
-- Package Center UI: `client/src/apps/package-center/PackageCenter.svelte`
+- Package services: `server/services/packageRegistryService.js`, `server/services/packageLifecycleService.js`
+- Runtime services: `server/services/runtimeManager.js`, `server/services/runtimeProfiles.js`
+- Quality gate: `server/services/templateQualityGate.js`
+- Package Center UI: `client/src/apps/system/package-center/PackageCenter.svelte`
 - Sandbox frame: `client/src/core/components/SandboxAppFrame.svelte`
 
-Sandbox apps must be handled through app-owned data roots and manifest permissions. Do not broaden Host file access without an explicit approval design.
+Rules:
 
-## Work Area Reference Map
+- Serve app assets only through sandbox routes.
+- Keep app-owned data scoped to `server/storage/inventory/data/{appId}`.
+- Do not broaden Host file access without explicit approval design.
+- Package work must consider permissions, manifest validation, runtime profile validation, dependencies, SemVer compatibility, channel policy, quality gate, backup, rollback, health, logs, and events.
 
-Use this map before editing. Each task should start by reading the files listed for its area, then follow the existing module boundaries.
+## Work Area Map
+
+Read the relevant files before editing.
 
 ### Package Center Operations
 
-Use for registry, install/update, installed package console, lifecycle, health, backup, rollback, manifest editing, template scaffold, dependency, and channel policy work.
+Use for registry, install/update, installed package console, lifecycle, health, backup, rollback, manifest editing, template scaffold, dependency, and channel policy.
 
 Read first:
 
-- `client/src/apps/package-center/PackageCenter.svelte`
+- `client/src/apps/system/package-center/PackageCenter.svelte`
+- `client/src/apps/system/package-center/api.js`
 - `server/routes/packages.js`
 - `server/services/packageRegistryService.js`
 - `server/services/packageLifecycleService.js`
@@ -168,14 +136,8 @@ Read first:
 - `server/services/runtimeProfiles.js`
 - `server/utils/appPaths.js`
 - `server/utils/inventoryPaths.js`
-- `server/storage/inventory/`
 
-Keep modular:
-
-- Put HTTP contract and response shape in `server/routes/packages.js`.
-- Put package state transitions in lifecycle/channel/template services.
-- Keep installed operations, registry, runtime controls, and template/scaffold UI visually separated inside Package Center.
-- Add a per-app API helper under `client/src/apps/package-center/` if Package Center logic grows further.
+Keep registry, installed operations, runtime controls, and template/scaffold UI visually separated inside Package Center.
 
 ### Runtime And Process Management
 
@@ -188,21 +150,12 @@ Read first:
 - `server/services/processSupervisor.js`
 - `server/services/runtimeStateStore.js`
 - `server/services/runtimeProfiles.js`
-- `server/config/defaults.json`
 - `server/storage/inventory/system/runtime-instances.json`
-- `server/storage/inventory/system/runtime-logs/`
-- `client/src/apps/package-center/PackageCenter.svelte`
+- `client/src/apps/system/package-center/PackageCenter.svelte`
 
-Keep modular:
-
-- Route handlers should call `runtimeManager`, not spawn processes directly.
-- Process execution belongs in `processSupervisor`.
-- Persisted runtime state belongs in `runtimeStateStore`.
-- UI should call runtime APIs through Package Center or a dedicated runtime API helper, not directly from unrelated components.
+Route handlers should call `runtimeManager`; process execution belongs in `processSupervisor`; persisted runtime state belongs in `runtimeStateStore`.
 
 ### Sandbox Apps And App Data
-
-Use for sandbox iframe rendering, manifest loading, package-owned data APIs, app permissions, and sandbox static asset serving.
 
 Read first:
 
@@ -211,19 +164,12 @@ Read first:
 - `server/utils/appPaths.js`
 - `server/utils/inventoryPaths.js`
 - `client/src/core/components/SandboxAppFrame.svelte`
-- `client/src/core/Desktop.svelte`
 - `server/storage/inventory/apps/`
 - `server/storage/inventory/data/`
 
-Keep modular:
-
-- Serve app assets only through sandbox routes.
-- Keep app-owned data scoped to `inventory/data/{appId}`.
-- Do not add Host filesystem access to sandbox APIs without explicit permission review and user approval UI.
+Keep manifest permissions and app-owned data boundaries intact.
 
 ### Desktop Shell, Windows, Taskbar, Spotlight
-
-Use for desktop icons, window host, taskbar, start trigger, desktop switching, notifications, context menu, and global search.
 
 Read first:
 
@@ -239,20 +185,13 @@ Read first:
 - `client/src/core/stores/spotlightStore.js`
 - `client/src/core/stores/notificationStore.js`
 
-Keep modular:
-
-- `Desktop.svelte` orchestrates layers and window hosting only.
-- `Window.svelte` owns move/resize/focus/maximize/minimize/snap behavior.
-- Taskbar and Start Menu logic should live in Taskbar-related components/stores, not in app modules.
-- Spotlight should call app/file/package search helpers instead of embedding feature-specific logic.
+Taskbar, Start Menu, and Spotlight logic should live in their own components/stores/helpers, not in app modules.
 
 ### UI Customization And Control Panel
 
-Use for wallpaper, theme presets, blur/transparency/accent, desktop layouts, taskbar settings, window defaults, accessibility, and Control Panel sections.
-
 Read first:
 
-- `client/src/apps/control-panel/ControlPanel.svelte`
+- `client/src/apps/system/control-panel/ControlPanel.svelte`
 - `client/src/core/stores/systemStore.js`
 - `client/src/core/stores/desktopStore.js`
 - `client/src/core/stores/windowStore.js`
@@ -260,25 +199,17 @@ Read first:
 - `client/src/core/stores/shortcutStore.js`
 - `server/routes/system.js`
 - `server/services/stateStore.js`
-- `server/config/defaults.json`
-- `server/storage/inventory/system/`
 
-Keep modular:
-
-- Add persistent settings as store state plus backend `system/state` persistence.
-- Keep UI customization in Control Panel, not Settings.
-- Add new customization models before adding visual controls.
-- Prefer separate small components for large Control Panel sections.
+Control Panel is for user-facing customization. Settings is for server/runtime configuration.
 
 ### Agent, LLM, And Wrapped CLI
-
-Use for Agent avatar, chat panel, message history, approval cards, OS action mapping, LLM proxy, terminal summaries, and Wrapped Assistant Mode.
 
 Read first:
 
 - `client/src/core/components/Agent.svelte`
+- `client/src/core/components/AgentChatPanel.svelte`
 - `client/src/core/stores/agentStore.js`
-- `client/src/apps/terminal/Terminal.svelte`
+- `client/src/apps/system/terminal/Terminal.svelte`
 - `server/services/terminal.js`
 - `server/routes/logs.js`
 - `server/routes/docker.js`
@@ -289,26 +220,17 @@ Likely new files:
 
 - `server/routes/ai.js`
 - `server/services/aiActionService.js`
-- `client/src/core/components/AgentChatPanel.svelte`
 - `client/src/core/stores/agentActionStore.js`
 
-Keep modular:
-
-- Agent UI state belongs in stores, not in `Desktop.svelte`.
-- LLM proxy and OS action mapping belong in backend routes/services.
-- Risky actions must produce approval cards before execution.
-- Preserve raw terminal output separately from Agent summaries.
+Risky actions must produce approval cards before execution. Preserve raw terminal output separately from Agent summaries.
 
 ### File Station, Cloud, Share, Transfer
 
-Use for local file browsing, allowed roots, trash, upload/download, ZIP extraction, preview, desktop shortcuts, share links, WebDAV/rclone, and transfer status.
-
 Read first:
 
-- `client/src/apps/file-explorer/FileExplorer.svelte`
-- `client/src/apps/file-explorer/api.js`
-- `client/src/apps/transfer/TransferUI.svelte`
-- `client/src/core/stores/shortcutStore.js`
+- `client/src/apps/system/file-explorer/FileExplorer.svelte`
+- `client/src/apps/system/file-explorer/api.js`
+- `client/src/apps/system/transfer/TransferUI.svelte`
 - `server/routes/fs.js`
 - `server/routes/share.js`
 - `server/routes/cloud.js`
@@ -318,25 +240,18 @@ Read first:
 - `server/services/indexService.js`
 - `server/middleware/pathGuard.js`
 - `server/utils/pathPolicy.js`
+- `doc/policies/file-station-places-policy.md`
 
-Keep modular:
-
-- Filesystem policy belongs in backend guards/services.
-- UI should not duplicate path-safety checks as its only protection.
-- Transfer state should be its own UI/store when upload/download flows grow.
-- Cloud paths must remain explicit virtual paths such as `cloud://...`.
+Cloud paths must remain explicit virtual paths such as `cloud://...`.
 
 ### System, Services, Logs, Resource Monitor
 
-Use for service status, service restart, resource monitor, audit logs, system overview, processes, network state, and dashboard-like operational views.
-
 Read first:
 
-- `client/src/apps/resource-monitor/ResourceMonitor.svelte`
-- `client/src/apps/resource-monitor/api.js`
-- `client/src/apps/log-viewer/LogViewer.svelte`
-- `client/src/apps/log-viewer/api.js`
-- `client/src/apps/control-panel/ControlPanel.svelte`
+- `client/src/apps/system/resource-monitor/ResourceMonitor.svelte`
+- `client/src/apps/system/resource-monitor/api.js`
+- `client/src/apps/system/log-viewer/LogViewer.svelte`
+- `client/src/apps/system/log-viewer/api.js`
 - `server/routes/system.js`
 - `server/routes/services.js`
 - `server/routes/logs.js`
@@ -344,63 +259,40 @@ Read first:
 - `server/services/auditService.js`
 - `server/services/storageService.js`
 
-Keep modular:
-
-- Service lifecycle belongs in `serviceManager`.
-- Audit/log filtering belongs in log service/routes, not UI-only filtering.
-- Operational dashboards should compose existing APIs rather than duplicating service logic.
+Operational dashboards should compose existing APIs rather than duplicating service logic.
 
 ### Docker Manager
 
-Use for Docker container list, start/stop/restart/remove, logs, ports, images, volumes, health, and Compose.
-
 Read first:
 
-- `client/src/apps/docker-manager/DockerManager.svelte`
-- `client/src/apps/docker-manager/api.js`
+- `client/src/apps/system/docker-manager/DockerManager.svelte`
+- `client/src/apps/system/docker-manager/api.js`
 - `server/routes/docker.js`
 
-Likely new files:
-
-- `server/services/dockerService.js`
-- `client/src/apps/docker-manager/components/`
-
-Keep modular:
-
-- Move command execution and parsing out of `server/routes/docker.js` if Docker scope grows.
-- Use explicit errors for Docker not installed, daemon unavailable, and permission denied.
-- Do not connect Docker packages to Package Center without a manifest/runtime policy.
+If Docker scope grows, move command execution/parsing out of `server/routes/docker.js` into a service. Use explicit errors for Docker not installed, daemon unavailable, and permission denied.
 
 ### Media, Document, Model, Code Editor
 
-Use for image/video/audio playback, subtitles, metadata, neighboring media navigation, PDF/document viewing, 3D model inspection, and local code editing.
-
 Read first:
 
-- `client/src/apps/media-player/MediaPlayer.svelte`
+- `client/src/apps/addons/media-player/MediaPlayer.svelte`
 - `server/routes/media.js`
 - `server/services/mediaService.js`
-- `client/src/apps/document-viewer/DocumentViewer.svelte`
-- `client/src/apps/model-viewer/ModelViewer.svelte`
-- `client/src/apps/code-editor/CodeEditor.svelte`
-- `client/src/apps/code-editor/api.js`
+- `client/src/apps/addons/document-viewer/DocumentViewer.svelte`
+- `client/src/apps/addons/model-viewer/ModelViewer.svelte`
+- `client/src/apps/addons/code-editor/CodeEditor.svelte`
+- `client/src/apps/addons/code-editor/api.js`
 - `server/routes/fs.js`
+- `doc/migrations/media-library-path-migration.md`
 
-Keep modular:
-
-- Media metadata belongs in `mediaService`.
-- File read/write stays behind filesystem APIs.
-- Package file editing should connect Code Editor to Package Center context rather than bypassing package APIs.
-- 3D viewer controls should remain inside Model Viewer or its subcomponents.
+Media metadata belongs in `mediaService`; file read/write stays behind filesystem or package APIs.
 
 ### Settings, Config, Storage, Inventory
 
-Use for server settings, env/defaults, allowed roots, JWT/admin settings, storage roots, inventory paths, and state persistence.
-
 Read first:
 
-- `client/src/apps/settings/Settings.svelte`
-- `client/src/apps/settings/api.js`
+- `client/src/apps/system/settings/Settings.svelte`
+- `client/src/apps/system/settings/api.js`
 - `server/routes/settings.js`
 - `server/config/serverConfig.js`
 - `server/config/defaults.json`
@@ -409,16 +301,9 @@ Read first:
 - `server/utils/appPaths.js`
 - `server/storage/inventory/system/`
 
-Keep modular:
-
-- Settings is for server/runtime configuration.
-- Control Panel is for user-facing desktop customization.
-- Sensitive values must be masked or skipped when appropriate.
-- Inventory paths should go through utility helpers.
+Sensitive values must be masked or skipped as appropriate. Inventory paths should go through utility helpers.
 
 ### Tests And Documentation
-
-Use when adding behavior, changing lifecycle/runtime/package policy, or modifying source-of-truth expectations.
 
 Read first:
 
@@ -426,30 +311,24 @@ Read first:
 - `package.json`
 - `client/package.json`
 - `README.md`
-- `doc/legacy/기획서.md`
-- `doc/legacy/기획서2.md`
-- `doc/legacy/기획서3.md`
+- `doc/README.md`
+- `doc/planning/project-identity-boundaries.md`
+- `doc/planning/feature-scope-priorities.md`
+- `doc/planning/ui-ux-customization-agent.md`
 
-Keep modular:
-
-- Add focused tests near the behavior being changed.
-- If adding server tests, wire an official test command instead of leaving orphaned test files.
-- Update planning/docs only when behavior, scope, or priority materially changes.
+Add focused tests near changed behavior. If adding server tests, wire or update the official test command.
 
 ## Development Order
 
-Follow this order. If the user requests a narrower feature, still handle the minimum required prerequisite for that feature.
-
 ### 0. Inspect First
 
-- Read the relevant planning section and current code paths.
-- Separate what already exists from what is missing.
-- Reuse existing stores, routes, services, helpers, and component patterns.
-- Never revert unrelated dirty work.
+- Read relevant current code and only the needed planning/reference document.
+- Separate what exists from what is missing.
+- Reuse existing helpers and patterns.
 
 ### 1. Reliability And Boundaries
 
-Handle failure behavior and boundaries first.
+Prioritize:
 
 - explicit error codes
 - recoverable flows
@@ -458,153 +337,106 @@ Handle failure behavior and boundaries first.
 - backup/rollback availability
 - tests or syntax checks
 
-Do not build only UI when the underlying boundary or recovery model is unclear.
-
 ### 2. Package Center Operations
 
-The highest-priority product axis is making Package Center an operations console.
+Priority:
 
-Priority order:
-
-1. Improve Installed-tab runtime/lifecycle/health/log/event visibility.
-2. Add install/update preflight review: permissions, quality gate, dependency, compatibility, backup.
-3. Explain impact for backup/rollback/recover actions.
-4. Connect manifest/file editing with Code Editor.
-5. Align Widget Store with the Package Center package-type model.
-
-Installed operations density comes before Store browsing polish.
+1. Installed-tab runtime/lifecycle/health/log/event visibility
+2. install/update preflight review
+3. backup/rollback/recover impact explanation
+4. manifest/file editing with Code Editor
+5. Widget Store alignment with package-type model
 
 ### 3. Local Workstation Core
 
-Stabilize local PC wrapping features.
+Priority:
 
-Priority order:
-
-1. File Station: allowed roots, trash, share links, uploads, cloud boundaries, large-operation state
-2. Terminal: session stability, risky-command approval model, Agent summary readiness
-3. Resource Monitor / Log Viewer: connect service, runtime, and package status
-4. Docker Manager: logs, ports, volumes, health, then Compose
+1. File Station boundaries, trash, share, upload, cloud, large-operation state
+2. Terminal session stability and risky-command approval model
+3. Resource Monitor / Log Viewer service-runtime-package status
+4. Docker logs, ports, volumes, health, then Compose
 
 ### 4. UI Customization Foundation
 
-Implement `doc/legacy/기획서3.md` customization in this order.
+Priority:
 
-1. Basic Start Menu
-2. Persist `desktopStore.js` state through backend system state
+1. Start Menu base
+2. Desktop state persistence
 3. Taskbar settings model
 4. Window defaults/app-specific style model
-5. Control Panel UI customization sections
+5. Control Panel customization sections
 6. Theme preset save/load
 7. Desktop layout edit mode
 8. Context Menu customization
 
-Do not add visual options without the underlying Start Menu, Taskbar, Window, and Desktop Layout models.
-
 ### 5. Agent, LLM, CLI Integration
 
-Agent is an OS work assistant, not a decorative avatar. Do not start with risky automation.
+Priority:
 
-Implementation order:
-
-1. Expand Agent states: `idle`, `listening`, `thinking`, `executing`, `success`, `warning`, `error`, `terminal`
+1. Agent states: `idle`, `listening`, `thinking`, `executing`, `success`, `warning`, `error`, `terminal`
 2. Agent chat panel
 3. Message persistence model
 4. Result cards and approval cards
-5. Small OS action mappings: open app, open file path, run package health check, inspect Docker status, summarize recent error logs
+5. Small OS actions: open app, open file path, package health check, Docker status, recent error log summary
 6. LLM proxy API
-7. Preserve raw Terminal output
+7. Raw Terminal output preservation
 8. Wrapped Assistant Mode
-
-Deletion, overwrite install, rollback, and terminal command execution must always go through user approval UI.
 
 ### 6. Media, Home Lab, Docker
 
-Expand these only after P0/P1 foundations are stable.
+Expand after P0/P1 foundations are stable:
 
-- Media Player: playlist, repeat/shuffle, background audio
-- Document Viewer: PDF controls, search, metadata
-- Model Viewer: wireframe, axes, material info, screenshot
-- Docker Manager: logs, port/image/volume, Compose
-- WebDAV/cloud: write/upload, mount status, connection test
-- Backup job manager and download/transfer manager
+- Media playlist/repeat/shuffle/background audio
+- Document Viewer PDF controls/search/metadata
+- Model Viewer wireframe/axes/material info/screenshot
+- Docker Compose and richer container operations
+- WebDAV/cloud write/upload/mount status
+- Backup job manager and transfer manager
 
 ### 7. Docker Portability
 
-Treat Docker portability as a late-stage packaging concern.
+Treat as late-stage packaging:
 
-- `storage/` volume persistence strategy
+- `storage/` volume persistence
 - Host path binding strategy
 - Dockerfile/docker-compose
 - container logs
 - script runner isolation upgrade
 
-Do not weaken Host/Sandbox boundaries for the sake of Docker packaging.
+Do not weaken Host/Sandbox boundaries for Docker portability.
 
 ## Implementation Rules
 
-- Classify the layer before adding a feature: Host, Desktop, or Sandbox/Package.
-- Use the Work Area Reference Map before editing. If the requested area is not listed, find the closest existing route/service/store/component pattern first.
-- Stabilize backend contracts before connecting frontend UI.
-- For persistent UI state, design the store and persistence schema before adding controls.
-- Split new work by responsibility: route for HTTP contract, service for business/state transitions, utility for reusable path/policy helpers, store for frontend state, component for UI.
-- For larger features, proceed as: API -> store/helper -> minimal UI -> verification -> docs.
-- Prefer adding a small module over expanding a large file when the new logic has its own lifecycle, persistence, policy, or repeated UI.
-- Do not create abstractions before there are at least two real call sites or a clear boundary such as runtime, lifecycle, inventory, Agent action, or desktop settings.
-- Preserve the existing desktop glassmorphism UX.
-- Do not put app-specific logic into `Desktop.svelte` or `Window.svelte`.
-- Keep window movement, resizing, focus, minimize/maximize, and snap behavior in `Window.svelte` and window stores.
-- In Package Center, keep registry, installed operations, lifecycle, runtime, and template/scaffold concerns separated.
-- Never make command execution, file deletion, rollback, or overwrite install silent.
+- Stabilize backend contracts before frontend UI.
+- For persistent UI state, design store state and backend `system/state` schema before adding controls.
+- Split responsibilities: route for HTTP contract, service for state/business logic, utility for reusable path/policy helpers, store for frontend state, component for UI.
+- Add new abstractions only for real boundaries or repeated call sites.
+- Keep Package Center registry, installed operations, lifecycle, runtime, template/scaffold concerns separated.
+- Never make command execution, deletion, rollback, or overwrite install silent.
 - Avoid committing autogenerated churn. `server/storage/index.json` is usually autogenerated and should usually stay out of commits.
 
-## Frontend Structure Rules
+## Frontend Rules
 
-Follow the current structure.
-
-- `client/src/core/Desktop.svelte`: desktop orchestration only
-- `client/src/core/Window.svelte`: window behavior
-- `client/src/core/components/Taskbar.svelte`: taskbar display and start/menu trigger
-- `client/src/core/components/Agent.svelte`: avatar, bubble, chat panel shell
-- `client/src/core/stores/*`: persistent UI and runtime state
-- `client/src/apps/<app-name>/`: feature UI
-- `client/src/apps/<app-name>/api.js`: per-app API wrapper when useful
-- `client/src/utils/api.js`: auth-aware shared fetch
-
-UI rules:
-
-- Maintain dark glassmorphism, translucent surfaces, soft borders, compact density, and blue accent.
+- Preserve dark glassmorphism, translucent surfaces, soft borders, compact density, and blue accent.
 - Use `lucide-svelte` icons where possible.
-- Keep app interiors readable; glass effects must not harm text contrast.
-- Prefer dense operational panels for Package Center, Logs, Docker, and Resource Monitor.
+- Keep operational tools dense and readable.
 - Do not turn operational tools into landing pages.
-- Avoid broad redesign unless explicitly requested.
 - Preserve keyboard/focus visibility and usable hit areas.
+- Do not put app-specific logic in `Desktop.svelte` or `Window.svelte`.
 
-## Backend Structure Rules
-
-Follow the current structure.
+## Backend Rules
 
 - `server/index.js`: composition root, route wiring, service bootstrap, shutdown
 - `server/routes/*.js`: HTTP contract, auth guard, validation, response mapping
 - `server/services/*.js`: business logic and state transitions
 - `server/config/*.js`: defaults, env, public settings
 - `server/utils/*.js`: path, inventory, policy helpers
-- `server/storage/inventory/system/`: persistent system/package/runtime state
-- `server/storage/inventory/apps/`: installed package assets
-- `server/storage/inventory/data/`: app-owned data
 
-Backend rules:
-
-- Keep route handlers thin.
-- Put lifecycle, runtime, package, quality gate, and channel policy logic in services.
-- Return explicit `code` and `message` for recoverable failures.
-- Validate app id, paths, runtime profile, manifest, and package file operations.
-- Use inventory path helpers instead of hand-building package paths.
-- Do not expose inventory internals through File Station unless explicitly designed and guarded.
+Route handlers should stay thin. Validate app id, paths, runtime profile, manifest, and package file operations on the backend.
 
 ## Package And Runtime Conventions
 
-Supported runtime types:
+Runtime types:
 
 - `sandbox-html`: iframe/static UI package
 - `process-node`: managed Node.js process
@@ -619,64 +451,58 @@ Package types:
 - `hybrid`: UI plus background service
 - `developer`: tools for package creation/testing
 
-Package work must consider:
+## Autonomous Roadmap Loop
 
-- permissions review
-- manifest validation
-- runtime profile validation
-- dependency and SemVer compatibility
-- channel update policy
-- template quality gate
-- lifecycle history
-- backup before overwrite/update
-- rollback path
-- health report
-- logs and events
+When the user asks to proceed from `AGENTS.md` without naming a specific task:
 
-## Current Priority Backlog
+1. Check the backlog table below, `doc/operations/completed-backlog-log.md`, and `doc/reference/core-addon-separation-remediation.md`.
+2. Select one bounded unfinished item following the default development priority.
+3. State the selected item and relevant files.
+4. Implement one bounded change.
+5. Verify the touched area.
+6. Summarize changes, verification, and the next recommended item.
+7. Do not start the next backlog item unless the user explicitly asks to continue.
 
-Follow this order unless the user gives a narrower task.
-Completed/worked item migration reference: `완료.md`
+### Completed P0-P4 Summary
 
-### Autonomous Roadmap Loop
+P0-P4 are closed foundation tracks. Keep only this summary in `AGENTS.md`; use `doc/operations/completed-backlog-log.md` for detailed history.
 
-When the user asks to proceed from `AGENTS.md` without naming a specific task, select the first unfinished item from P0, then P1, then P2, then P3, then P4.
-Work on one bounded backlog item at a time.
+- P0: app model contract, Host boundary baseline, package manifest validation, desktop shell purity
+- P1: built-in app metadata normalization, Package Center app-model visibility, app API bridge skeleton, system app module split
+- P2: sandbox permission UX, app SDK capability metadata, system app observability
+- P3: third-party package onboarding, versioned app API policy, advanced lifecycle safeguards
+- P4: sandbox SDK delivery, package ecosystem docs/tooling, registry-driven launch cleanup
 
-At the start of the task:
+### Backlog P5 (Core/Add-on Separation Remediation)
 
-- State the selected backlog item.
-- State the relevant files from the Work Area Reference Map.
-- If multi-agent work was explicitly requested, split the task by non-overlapping file ownership.
+- `P5-1` App ownership matrix finalize: lock `system/standard/package` ownership map and launch mode contract from remediation Phase 1. `Status: done (2026-04-24)`
+- `P5-2` Client app folder split: separate `client/src/apps/system/*` and `client/src/apps/addons/*` with import/registry sync from remediation Phase 2. `Status: done (2026-04-24)`
+- `P5-3` Legacy app registry fallback removal: remove `server/storage/apps.json` fallback and standardize on `server/storage/inventory/system/apps.json`; include one-time migration script from remediation Phase 3. `Status: pending`
+- `P5-4` Add-on runtime standardization: enforce manifest-like fields for `standard` apps and strengthen add-on validation rules from remediation Phase 4. `Status: pending`
+- `P5-5` Ops/docs consistency closure: align AGENTS backlog status, completion log, and architecture-complete checklist from remediation Phase 5. `Status: pending`
 
-At the end of the task:
+## Multi-Agent Orchestration
 
-- Summarize what changed.
-- Summarize what verification was run or why it was skipped.
-- State the next recommended backlog item.
-- Ask the user whether to continue with that next item, choose a different item, commit, or stop.
+Use sub-agents only when the user explicitly asks for parallel agents, delegation, orchestration, or multi-agent collaboration.
 
-Do not automatically start the next backlog item after finishing the current one unless the user already gave explicit permission to continue through multiple items.
+Rules:
 
-### P0
+- The main agent owns the plan, critical path, final integration, and final answer.
+- Delegate only bounded side tasks that can run in parallel without blocking the next local step.
+- Use explorer agents for read-only codebase questions.
+- Use worker agents for implementation tasks with explicit file/module ownership.
+- Never assign overlapping write areas to multiple workers.
+- Tell workers they are not alone in the codebase and must not revert unrelated changes.
+- Review returned changes before integrating or reporting completion.
 
-- (worked items migrated) See `완료.md` -> `P0 작업 이관`
+Prompt shape:
 
-### P1
-
-- (worked items migrated) See `완료.md` -> `P1 작업 이관`
-
-### P2
-
-- (worked items migrated) See `완료.md` -> `P2 작업 이관`
-
-### P3
-
-- (worked items migrated) See `완료.md` -> `P3 작업 이관`
-
-### P4
-
-- (worked items migrated) See `완료.md` -> `P4 작업 이관`
+```text
+Use two sub-agents in parallel.
+Explorer 1: inspect <area> and report exact files, risks, and recommended changes. Do not edit files.
+Worker 1: implement <bounded change> in <explicit files/modules>. Do not touch other areas or revert unrelated changes.
+Main agent: keep the critical path locally, review both results, integrate, verify, and summarize.
+```
 
 ## Verification
 
@@ -710,21 +536,6 @@ cd client
 npm run dev
 ```
 
-When adding or changing server tests, also add or update the official test command instead of leaving tests orphaned.
-
-## Definition Of A Good Change
-
-A good change:
-
-- moves the project closer to the three planning documents
-- keeps Host, Desktop, and Sandbox/Package boundaries clear
-- improves failure visibility or recoverability
-- preserves the current glass desktop language
-- avoids unrelated broad refactors
-- uses existing stores, services, helpers, and route patterns
-- includes validation appropriate to the risk
-- updates planning/docs when scope or behavior changes materially
-
 ## Git And Workspace Rules
 
 - The worktree may already contain user changes.
@@ -733,7 +544,20 @@ A good change:
 - Do not commit autogenerated index churn unless explicitly requested.
 - `server/storage/index.json` is frequently autogenerated and should usually stay out of commits.
 
-## Notes For Other Agents
+## Good Change Definition
+
+A good change:
+
+- moves the project closer to the planning documents
+- keeps Host, Desktop, and Sandbox/Package boundaries clear
+- improves failure visibility or recoverability
+- preserves the current glass desktop language
+- avoids unrelated broad refactors
+- uses existing stores, services, helpers, and route patterns
+- includes validation appropriate to the risk
+- updates docs when scope or behavior materially changes
+
+## Canonical Guide
 
 This repository uses `AGENTS.md` as the canonical agent guide.
 If another tool needs `CLAUDE.md` or `.github/copilot-instructions.md`, mirror this file rather than maintaining conflicting instructions.

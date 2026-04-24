@@ -13,16 +13,6 @@
   import ContextMenu from './components/ContextMenu.svelte';
   import Agent from './components/Agent.svelte';
   import { agentStore } from './stores/agentStore.js';
-  
-  import FileExplorer from '../apps/file-explorer/FileExplorer.svelte';
-  import TerminalApp from '../apps/terminal/Terminal.svelte';
-  import ResourceMonitor from '../apps/resource-monitor/ResourceMonitor.svelte';
-  import CodeEditor from '../apps/code-editor/CodeEditor.svelte';
-  import DockerManager from '../apps/docker-manager/DockerManager.svelte';
-  import SettingsApp from '../apps/settings/Settings.svelte';
-  import MediaPlayer from '../apps/media-player/MediaPlayer.svelte';
-  import DocumentViewer from '../apps/document-viewer/DocumentViewer.svelte';
-  import ModelViewer from '../apps/model-viewer/ModelViewer.svelte';
   import Spotlight from './Spotlight.svelte';
   import { openSpotlight, toggleSpotlight } from './stores/spotlightStore.js';
   import Taskbar from './components/Taskbar.svelte';
@@ -31,14 +21,13 @@
   import { closeStartMenu, startMenuState, toggleStartMenu } from './stores/startMenuStore.js';
   import { taskbarSettings } from './stores/taskbarStore.js';
   import { windowDefaultsSettings } from './stores/windowDefaultsStore.js';
-  import ControlPanel from '../apps/control-panel/ControlPanel.svelte';
-  import TransferUI from '../apps/transfer/TransferUI.svelte';
-  import LogViewer from '../apps/log-viewer/LogViewer.svelte';
-  import PackageCenter from '../apps/package-center/PackageCenter.svelte';
-  import WidgetStore from '../apps/widget-store/WidgetStore.svelte';
   import { widgetLibrary } from './stores/widgetLibraryStore.js';
   import { systemSettings } from './stores/systemStore.js';
   import { apiFetch } from '../utils/api.js';
+  import { buildShortcutLaunch } from './shortcutLaunch.js';
+  import { installWebOSBridge } from '../utils/webosBridge.js';
+  import { resolveWindowLaunch } from './appLaunchRegistry.js';
+  import { normalizeAppModel, deriveOwnerTier, normalizeLaunchContract, normalizeDataBoundary } from './appOwnershipContract.js';
 
   const iconMap = {
     Shield, Monitor, Files, TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send
@@ -48,31 +37,28 @@
     return iconMap[iconName] || LayoutGrid;
   }
 
+  function getAppModelBadgeLabel(appModel) {
+    if (appModel === 'system') return 'SYS';
+    if (appModel === 'package') return 'PKG';
+    return 'APP';
+  }
+
   function normalizeDesktopApp(app) {
     const iconType = app?.iconType === 'image' && app?.iconUrl ? 'image' : 'lucide';
+    const appModel = normalizeAppModel(app);
+    const ownerTier = deriveOwnerTier(appModel);
+    const launch = normalizeLaunchContract(app);
     return {
       ...app,
+      appModel,
+      ownerTier,
+      dataBoundary: normalizeDataBoundary(app, launch, ownerTier),
+      appModelBadge: getAppModelBadgeLabel(appModel),
+      launch,
       iconType,
       iconComponent: resolveIconComponent(app?.icon || app?.iconName || 'LayoutGrid')
     };
   }
-
-  const components = {
-    files: FileExplorer,
-    terminal: TerminalApp,
-    monitor: ResourceMonitor,
-    editor: CodeEditor,
-    docker: DockerManager,
-    settings: SettingsApp,
-    'control-panel': ControlPanel,
-    transfer: TransferUI,
-    player: MediaPlayer,
-    'doc-viewer': DocumentViewer,
-    'model-viewer': ModelViewer,
-    logs: LogViewer,
-    'package-center': PackageCenter,
-    'widget-store': WidgetStore
-  };
 
   let apps = $state([]);
   let startButtonEl = $state(null);
@@ -116,8 +102,12 @@
 
     updateTime();
     loadApps();
+    const disposeWebOSBridge = installWebOSBridge({ openAppById });
     const timer = setInterval(updateTime, 1000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      disposeWebOSBridge();
+    };
   });
 
   function handleKeydown(e) {
@@ -161,20 +151,10 @@
 
   function openShortcut(shortcut) {
     if ($layoutEditMode) return;
-    if (shortcut.isDirectory) {
-      openWindow({ id: 'files', title: 'File Station', icon: Folder }, { path: shortcut.path });
-    } else {
-      const ext = shortcut.ext;
-      if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) {
-        openWindow({ id: 'player', title: `Viewer - ${shortcut.name}`, icon: Image }, { path: shortcut.path });
-      } else if (['mp4', 'webm', 'mov'].includes(ext)) {
-        openWindow({ id: 'player', title: `Player - ${shortcut.name}`, icon: Video }, { path: shortcut.path });
-      } else if (['pdf'].includes(ext)) {
-        openWindow({ id: 'doc-viewer', title: `PDF Reader - ${shortcut.name}`, icon: File }, { path: shortcut.path });
-      } else {
-        openWindow({ id: 'editor', title: `Editor - ${shortcut.name}`, icon: File }, { path: shortcut.path });
-      }
-    }
+    const launch = buildShortcutLaunch(shortcut);
+    const iconMapByKey = { Folder, Image, Video, File };
+    const icon = iconMapByKey[launch.iconKey] || File;
+    openWindow({ ...launch.app, icon }, launch.data);
   }
 
   function handleShortcutContext(e, shortcutId) {
@@ -209,6 +189,30 @@
   function handleOpenStartMenuApp(app) {
     openWindow(app);
   }
+
+  async function openAppById(appId, data = null) {
+    const normalizedId = String(appId || '').trim();
+    if (!normalizedId) {
+      const err = new Error('App id is required.');
+      err.code = 'WEBOS_BRIDGE_APP_ID_REQUIRED';
+      throw err;
+    }
+
+    let target = apps.find((item) => item.id === normalizedId);
+    if (!target) {
+      await loadApps();
+      target = apps.find((item) => item.id === normalizedId);
+    }
+    if (!target) {
+      const err = new Error(`App "${normalizedId}" not found.`);
+      err.code = 'WEBOS_BRIDGE_APP_NOT_FOUND';
+      throw err;
+    }
+
+    openWindow(target, data);
+    return { opened: true, appId: normalizedId };
+  }
+
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -236,6 +240,7 @@
     {#each apps as app}
       <button class="app-icon" ondblclick={() => !$layoutEditMode && openWindow(app)}>
         <div class="icon-box glass-effect">
+          <span class="app-model-badge" title={`Model: ${app.appModel}`}>{app.appModelBadge}</span>
           {#if app.iconType === 'image' && app.iconUrl}
             <img class="app-icon-image" src={app.iconUrl} alt={app.title} loading="lazy" />
           {:else}
@@ -271,9 +276,10 @@
 
   {#each visibleWindows as win (win.id)}
     <Window window={win} active={$activeWindowId === win.id}>
-      {#if components[win.appId]}
-        <svelte:component this={components[win.appId]} data={win.data} />
-      {:else if win.runtime === 'sandbox'}
+      {@const resolvedLaunch = resolveWindowLaunch(win)}
+      {#if resolvedLaunch.component}
+        <svelte:component this={resolvedLaunch.component} data={win.data} />
+      {:else if resolvedLaunch.launch.mode === 'sandbox' || win.runtime === 'sandbox'}
         <SandboxAppFrame app={win} />
       {:else}
         <div style="padding: 20px; color: var(--text-dim);">
@@ -375,6 +381,7 @@
   .icon-box { 
     width: 56px; 
     height: 56px; 
+    position: relative;
     display: flex; 
     align-items: center; 
     justify-content: center; 
@@ -389,6 +396,28 @@
     height: 32px;
     object-fit: contain;
     border-radius: 8px;
+  }
+  .app-model-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 14px;
+    padding: 0 4px;
+    border-radius: 999px;
+    border: 1px solid rgba(197, 221, 255, 0.35);
+    background: rgba(8, 24, 45, 0.82);
+    color: #c5ddff;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    line-height: 1;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   }
   .app-icon:hover .icon-box { 
     transform: scale(1.08) translateY(-2px); 

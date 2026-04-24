@@ -8,6 +8,7 @@ const si = require('systeminformation');
 const auth = require('../middleware/auth');
 const auditService = require('../services/auditService');
 const packageRegistryService = require('../services/packageRegistryService');
+const { APP_API_POLICY, checkCompatibility } = require('../services/appApiPolicy');
 const storageService = require('../services/storageService');
 const stateStore = require('../services/stateStore');
 const serverConfig = require('../config/serverConfig');
@@ -339,6 +340,53 @@ router.get('/apps', async (req, res) => {
     res.json(apps);
   } catch (err) {
     res.status(500).json({ error: true, message: err.message });
+  }
+});
+
+/**
+ * GET /api/system/apps/ownership-matrix
+ * Get ownership matrix and launch contract summary for system/package apps.
+ */
+router.get('/apps/ownership-matrix', async (_req, res) => {
+  try {
+    const matrix = await packageRegistryService.getAppsOwnershipMatrix();
+    return res.json({
+      success: true,
+      generatedAt: new Date().toISOString(),
+      contractVersion: matrix.contractVersion,
+      items: matrix.items
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: true,
+      code: 'APP_OWNERSHIP_MATRIX_FETCH_FAILED',
+      message: err.message
+    });
+  }
+});
+
+/**
+ * GET /api/system/app-api-policy
+ * Return WebOS app API compatibility policy.
+ */
+router.get('/app-api-policy', async (req, res) => {
+  try {
+    const clientVersion = String(req.query.clientVersion || '').trim();
+    const compatibility = clientVersion
+      ? checkCompatibility(clientVersion)
+      : null;
+
+    return res.json({
+      success: true,
+      policy: APP_API_POLICY,
+      compatibility
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: true,
+      code: 'APP_API_POLICY_FETCH_FAILED',
+      message: err.message
+    });
   }
 });
 
