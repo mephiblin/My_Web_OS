@@ -50,7 +50,9 @@
     'system.info': 'system.info',
     'app.data.list': 'app.data.list',
     'app.data.read': 'app.data.read',
-    'app.data.write': 'app.data.write'
+    'app.data.write': 'app.data.write',
+    'host.file.read': 'app.data.read',
+    'host.file.write': 'app.data.write'
   };
 
   const SENSITIVE_RISK_LEVELS = new Set(['medium', 'high']);
@@ -175,6 +177,16 @@
         return result.result;
       }
 
+      case 'host.file.read': {
+        const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/read`, params);
+        return result.result;
+      }
+
+      case 'host.file.write': {
+        const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write`, params);
+        return result.result;
+      }
+
       default:
         return null;
     }
@@ -204,6 +216,12 @@
     }
     if (permission === 'app.data.write') {
       return `Write app data path "${String(params.path || '/').trim() || '/'}".`;
+    }
+    if (request?.method === 'host.file.write') {
+      return `Write host file "${String(params.path || '').trim()}".`;
+    }
+    if (request?.method === 'host.file.read') {
+      return `Read host file "${String(params.path || '').trim()}".`;
     }
     if (permission === 'system.info') {
       return 'Read current host system overview metrics.';
@@ -324,7 +342,8 @@
             description: app.description || '',
             permissions: Array.isArray(app.permissions) ? app.permissions : [],
             runtime: app.runtime,
-            sdkUrl: '/api/sandbox/sdk.js'
+            sdkUrl: '/api/sandbox/sdk.js',
+            launchData: app.data || null
           },
           capabilities: capabilityCatalog,
           apiPolicy

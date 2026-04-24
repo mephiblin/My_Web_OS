@@ -16,3 +16,6 @@ export async function fetchInstalledPackages() {
   return apiFetch('/api/packages');
 }
 
+export async function fetchOpsSummary() {
+  return apiFetch('/api/system/ops-summary');
+}

@@ -10,6 +10,8 @@ const DEFAULT_START_MENU_STATE = {
 
 const store = writable(DEFAULT_START_MENU_STATE);
 const { subscribe, update, set } = store;
+let isInitialized = false;
+let saveTimeout;
 
 export const startMenuState = {
   subscribe
@@ -46,6 +48,73 @@ export function hydrateStartMenuState(persisted = {}) {
     pinnedAppIds: nextPinned,
     recentAppIds: nextRecent,
     layout: nextLayout
+  }));
+}
+
+export async function initStartMenuState() {
+  try {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+    const headers = token ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch('/api/system/state/startMenu', { headers });
+    if (res.ok) {
+      const json = await res.json();
+      hydrateStartMenuState(json?.data || {});
+    }
+  } catch (error) {
+    console.error('Error initializing start menu state:', error);
+  } finally {
+    isInitialized = true;
+  }
+}
+
+function scheduleSave() {
+  if (!isInitialized) return;
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('web_os_token') : '';
+    fetch('/api/system/state/startMenu', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token || ''}`
+      },
+      body: JSON.stringify(getStartMenuPersistencePayload())
+    }).catch((error) => console.error('Error saving start menu state:', error));
+  }, 500);
+}
+
+subscribe(() => scheduleSave());
+
+export function togglePinnedApp(appId) {
+  const id = String(appId || '').trim();
+  if (!id) return;
+  update((state) => {
+    const pinned = Array.isArray(state.pinnedAppIds) ? [...state.pinnedAppIds] : [];
+    const exists = pinned.includes(id);
+    return {
+      ...state,
+      pinnedAppIds: exists ? pinned.filter((item) => item !== id) : [id, ...pinned].slice(0, 24)
+    };
+  });
+}
+
+export function registerRecentApp(appId) {
+  const id = String(appId || '').trim();
+  if (!id) return;
+  update((state) => {
+    const recent = Array.isArray(state.recentAppIds) ? state.recentAppIds.filter((item) => item !== id) : [];
+    return {
+      ...state,
+      recentAppIds: [id, ...recent].slice(0, 24)
+    };
+  });
+}
+
+export function setStartMenuLayout(layout) {
+  const next = ['default', 'compact', 'wide'].includes(String(layout || '')) ? String(layout) : 'default';
+  update((state) => ({
+    ...state,
+    layout: next
   }));
 }
 

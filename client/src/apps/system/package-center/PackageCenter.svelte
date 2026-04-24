@@ -61,6 +61,7 @@
     package: 0,
     total: 0
   });
+  let desktopAppInventory = $state([]);
   let consoleOpenByApp = $state({});
   let runtimeActioning = $state('');
   let runtimeLogsLoading = $state('');
@@ -1557,11 +1558,56 @@
     return 'standard';
   }
 
+  function normalizeOwnerTier(app) {
+    const raw = String(app?.ownerTier || '').trim().toLowerCase();
+    if (raw) return raw;
+    const model = normalizeAppModel(app);
+    if (model === 'system') return 'core-system';
+    if (model === 'package') return 'package-addon';
+    return 'core-addon';
+  }
+
+  function normalizeDataBoundary(app) {
+    const raw = String(app?.dataBoundary || '').trim().toLowerCase();
+    if (raw) return raw;
+    const model = normalizeAppModel(app);
+    return model === 'package' ? 'inventory-app-data' : 'host-shared';
+  }
+
+  function getAppAssociationSummary(app) {
+    const rows = Array.isArray(app?.fileAssociations) ? app.fileAssociations : [];
+    if (rows.length === 0) return '-';
+    const extensions = [];
+    for (const row of rows) {
+      const exts = Array.isArray(row?.extensions) ? row.extensions : [];
+      for (const ext of exts) {
+        if (!ext) continue;
+        extensions.push(`.${ext}`);
+        if (extensions.length >= 4) {
+          return `${extensions.join(', ')} +${Math.max(0, rows.length - 1)}`;
+        }
+      }
+    }
+    return extensions.length > 0 ? extensions.join(', ') : `${rows.length} association(s)`;
+  }
+
   async function loadDesktopAppModelStats() {
     loadingDesktopApps = true;
     try {
       const response = await fetchDesktopApps();
       const apps = Array.isArray(response) ? response : (Array.isArray(response?.apps) ? response.apps : []);
+      desktopAppInventory = [...apps]
+        .map((app) => ({
+          ...app,
+          appModel: normalizeAppModel(app),
+          ownerTier: normalizeOwnerTier(app),
+          dataBoundary: normalizeDataBoundary(app),
+          runtimeType: String(app?.runtimeType || app?.runtime || '').trim().toLowerCase() || 'builtin',
+          appType: String(app?.appType || app?.type || '').trim().toLowerCase() || 'app',
+          permissions: Array.isArray(app?.permissions) ? app.permissions : [],
+          fileAssociations: Array.isArray(app?.fileAssociations) ? app.fileAssociations : []
+        }))
+        .sort((a, b) => String(a.title || a.id || '').localeCompare(String(b.title || b.id || '')));
       const next = {
         system: 0,
         standard: 0,
@@ -1578,6 +1624,7 @@
 
       desktopAppModelStats = next;
     } catch (_err) {
+      desktopAppInventory = [];
       desktopAppModelStats = {
         system: 0,
         standard: 0,
@@ -2332,6 +2379,37 @@
           <span class="model-chip package">PKG {desktopAppModelStats.package}</span>
           <span class="model-chip total">TOTAL {desktopAppModelStats.total}</span>
         </div>
+        <div class="desktop-app-inventory">
+          <div class="desktop-app-head">
+            <h4>Desktop App Contract</h4>
+            <span>{desktopAppInventory.length} apps</span>
+          </div>
+          {#if loadingDesktopApps}
+            <div class="runtime-log-empty">Loading desktop app contract...</div>
+          {:else if desktopAppInventory.length === 0}
+            <div class="runtime-log-empty">No desktop apps.</div>
+          {:else}
+            <div class="desktop-app-list">
+              {#each desktopAppInventory as app}
+                <div class="desktop-app-row">
+                  <div class="desktop-app-main">
+                    <span class="desktop-app-title">{app.title || app.id}</span>
+                    <span class="desktop-app-id">{app.id}</span>
+                  </div>
+                  <div class="desktop-app-meta">
+                    <span>{app.appModel}</span>
+                    <span>{app.ownerTier}</span>
+                    <span>{app.runtimeType}</span>
+                    <span>{app.appType}</span>
+                    <span>{app.dataBoundary}</span>
+                    <span>perm:{app.permissions.length}</span>
+                    <span>assoc:{getAppAssociationSummary(app)}</span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
 
         {#if loadingInstalled}
           <div class="empty">Loading installed packages...</div>
@@ -2848,6 +2926,83 @@
   .model-chip.package {
     border-color: rgba(52, 211, 153, 0.4);
     color: #bbf7d0;
+  }
+
+  .desktop-app-inventory {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    background: rgba(2, 6, 23, 0.35);
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .desktop-app-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .desktop-app-head h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .desktop-app-head span {
+    font-size: 11px;
+    color: #93a7c0;
+  }
+
+  .desktop-app-list {
+    display: grid;
+    gap: 6px;
+    max-height: 220px;
+    overflow: auto;
+    padding-right: 2px;
+  }
+
+  .desktop-app-row {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 10px;
+    padding: 8px;
+    background: rgba(15, 23, 36, 0.45);
+    display: grid;
+    gap: 6px;
+  }
+
+  .desktop-app-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .desktop-app-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: #dbeafe;
+  }
+
+  .desktop-app-id {
+    font-size: 11px;
+    color: #8ba3c5;
+  }
+
+  .desktop-app-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .desktop-app-meta span {
+    font-size: 11px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 999px;
+    padding: 2px 8px;
+    color: #d1deef;
+    background: rgba(15, 23, 42, 0.5);
   }
 
   h3 {
@@ -3627,4 +3782,3 @@
     color: var(--text-dim);
   }
 </style>
-

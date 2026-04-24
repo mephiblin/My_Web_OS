@@ -3,15 +3,16 @@
   import { 
     Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
     Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box, Lock, Unlock, ShieldAlert,
-    Search, Undo, Cloud, Share2, ExternalLink
+    Search, Undo, Cloud, Share2, ExternalLink, ArrowDownToLine
   } from 'lucide-svelte';
   import { notifications } from '../../../core/stores/notificationStore.js';
   import { agentStore } from '../../../core/stores/agentStore.js';
   import { openWindow } from '../../../core/stores/windowStore.js';
   import { openContextMenu } from '../../../core/stores/contextMenuStore.js';
   import { addShortcut } from '../../../core/stores/shortcutStore.js';
-  import { systemSettings } from '../../../core/stores/systemStore.js';
+  import { contextMenuSettings } from '../../../core/stores/contextMenuStore.js';
   import * as fsApi from './api.js';
+  import { listTransferJobs, isRunningStatus } from '../transfer/api.js';
 
   let currentPath = $state('/');
   let initialPath = $state('/');
@@ -20,6 +21,7 @@
   let selectedItem = $state(null);
   let viewMode = $state('grid');
   let inventoryPath = $state('');
+  let allowedRoots = $state([]);
   let lockedFolders = $state(JSON.parse(localStorage.getItem('web_os_locked_folders') || '[]'));
 
   // Search & Trash State
@@ -29,6 +31,9 @@
   let isSearchView = $state(false);
   let isTrashView = $state(false);
   let cloudRemotes = $state([]);
+  let desktopApps = $state([]);
+  let transferJobs = $state([]);
+  let transferPolling = $state(null);
 
   // Preview State
   let previewContent = $state(null);
@@ -64,6 +69,120 @@
 
   function addToast(message, type = 'info', title = 'File Station') {
     notifications.add({ title, message, type });
+  }
+
+  async function refreshTransferStatus() {
+    try {
+      const payload = await listTransferJobs();
+      transferJobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+    } catch (_err) {
+      transferJobs = [];
+    }
+  }
+
+  const transferRunningCount = $derived(transferJobs.filter((item) => isRunningStatus(item.status)).length);
+
+  function getFileExtension(fileName = '') {
+    const segments = String(fileName || '').split('.');
+    if (segments.length < 2) return '';
+    return String(segments.pop() || '').trim().toLowerCase();
+  }
+
+  function inferPreferredActionByExtension(extension) {
+    const ext = String(extension || '').trim().toLowerCase();
+    if (!ext) return 'open';
+    if (['txt', 'md', 'markdown', 'json', 'js', 'ts', 'css', 'html', 'xml', 'yml', 'yaml', 'csv', 'log'].includes(ext)) {
+      return 'edit';
+    }
+    return 'open';
+  }
+
+  function findAssociationApps(extension, action) {
+    const normalizedExt = String(extension || '').trim().toLowerCase();
+    const normalizedAction = String(action || 'open').trim().toLowerCase();
+    const matched = [];
+
+    for (const app of desktopApps) {
+      const rows = Array.isArray(app?.fileAssociations) ? app.fileAssociations : [];
+      for (const row of rows) {
+        const extensions = Array.isArray(row?.extensions) ? row.extensions.map((item) => String(item || '').trim().toLowerCase()) : [];
+        if (!extensions.includes(normalizedExt)) continue;
+        const actions = Array.isArray(row?.actions) ? row.actions.map((item) => String(item || '').trim().toLowerCase()) : [];
+        if (actions.length > 0 && !actions.includes(normalizedAction)) {
+          continue;
+        }
+        matched.push({
+          appId: app.id,
+          defaultAction: String(row?.defaultAction || '').trim().toLowerCase() || null
+        });
+        break;
+      }
+    }
+
+    matched.sort((a, b) => {
+      const scoreA = a.defaultAction === normalizedAction ? 1 : 0;
+      const scoreB = b.defaultAction === normalizedAction ? 1 : 0;
+      return scoreB - scoreA;
+    });
+    return matched.map((item) => item.appId);
+  }
+
+  function resolvePreferredOpenWith(extension) {
+    const ext = String(extension || '').trim().toLowerCase();
+    if (!ext) return '';
+    const table = $contextMenuSettings?.openWithByExtension || {};
+    const preferred = String(table[ext] || '').trim();
+    return preferred;
+  }
+
+  function resolveLegacyFallbackApp(extension) {
+    const ext = String(extension || '').trim().toLowerCase();
+    const isMedia = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext);
+    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
+    const is3D = ['gltf', 'glb', 'fbx', 'obj'].includes(ext);
+    if (isMedia || isImage) return 'player';
+    if (ext === 'pdf') return 'doc-viewer';
+    if (is3D) return 'model-viewer';
+    return 'editor';
+  }
+
+  async function openFileWithApp(item, appId, action) {
+    const extension = getFileExtension(item?.name || '');
+    const mode = action === 'edit' ? 'readwrite' : 'read';
+    const grantResponse = await fsApi.createFileGrant(item.path, mode, appId, 'file-station').catch(() => null);
+    const grant = grantResponse?.grant || null;
+    const fileContext = {
+      source: 'file-station',
+      file: {
+        path: item.path,
+        name: item.name,
+        extension,
+        mode
+      },
+      permissionContext: {
+        grantId: grant?.id || '',
+        scope: grant?.scope || 'single-file',
+        expiresOnWindowClose: true
+      }
+    };
+
+    openWindow(
+      {
+        id: appId,
+        title: `${item.name}`,
+        icon: FileText
+      },
+      {
+        path: item.path,
+        fileContext
+      }
+    );
+  }
+
+  async function openFileWithByAppId(item, appId) {
+    const extension = getFileExtension(item?.name || '');
+    const preferredAction = inferPreferredActionByExtension(extension);
+    await openFileWithApp(item, appId, preferredAction);
   }
 
   function buildSidebarLinks(homePath, dirs) {
@@ -105,8 +224,21 @@
       ];
     } else if (item) {
       const isLocked = lockedFolders.includes(item.path);
+      const extension = item?.isDirectory ? '' : getFileExtension(item.name);
+      const preferredAction = inferPreferredActionByExtension(extension);
+      const associationApps = item?.isDirectory ? [] : findAssociationApps(extension, preferredAction);
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
+        ...(!item.isDirectory && associationApps.length > 0
+          ? associationApps.slice(0, 5).map((appId) => {
+            const appMeta = desktopApps.find((app) => app.id === appId);
+            return {
+              label: `Open With ${appMeta?.title || appId}`,
+              icon: LayoutGrid,
+              action: () => openFileWithByAppId(item, appId)
+            };
+          })
+          : []),
         { label: 'Rename', icon: Pencil, action: () => handleRename(item) },
         { label: 'Create Desktop Shortcut', icon: ExternalLink, action: () => addShortcut(item) },
         ...(item.name.toLowerCase().endsWith('.zip') ? [{ label: 'Extract Here', icon: Package, action: () => handleExtract(item) }] : []),
@@ -311,20 +443,14 @@
       }
       fetchItems(item.path);
     } else {
-      const ext = item.name.split('.').pop()?.toLowerCase();
-      const isMedia = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext);
-      const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
-      const is3D = ['gltf', 'glb', 'fbx', 'obj'].includes(ext);
-      
-      if (isMedia || isImage) {
-        openWindow({ id: 'player', title: `Viewer - ${item.name}`, icon: isImage ? Image : Video }, { path: item.path });
-      } else if (ext === 'pdf') {
-        openWindow({ id: 'doc-viewer', title: `PDF Reader - ${item.name}`, icon: FileText }, { path: item.path });
-      } else if (is3D) {
-        openWindow({ id: 'model-viewer', title: `3D Viewer - ${item.name}`, icon: Box }, { path: item.path });
-      } else {
-        openWindow({ id: 'editor', title: `Editor - ${item.name}`, icon: FileText }, { path: item.path });
-      }
+      const extension = getFileExtension(item.name);
+      const preferredAction = inferPreferredActionByExtension(extension);
+      const candidates = findAssociationApps(extension, preferredAction);
+      const preferredApp = resolvePreferredOpenWith(extension);
+      const appId = (preferredApp && candidates.includes(preferredApp))
+        ? preferredApp
+        : (candidates[0] || resolveLegacyFallbackApp(extension));
+      await openFileWithApp(item, appId, preferredAction);
     }
   }
 
@@ -508,24 +634,32 @@
 
   onMount(async () => {
     try {
-      const [config, userDirs, remotes] = await Promise.all([
+      const [config, userDirs, remotes, apps] = await Promise.all([
         fsApi.fetchConfig(),
         fsApi.fetchUserDirs(),
         fsApi.fetchCloudRemotes(),
+        fsApi.fetchDesktopApps()
       ]);
 
       if (config.initialPath) {
         initialPath = config.initialPath;
         currentPath = initialPath;
       }
+      allowedRoots = Array.isArray(config.allowedRoots) ? config.allowedRoots : [];
 
       cloudRemotes = remotes || [];
+      desktopApps = Array.isArray(apps) ? apps : [];
       inventoryPath = userDirs._inventoryPath || '';
       sidebarLinks = buildSidebarLinks(userDirs.home || initialPath, userDirs);
     } catch (e) {
       notifyApiError(e, 'File Station Load Failed');
     }
     fetchItems(currentPath);
+    refreshTransferStatus();
+    transferPolling = setInterval(() => refreshTransferStatus(), 3000);
+    return () => {
+      if (transferPolling) clearInterval(transferPolling);
+    };
   });
 
   async function handleAddCloud() {
@@ -603,6 +737,12 @@
       <button onclick={handleSearch}><Search size={16} /></button>
     </div>
     <div class="actions">
+      <button title="Transfer Manager" onclick={() => openWindow({ id: 'transfer', title: 'Transfer', icon: ArrowDownToLine, singleton: true })}>
+        <ArrowDownToLine size={16} />
+        {#if transferRunningCount > 0}
+          <span class="transfer-badge">{transferRunningCount}</span>
+        {/if}
+      </button>
       <button class={viewMode === 'grid' ? 'active' : ''} onclick={() => viewMode = 'grid'}><LayoutGrid size={16} /></button>
       <button class={viewMode === 'list' ? 'active' : ''} onclick={() => viewMode = 'list'}><List size={16} /></button>
       <div class="separator"></div>
@@ -616,6 +756,9 @@
     <aside class="sidebar glass-effect">
       <div class="sidebar-section">
         <h3>Places</h3>
+        {#if allowedRoots.length > 0}
+          <div class="allowed-roots-hint">Allowed roots: {allowedRoots.length}</div>
+        {/if}
         {#each sidebarLinks as link}
           <button 
             class="sidebar-item {currentPath === link.path ? 'active' : ''}" 
@@ -786,9 +929,26 @@
   .toolbar { height: 48px; background: rgba(0,0,0,0.2); display: flex; align-items: center; padding: 0 12px; gap: 12px; border-bottom: 1px solid var(--glass-border); }
   .nav-controls, .actions { display: flex; gap: 4px; }
   .toolbar button { background: transparent; border: none; color: var(--text-dim); width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 4px; cursor: pointer; }
+  .toolbar button { position: relative; }
   .toolbar button:hover { background: rgba(255,255,255,0.1); color: white; }
   .toolbar button.active { background: rgba(255,255,255,0.15); color: var(--accent-blue); }
   .toolbar button:disabled { opacity: 0.3; cursor: not-allowed; }
+  .transfer-badge {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    min-width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: var(--accent-blue);
+    color: #fff;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    padding: 0 3px;
+  }
   .separator { width: 1px; background: var(--glass-border); margin: 0 4px; height: 24px; align-self: center; }
   
   .path-bar { flex: 1; min-width: 0; }
@@ -807,6 +967,7 @@
   .layout-body { flex: 1; display: flex; overflow: hidden; }
   .sidebar { width: 180px; background: rgba(0,0,0,0.15); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; padding: 12px 8px; flex-shrink: 0; }
   .sidebar-section h3 { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin: 0 0 8px 8px; letter-spacing: 0.5px; }
+  .allowed-roots-hint { font-size: 11px; color: var(--text-dim); margin: 0 0 8px 8px; opacity: 0.85; }
   .sidebar-item { background: transparent; border: none; color: var(--text-main); display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; cursor: pointer; width: 100%; text-align: left; font-size: 13px; transition: all 0.2s; }
   .sidebar-item:hover { background: rgba(255,255,255,0.08); }
   .sidebar-item.active { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); font-weight: 500; }
@@ -907,4 +1068,3 @@
   .share-btn.primary { background: var(--accent-blue); color: white; }
   .share-btn.primary:hover { filter: brightness(1.1); background: var(--accent-blue); }
 </style>
-

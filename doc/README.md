@@ -6,6 +6,7 @@
 - `doc/planning/project-identity-boundaries.md`
 - `doc/planning/feature-scope-priorities.md`
 - `doc/planning/ui-ux-customization-agent.md`
+- `doc/planning/app-install-file-workflow-direction.md`
 
 ## Operations
 - `doc/operations/completed-backlog-log.md`

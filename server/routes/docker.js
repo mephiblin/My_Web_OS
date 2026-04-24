@@ -72,6 +72,19 @@ router.get('/volumes', async (_req, res) => {
 });
 
 /**
+ * GET /api/docker/images
+ */
+router.get('/images', async (_req, res) => {
+  try {
+    const output = await runDockerCommand('docker image ls --format "{{json .}}"');
+    const images = parseDockerJsonLines(output);
+    return res.json({ success: true, images });
+  } catch (err) {
+    return sendDockerError(res, err, 'DOCKER_IMAGES_FETCH_FAILED');
+  }
+});
+
+/**
  * GET /api/docker/compose/projects
  */
 router.get('/compose/projects', async (_req, res) => {

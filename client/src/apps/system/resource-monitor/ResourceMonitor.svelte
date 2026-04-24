@@ -3,7 +3,7 @@
   import { Line } from 'svelte-chartjs';
   import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler } from 'chart.js';
   import { RotateCcw } from 'lucide-svelte';
-  import { fetchSystemOverview, fetchServiceStatus, fetchRuntimeApps, fetchInstalledPackages } from './api.js';
+  import { fetchSystemOverview, fetchServiceStatus, fetchRuntimeApps, fetchInstalledPackages, fetchOpsSummary } from './api.js';
   import { apiFetch } from '../../../utils/api.js';
 
   ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler);
@@ -22,6 +22,8 @@
   let serviceSnapshot = $state({});
   let runtimeApps = $state([]);
   let installedPackages = $state([]);
+  let opsSummary = $state(null);
+  let opsRecentErrors = $state([]);
   let interval;
 
   const tabs = [
@@ -106,19 +108,24 @@
   async function fetchOpsDashboard() {
     loadingOps = true;
     try {
-      const [servicesData, runtimeData, packagesData] = await Promise.all([
+      const [servicesData, runtimeData, packagesData, summary] = await Promise.all([
         fetchServiceStatus(),
         fetchRuntimeApps(),
-        fetchInstalledPackages()
+        fetchInstalledPackages(),
+        fetchOpsSummary().catch(() => null)
       ]);
       serviceSnapshot = servicesData?.services || {};
       runtimeApps = Array.isArray(runtimeData?.apps) ? runtimeData.apps : [];
       installedPackages = Array.isArray(packagesData?.packages) ? packagesData.packages : [];
+      opsSummary = summary && typeof summary === 'object' ? summary : null;
+      opsRecentErrors = Array.isArray(summary?.logs?.recentErrors) ? summary.logs.recentErrors : [];
     } catch (err) {
       console.error(err);
       serviceSnapshot = {};
       runtimeApps = [];
       installedPackages = [];
+      opsSummary = null;
+      opsRecentErrors = [];
     } finally {
       loadingOps = false;
     }
@@ -512,6 +519,11 @@
           <div class="value">{installedPackages.length}</div>
           <div class="stats">Lifecycle-managed inventory</div>
         </div>
+        <div class="card glass-effect">
+          <h3>Recent Errors</h3>
+          <div class="value">{opsSummary?.logs?.recentErrorCount ?? 0}</div>
+          <div class="stats">Warnings: {opsSummary?.logs?.recentWarningCount ?? 0}</div>
+        </div>
       </div>
 
       <div class="card glass-effect proc-card">
@@ -555,6 +567,27 @@
               </tr>
             {:else}
               <tr><td colspan="3" style="text-align: center; color: var(--text-dim); padding: 20px;">No runtime app data.</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card glass-effect proc-card">
+        <table class="proc-table">
+          <thead>
+            <tr>
+              <th>Recent Error</th>
+              <th class="num">Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each opsRecentErrors as entry}
+              <tr>
+                <td class="name">{entry?.action || entry?.message || '-'}</td>
+                <td class="num">{entry?.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : '-'}</td>
+              </tr>
+            {:else}
+              <tr><td colspan="2" style="text-align: center; color: var(--text-dim); padding: 20px;">No recent errors.</td></tr>
             {/each}
           </tbody>
         </table>
@@ -646,4 +679,3 @@
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   :global(.spin) { animation: spin 1s linear infinite; }
 </style>
-

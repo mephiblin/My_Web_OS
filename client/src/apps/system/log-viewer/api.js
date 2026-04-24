@@ -6,3 +6,6 @@ export async function fetchLogs(options = {}) {
   return apiFetch(`/api/logs?${params.toString()}`);
 }
 
+export async function fetchOpsSummary() {
+  return apiFetch('/api/system/ops-summary');
+}

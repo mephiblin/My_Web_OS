@@ -44,7 +44,10 @@ export async function listVolumes() {
   return apiFetch('/api/docker/volumes');
 }
 
+export async function listImages() {
+  return apiFetch('/api/docker/images');
+}
+
 export async function listComposeProjects() {
   return apiFetch('/api/docker/compose/projects');
 }
-

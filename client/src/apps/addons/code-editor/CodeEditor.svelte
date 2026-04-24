@@ -29,11 +29,15 @@
       };
     }
 
-    const path = String(data?.path || '').trim();
+    const fileContext = data?.fileContext && typeof data.fileContext === 'object' ? data.fileContext : null;
+    const contextFile = fileContext?.file && typeof fileContext.file === 'object' ? fileContext.file : null;
+    const path = String(contextFile?.path || data?.path || '').trim();
     if (!path) return null;
     return {
       mode: 'host',
-      path
+      path,
+      grantId: String(fileContext?.permissionContext?.grantId || '').trim(),
+      accessMode: String(contextFile?.mode || '').trim().toLowerCase() || 'readwrite'
     };
   }
 
@@ -61,7 +65,10 @@
     try {
       const result = target.mode === 'package'
         ? await editorApi.readPackageFile(target.appId, target.path)
-        : await editorApi.readFile(target.path);
+        : await editorApi.readFile(target.path, {
+          grantId: target.grantId,
+          appId: target.grantId ? 'editor' : ''
+        });
       const content = target.mode === 'package' ? result?.file?.content : result?.content;
       if (content !== undefined) {
         editor.setValue(String(content));
@@ -77,18 +84,55 @@
     if (!editor) return;
     const target = getActiveTarget();
     if (!target?.path) return;
+    if (target.mode === 'host' && target.accessMode === 'read') {
+      addToast('This file is opened in read-only mode.', 'error');
+      return;
+    }
 
     try {
-      const result = target.mode === 'package'
-        ? await editorApi.savePackageFile(target.appId, target.path, editor.getValue())
-        : await editorApi.saveFile(target.path, editor.getValue());
+      let result;
+      if (target.mode === 'package') {
+        result = await editorApi.savePackageFile(target.appId, target.path, editor.getValue());
+      } else {
+        result = await editorApi.saveFile(target.path, editor.getValue(), {
+          grantId: target.grantId,
+          appId: target.grantId ? 'editor' : '',
+          operationSource: target.grantId ? 'addon' : '',
+          overwrite: false
+        });
+      }
       if (result.success || !result.error) {
         addToast('File saved successfully!', 'success');
       } else {
         addToast(result.message || 'Error saving file', 'error');
       }
     } catch (err) {
-      addToast('Server connection failed', 'error');
+      if (target.mode === 'host' && err?.code === 'FS_WRITE_OVERWRITE_APPROVAL_REQUIRED') {
+        const confirmed = globalThis.confirm('Overwrite existing file?');
+        if (!confirmed) return;
+        try {
+          const overwriteResult = await editorApi.saveFile(target.path, editor.getValue(), {
+            grantId: target.grantId,
+            appId: target.grantId ? 'editor' : '',
+            operationSource: target.grantId ? 'addon' : '',
+            overwrite: true,
+            approval: {
+              approved: true,
+              reason: 'manual-save-overwrite'
+            }
+          });
+          if (overwriteResult.success || !overwriteResult.error) {
+            addToast('File saved successfully!', 'success');
+            return;
+          }
+          addToast(overwriteResult.message || 'Error saving file', 'error');
+          return;
+        } catch (overwriteErr) {
+          addToast(overwriteErr?.message || 'Overwrite save failed', 'error');
+          return;
+        }
+      }
+      addToast(err?.message || 'Server connection failed', 'error');
       console.error(err);
     }
   }
@@ -146,4 +190,3 @@
   .save-btn { background: var(--accent-blue); border: none; color: white; padding: 2px 10px; border-radius: 4px; font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .editor-container { flex: 1; width: 100%; }
 </style>
-

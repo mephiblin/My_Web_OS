@@ -4,7 +4,8 @@
     startMenuState,
     closeStartMenu,
     clearStartMenuQuery,
-    setStartMenuQuery
+    setStartMenuQuery,
+    togglePinnedApp
   } from '../stores/startMenuStore.js';
 
   let { apps = [], onOpenApp, startButtonEl = null } = $props();
@@ -29,6 +30,12 @@
     });
   });
 
+  const pinnedApps = $derived.by(() => {
+    const pinned = Array.isArray($startMenuState.pinnedAppIds) ? $startMenuState.pinnedAppIds : [];
+    const byId = new Map((apps || []).map((app) => [String(app.id), app]));
+    return pinned.map((id) => byId.get(String(id))).filter(Boolean);
+  });
+
   function handleWindowMouseDown(event) {
     if (!$startMenuState.isOpen) return;
     if (menuEl && menuEl.contains(event.target)) return;
@@ -49,6 +56,11 @@
     clearStartMenuQuery();
   }
 
+  function isPinned(app) {
+    const id = String(app?.id || '');
+    return Array.isArray($startMenuState.pinnedAppIds) && $startMenuState.pinnedAppIds.includes(id);
+  }
+
   $effect(() => {
     if (!$startMenuState.isOpen) return;
     requestAnimationFrame(() => {
@@ -60,7 +72,7 @@
 <svelte:window onmousedown={handleWindowMouseDown} onkeydown={handleWindowKeydown} />
 
 {#if $startMenuState.isOpen}
-  <section class="start-menu glass-effect" bind:this={menuEl} role="dialog" aria-label="Start Menu">
+  <section class="start-menu glass-effect {$startMenuState.layout}" bind:this={menuEl} role="dialog" aria-label="Start Menu">
     <div class="menu-header">
       <div class="menu-title">Start</div>
       <div class="menu-count">{filteredApps.length} apps</div>
@@ -78,6 +90,23 @@
     </label>
 
     <div class="app-list" role="listbox" aria-label="Applications">
+      {#if pinnedApps.length > 0}
+        <div class="group-label">Pinned</div>
+        {#each pinnedApps as app}
+          <button class="app-item pinned" onclick={() => handleOpenApp(app)}>
+            <span class="app-icon">
+              {#if app.iconType === 'image' && app.iconUrl}
+                <img class="app-icon-image" src={app.iconUrl} alt={app.title} loading="lazy" />
+              {:else}
+                <svelte:component this={app.iconComponent || LayoutGrid} size={16} />
+              {/if}
+            </span>
+            <span class="app-title">{app.title}</span>
+            <span class="pin-btn" onclick={(event) => { event.stopPropagation(); togglePinnedApp(app.id); }}>Unpin</span>
+          </button>
+        {/each}
+        <div class="group-label">All Apps</div>
+      {/if}
       {#if filteredApps.length === 0}
         <div class="empty-state">No apps found</div>
       {:else}
@@ -91,6 +120,9 @@
               {/if}
             </span>
             <span class="app-title">{app.title}</span>
+            <span class="pin-btn" onclick={(event) => { event.stopPropagation(); togglePinnedApp(app.id); }}>
+              {isPinned(app) ? 'Unpin' : 'Pin'}
+            </span>
           </button>
         {/each}
       {/if}
@@ -112,6 +144,12 @@
     flex-direction: column;
     gap: 10px;
     z-index: 10000;
+  }
+  .start-menu.compact {
+    width: min(300px, calc(100vw - 20px));
+  }
+  .start-menu.wide {
+    width: min(440px, calc(100vw - 20px));
   }
 
   .menu-header {
@@ -179,6 +217,9 @@
     text-align: left;
     transition: background 0.15s;
   }
+  .app-item.pinned {
+    background: rgba(88, 166, 255, 0.08);
+  }
 
   .app-item:hover,
   .app-item:focus-visible {
@@ -208,6 +249,17 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .pin-btn {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .group-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 8px 8px 4px;
   }
 
   .empty-state {

@@ -741,6 +741,7 @@ function normalizeManifestInput(input, fallbackAppId) {
   const dependencies = normalizeManifestDependencies(input?.dependencies);
   const compatibility = normalizeManifestCompatibility(input?.compatibility);
   const mediaScopes = packageRegistryService.normalizeManifestMediaScopes(input, { strict: true });
+  const fileAssociations = packageRegistryService.normalizeManifestFileAssociations(input?.fileAssociations, { strict: true });
   const release = {
     channel: normalizeManifestChannel(input?.release?.channel || input?.channel || 'stable')
   };
@@ -769,6 +770,7 @@ function normalizeManifestInput(input, fallbackAppId) {
     media: {
       scopes: mediaScopes
     },
+    fileAssociations,
     dependencies,
     compatibility,
     release,

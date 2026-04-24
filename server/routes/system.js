@@ -331,6 +331,53 @@ router.get('/network-ips', async (req, res) => {
 });
 
 /**
+ * GET /api/system/ops-summary
+ * Aggregated operations view for Resource Monitor / Log Viewer.
+ */
+router.get('/ops-summary', async (req, res) => {
+  try {
+    const manager = req.app.get('serviceManager');
+    const runtime = req.app.get('runtimeManager');
+
+    const serviceSnapshot = manager?.getStatusSnapshot ? manager.getStatusSnapshot() : {};
+    const runtimeStatusMap = runtime?.getRuntimeStatusMap ? runtime.getRuntimeStatusMap() : {};
+    const runtimeApps = Object.values(runtimeStatusMap || {});
+    const packages = await packageRegistryService.listSandboxApps().catch(() => []);
+    const recentErrors = await auditService.getLogs({ limit: 80, level: 'ERROR' }).catch(() => []);
+    const recentWarnings = await auditService.getLogs({ limit: 80, level: 'WARNING' }).catch(() => []);
+
+    res.json({
+      success: true,
+      generatedAt: new Date().toISOString(),
+      services: {
+        total: Object.keys(serviceSnapshot || {}).length,
+        running: Object.values(serviceSnapshot || {}).filter((item) => item?.status === 'running').length,
+        error: Object.values(serviceSnapshot || {}).filter((item) => item?.status === 'error').length
+      },
+      runtime: {
+        total: runtimeApps.length,
+        running: runtimeApps.filter((item) => item?.status === 'running' || item?.status === 'starting' || item?.status === 'degraded').length,
+        error: runtimeApps.filter((item) => item?.status === 'error').length
+      },
+      packages: {
+        total: packages.length
+      },
+      logs: {
+        recentErrorCount: recentErrors.length,
+        recentWarningCount: recentWarnings.length,
+        recentErrors: recentErrors.slice(0, 20)
+      }
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: true,
+      code: 'SYSTEM_OPS_SUMMARY_FAILED',
+      message: err.message
+    });
+  }
+});
+
+/**
  * GET /api/system/apps
  * Get dynamic app registry
  */

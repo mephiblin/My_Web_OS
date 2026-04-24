@@ -10,14 +10,34 @@ export const contextMenu = writable({
 const DEFAULT_CONTEXT_MENU_SETTINGS = {
   showIcons: true,
   confirmDanger: true,
-  density: 'cozy'
+  density: 'cozy',
+  openWithByExtension: {}
 };
+
+function normalizeExtension(value) {
+  return String(value || '').trim().toLowerCase().replace(/^\./, '').slice(0, 32);
+}
+
+function normalizeOpenWithByExtension(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  const next = {};
+  for (const [extension, appId] of Object.entries(value)) {
+    const ext = normalizeExtension(extension);
+    const app = String(appId || '').trim();
+    if (!ext || !app) continue;
+    next[ext] = app;
+  }
+  return next;
+}
 
 function normalizeContextMenuSettings(value = {}) {
   return {
     showIcons: value?.showIcons !== false,
     confirmDanger: value?.confirmDanger !== false,
-    density: ['compact', 'cozy'].includes(value?.density) ? value.density : 'cozy'
+    density: ['compact', 'cozy'].includes(value?.density) ? value.density : 'cozy',
+    openWithByExtension: normalizeOpenWithByExtension(value?.openWithByExtension)
   };
 }
 

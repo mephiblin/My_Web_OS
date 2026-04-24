@@ -18,7 +18,7 @@
   import Taskbar from './components/Taskbar.svelte';
   import StartMenu from './components/StartMenu.svelte';
   import NotificationCenter from './components/NotificationCenter.svelte';
-  import { closeStartMenu, startMenuState, toggleStartMenu } from './stores/startMenuStore.js';
+  import { closeStartMenu, startMenuState, toggleStartMenu, initStartMenuState, registerRecentApp } from './stores/startMenuStore.js';
   import { taskbarSettings } from './stores/taskbarStore.js';
   import { windowDefaultsSettings } from './stores/windowDefaultsStore.js';
   import { widgetLibrary } from './stores/widgetLibraryStore.js';
@@ -97,7 +97,8 @@
       initWindows(),
       widgets.init(),
       widgetLibrary.init(),
-      initShortcuts()
+      initShortcuts(),
+      initStartMenuState()
     ]);
 
     updateTime();
@@ -187,6 +188,12 @@
   }
 
   function handleOpenStartMenuApp(app) {
+    registerRecentApp(app?.id);
+    openWindow(app);
+  }
+
+  function openDesktopApp(app) {
+    registerRecentApp(app?.id);
     openWindow(app);
   }
 
@@ -210,6 +217,7 @@
     }
 
     openWindow(target, data);
+    registerRecentApp(normalizedId);
     return { opened: true, appId: normalizedId };
   }
 
@@ -238,7 +246,7 @@
       <div class="layout-edit-banner">Layout Edit Mode: app launch is temporarily disabled.</div>
     {/if}
     {#each apps as app}
-      <button class="app-icon" ondblclick={() => !$layoutEditMode && openWindow(app)}>
+      <button class="app-icon" ondblclick={() => !$layoutEditMode && openDesktopApp(app)}>
         <div class="icon-box glass-effect">
           <span class="app-model-badge" title={`Model: ${app.appModel}`}>{app.appModelBadge}</span>
           {#if app.iconType === 'image' && app.iconUrl}

@@ -7,6 +7,7 @@ const auth = require('../middleware/auth');
 const auditService = require('../services/auditService');
 const indexService = require('../services/indexService');
 const trashService = require('../services/trashService');
+const fileGrantService = require('../services/fileGrantService');
 const serverConfig = require('../config/serverConfig');
 const { resolveSafePath, isWithinAllowedRoots, isSafeLeafName } = require('../utils/pathPolicy');
 
@@ -70,6 +71,21 @@ function requireSafePath(req) {
   return req.safePath;
 }
 
+function consumeFileGrant(grantId, options = {}) {
+  try {
+    return fileGrantService.consumeGrant(grantId, options);
+  } catch (err) {
+    if (String(err.code || '').startsWith('FS_FILE_GRANT_')) {
+      throw createFsHttpError(
+        err.code === 'FS_FILE_GRANT_REQUIRED' ? 400 : 403,
+        err.code,
+        err.message
+      );
+    }
+    throw err;
+  }
+}
+
 
 /**
  * GET /api/fs/trash
@@ -126,7 +142,11 @@ router.delete('/empty-trash', async (req, res) => {
 router.get('/config', (req, res) => {
   serverConfig.getPaths()
     .then((paths) => {
-      res.json({ initialPath: paths.initialPath || '/' });
+      res.json({
+        initialPath: paths.initialPath || '/',
+        allowedRoots: Array.isArray(paths.allowedRoots) ? paths.allowedRoots : [],
+        inventoryRoot: paths.inventoryRoot || ''
+      });
     })
     .catch((err) => {
       sendFsError(res, err, 'FS_CONFIG_FETCH_FAILED', 'Failed to read file system config.');
@@ -151,6 +171,56 @@ router.get('/user-dirs', (req, res) => {
  * Routes below require pathGuard (user-supplied path)
  */
 router.use(pathGuard);
+
+router.post('/grant', async (req, res) => {
+  try {
+    const targetPath = requireSafePath(req);
+    const { mode, appId, source } = req.body && typeof req.body === 'object' ? req.body : {};
+    const stats = await fs.stat(targetPath);
+    if (!stats.isFile()) {
+      throw createFsHttpError(400, 'FS_FILE_GRANT_NOT_FILE', 'File grants can only be issued for files.');
+    }
+
+    const grant = fileGrantService.createGrant({
+      path: targetPath,
+      mode,
+      appId,
+      source,
+      user: req.user?.username
+    });
+
+    await auditService.log(
+      'FILE_TRANSFER',
+      'Issue File Grant',
+      {
+        path: targetPath,
+        mode: grant.mode,
+        appId: grant.appId,
+        source: grant.source,
+        grantId: grant.id,
+        user: req.user?.username
+      },
+      'INFO'
+    );
+
+    return res.status(201).json({
+      success: true,
+      grant: {
+        id: grant.id,
+        appId: grant.appId,
+        source: grant.source,
+        scope: grant.scope,
+        mode: grant.mode,
+        path: grant.path,
+        createdAt: new Date(grant.createdAt).toISOString(),
+        expiresAt: new Date(grant.expiresAt).toISOString(),
+        expiresOnWindowClose: grant.expiresOnWindowClose
+      }
+    });
+  } catch (err) {
+    sendFsError(res, err, 'FS_FILE_GRANT_FAILED', 'Failed to create file grant.');
+  }
+});
 
 /**
  * GET /api/fs/list
@@ -276,6 +346,16 @@ router.get('/search', async (req, res) => {
 router.get('/read', async (req, res) => {
   try {
     const targetPath = requireSafePath(req);
+    const grantId = String(req.query?.grantId || '').trim();
+    const appId = String(req.query?.appId || '').trim();
+    if (grantId) {
+      consumeFileGrant(grantId, {
+        path: targetPath,
+        requiredMode: 'read',
+        appId,
+        user: req.user?.username
+      });
+    }
     const stats = await fs.stat(targetPath);
 
     if (stats.isDirectory()) {
@@ -324,14 +404,67 @@ router.get('/raw', async (req, res) => {
 router.post('/write', async (req, res) => {
   try {
     const targetPath = requireSafePath(req);
-    const { content } = req.body;
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const { content } = body;
+    const grantId = String(body.grantId || '').trim();
+    const appId = String(body.appId || '').trim();
+    const operationSource = String(body.operationSource || '').trim().toLowerCase();
+    const overwrite = body.overwrite === true;
+    const approval = body.approval && typeof body.approval === 'object' ? body.approval : {};
+    const approvalReceived = approval.approved === true;
 
     if (typeof content !== 'string' && content !== undefined && content !== null) {
       throw createFsHttpError(400, 'FS_WRITE_CONTENT_INVALID', 'File content must be a string.');
     }
 
+    if (operationSource === 'addon') {
+      consumeFileGrant(grantId, {
+        path: targetPath,
+        requiredMode: 'readwrite',
+        appId,
+        user: req.user?.username
+      });
+    }
+
+    const exists = await fs.pathExists(targetPath);
+    if (operationSource === 'addon' && exists && !overwrite) {
+      throw createFsHttpError(
+        409,
+        'FS_WRITE_OVERWRITE_APPROVAL_REQUIRED',
+        'Overwrite requires explicit approval for addon file writes.',
+        {
+          path: targetPath,
+          requiresApproval: true
+        }
+      );
+    }
+    if (operationSource === 'addon' && exists && overwrite && !approvalReceived) {
+      throw createFsHttpError(
+        400,
+        'FS_WRITE_APPROVAL_REQUIRED',
+        'Addon overwrite approval is required.',
+        {
+          path: targetPath,
+          requiresApproval: true
+        }
+      );
+    }
+
     await fs.writeFile(targetPath, content || '', 'utf8');
-    await auditService.log('FILE_TRANSFER', 'Write File', { path: targetPath, user: req.user?.username }, 'INFO');
+    await auditService.log(
+      'FILE_TRANSFER',
+      'Write File',
+      {
+        path: targetPath,
+        appId: appId || null,
+        operationSource: operationSource || 'direct',
+        grantId: grantId || null,
+        overwrite,
+        approvalReceived,
+        user: req.user?.username
+      },
+      'INFO'
+    );
     res.json({ success: true, message: 'File saved successfully.' });
   } catch (err) {
     sendFsError(res, err, 'FS_WRITE_FAILED', 'Failed to save file.');
@@ -471,7 +604,6 @@ router.post('/extract', async (req, res) => {
   }
 });
 
-const multer = require('multer');
 const upload = multer({ dest: path.join(__dirname, '../storage/tmp/') });
 
 /**

@@ -1,11 +1,12 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { Play, Square, RotateCcw, Trash2, Container, AlertCircle, FileText, HardDrive, Layers } from 'lucide-svelte';
+  import { Play, Square, RotateCcw, Trash2, Container, AlertCircle, FileText, HardDrive, Layers, Boxes } from 'lucide-svelte';
   import { addToast } from '../../../core/stores/toastStore.js';
   import * as dockerApi from './api.js';
 
   let containers = $state([]);
   let volumes = $state([]);
+  let images = $state([]);
   let composeProjects = $state([]);
   let selectedLogContainerId = $state('');
   let logLines = $state([]);
@@ -50,6 +51,15 @@
     }
   }
 
+  async function fetchImages() {
+    try {
+      const data = await dockerApi.listImages();
+      images = Array.isArray(data?.images) ? data.images : [];
+    } catch (_err) {
+      images = [];
+    }
+  }
+
   async function openLogs(container) {
     selectedLogContainerId = container.ID;
     logsLoading = true;
@@ -76,7 +86,7 @@
       }
       if (result?.success) {
         addToast(result.message, 'success');
-        await Promise.all([fetchContainers(), fetchVolumes(), fetchComposeProjects()]);
+        await Promise.all([fetchContainers(), fetchVolumes(), fetchImages(), fetchComposeProjects()]);
         if (selectedLogContainerId === id) {
           await openLogs(container);
         }
@@ -94,11 +104,20 @@
     return 'var(--text-dim)';
   }
 
+  function parseHealth(statusText) {
+    const text = String(statusText || '').toLowerCase();
+    if (text.includes('healthy')) return 'healthy';
+    if (text.includes('unhealthy')) return 'unhealthy';
+    if (text.includes('starting')) return 'starting';
+    return 'none';
+  }
+
   onMount(() => {
-    Promise.all([fetchContainers(), fetchVolumes(), fetchComposeProjects()]);
+    Promise.all([fetchContainers(), fetchVolumes(), fetchImages(), fetchComposeProjects()]);
     interval = setInterval(() => {
       fetchContainers();
       fetchVolumes();
+      fetchImages();
       fetchComposeProjects();
     }, 5000);
   });
@@ -109,7 +128,7 @@
 <div class="docker-manager">
   <div class="header">
     <h2><Container size={20} /> Docker Containers</h2>
-    <button class="refresh-btn" onclick={() => Promise.all([fetchContainers(), fetchVolumes(), fetchComposeProjects()])}><RotateCcw size={14} /> Refresh</button>
+    <button class="refresh-btn" onclick={() => Promise.all([fetchContainers(), fetchVolumes(), fetchImages(), fetchComposeProjects()])}><RotateCcw size={14} /> Refresh</button>
   </div>
 
   {#if loading}
@@ -135,6 +154,9 @@
               {/if}
             </div>
             <div class="status" style="color: {getStatusColor(c.Status)}">??{c.Status}</div>
+            {#if parseHealth(c.Status) !== 'none'}
+              <div class="status health {parseHealth(c.Status)}">health: {parseHealth(c.Status)}</div>
+            {/if}
           </div>
           <div class="actions">
             <button title="Logs" onclick={() => openLogs(c)}><FileText size={14} /></button>
@@ -186,6 +208,24 @@
           </div>
         {/if}
       </div>
+
+      <div class="info-panel glass-effect">
+        <div class="panel-head">
+          <h3><Boxes size={15} /> Images</h3>
+        </div>
+        {#if images.length === 0}
+          <div class="runtime-empty">No images found.</div>
+        {:else}
+          <div class="simple-list">
+            {#each images as image}
+              <div class="simple-row">
+                <span>{image.Repository}:{image.Tag}</span>
+                <span>{image.Size || '-'}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </div>
 
     <div class="log-panel glass-effect">
@@ -226,6 +266,10 @@
   .image { font-size: 11px; opacity: 0.6; padding: 2px 6px; background: rgba(0,0,0,0.2); border-radius: 4px; }
   .ports { font-size: 11px; color: var(--accent-blue); opacity: 0.8; font-family: monospace; }
   .status { font-size: 11px; font-weight: 500; }
+  .status.health { text-transform: uppercase; letter-spacing: 0.04em; }
+  .status.health.healthy { color: #7ee787 !important; }
+  .status.health.unhealthy { color: #ff7b72 !important; }
+  .status.health.starting { color: #d29922 !important; }
   .actions { display: flex; gap: 8px; }
   .actions button { background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
   
@@ -308,4 +352,3 @@
     word-break: break-word;
   }
 </style>
-

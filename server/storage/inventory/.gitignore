@@ -2,5 +2,8 @@
 !*/
 !.gitignore
 !.gitkeep
+!system/
+system/*
+!system/apps.json
 !apps/hello-sandbox/
 !apps/hello-sandbox/**

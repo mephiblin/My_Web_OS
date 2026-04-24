@@ -30,6 +30,9 @@ const BUILTIN_SYSTEM_APP_IDS = new Set([
 const BUILTIN_DEFAULT_VERSION = '0.0.0';
 const ICON_FILE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
 const MEDIA_SCOPE_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
+const FILE_ASSOC_ACTIONS = new Set(['preview', 'open', 'edit', 'import', 'export']);
+const FILE_EXTENSION_RE = /^[a-z0-9][a-z0-9._+-]{0,31}$/i;
+const MIME_TYPE_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/i;
 
 function normalizeBuiltinIcon(iconValue) {
   if (typeof iconValue !== 'string') {
@@ -186,33 +189,161 @@ function normalizeManifestMediaScopes(input, options = {}) {
   return normalized;
 }
 
-async function readBuiltinRegistry() {
-  await inventoryPaths.ensureInventoryStructure();
-  const [appsFile, legacyAppsFile] = await Promise.all([
-    inventoryPaths.getAppsRegistryFile(),
-    inventoryPaths.getLegacyAppsRegistryFile()
-  ]);
-  const [currentAppsExists, legacyAppsExists] = await Promise.all([
-    fs.pathExists(appsFile),
-    fs.pathExists(legacyAppsFile)
-  ]);
+function normalizeFileAssociations(input, options = {}) {
+  const strict = Boolean(options.strict);
+  if (input === undefined || input === null) {
+    return [];
+  }
 
-  const currentApps = currentAppsExists ? await fs.readJson(appsFile) : [];
-  const legacyApps = legacyAppsExists ? await fs.readJson(legacyAppsFile) : [];
+  if (!Array.isArray(input)) {
+    if (strict) {
+      const err = new Error('Manifest fileAssociations must be an array.');
+      err.code = 'PACKAGE_FILE_ASSOCIATIONS_INVALID';
+      throw err;
+    }
+    return [];
+  }
 
-  const merged = [];
+  const normalized = [];
   const seen = new Set();
 
-  for (const app of [...(Array.isArray(currentApps) ? currentApps : []), ...(Array.isArray(legacyApps) ? legacyApps : [])]) {
-    if (!app || typeof app !== 'object' || typeof app.id !== 'string' || seen.has(app.id)) {
+  for (let index = 0; index < input.length; index += 1) {
+    const row = input[index];
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      if (strict) {
+        const err = new Error(`fileAssociations[${index}] must be an object.`);
+        err.code = 'PACKAGE_FILE_ASSOCIATION_INVALID';
+        throw err;
+      }
       continue;
     }
 
-    merged.push(app);
-    seen.add(app.id);
+    const rawExtensions = Array.isArray(row.extensions) ? row.extensions : [];
+    const extensions = [];
+    const extensionSet = new Set();
+    for (const rawExtension of rawExtensions) {
+      const extension = String(rawExtension || '').trim().toLowerCase().replace(/^\./, '');
+      if (!extension) continue;
+      if (!FILE_EXTENSION_RE.test(extension)) {
+        if (strict) {
+          const err = new Error(`fileAssociations[${index}] has invalid extension "${rawExtension}".`);
+          err.code = 'PACKAGE_FILE_ASSOCIATION_EXTENSION_INVALID';
+          throw err;
+        }
+        continue;
+      }
+      if (extensionSet.has(extension)) continue;
+      extensionSet.add(extension);
+      extensions.push(extension);
+    }
+
+    const rawMimeTypes = Array.isArray(row.mimeTypes) ? row.mimeTypes : [];
+    const mimeTypes = [];
+    const mimeSet = new Set();
+    for (const rawMimeType of rawMimeTypes) {
+      const mimeType = String(rawMimeType || '').trim().toLowerCase();
+      if (!mimeType) continue;
+      if (!MIME_TYPE_RE.test(mimeType)) {
+        if (strict) {
+          const err = new Error(`fileAssociations[${index}] has invalid mime type "${rawMimeType}".`);
+          err.code = 'PACKAGE_FILE_ASSOCIATION_MIME_INVALID';
+          throw err;
+        }
+        continue;
+      }
+      if (mimeSet.has(mimeType)) continue;
+      mimeSet.add(mimeType);
+      mimeTypes.push(mimeType);
+    }
+
+    if (extensions.length === 0 && mimeTypes.length === 0) {
+      if (strict) {
+        const err = new Error(`fileAssociations[${index}] must include at least one extension or mime type.`);
+        err.code = 'PACKAGE_FILE_ASSOCIATION_TARGET_REQUIRED';
+        throw err;
+      }
+      continue;
+    }
+
+    const rawActions = Array.isArray(row.actions) ? row.actions : [];
+    const actions = [];
+    const actionSet = new Set();
+    for (const rawAction of rawActions) {
+      const action = String(rawAction || '').trim().toLowerCase();
+      if (!action) continue;
+      if (!FILE_ASSOC_ACTIONS.has(action)) {
+        if (strict) {
+          const err = new Error(`fileAssociations[${index}] has unsupported action "${rawAction}".`);
+          err.code = 'PACKAGE_FILE_ASSOCIATION_ACTION_INVALID';
+          throw err;
+        }
+        continue;
+      }
+      if (actionSet.has(action)) continue;
+      actionSet.add(action);
+      actions.push(action);
+    }
+
+    const requestedDefaultAction = String(row.defaultAction || '').trim().toLowerCase();
+    let defaultAction = actions[0] || 'open';
+    if (requestedDefaultAction) {
+      if (!FILE_ASSOC_ACTIONS.has(requestedDefaultAction)) {
+        if (strict) {
+          const err = new Error(`fileAssociations[${index}] has invalid defaultAction "${row.defaultAction}".`);
+          err.code = 'PACKAGE_FILE_ASSOCIATION_DEFAULT_ACTION_INVALID';
+          throw err;
+        }
+      } else if (actionSet.size === 0 || actionSet.has(requestedDefaultAction)) {
+        defaultAction = requestedDefaultAction;
+      } else if (strict) {
+        const err = new Error(`fileAssociations[${index}] defaultAction must be included in actions.`);
+        err.code = 'PACKAGE_FILE_ASSOCIATION_DEFAULT_ACTION_MISSING';
+        throw err;
+      }
+    }
+
+    if (actions.length === 0) {
+      actions.push(defaultAction);
+    }
+
+    if (!actions.includes(defaultAction)) {
+      actions.unshift(defaultAction);
+    }
+
+    const key = JSON.stringify({
+      extensions,
+      mimeTypes,
+      actions,
+      defaultAction
+    });
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    normalized.push({
+      extensions,
+      mimeTypes,
+      actions,
+      defaultAction
+    });
   }
 
-  return merged;
+  return normalized;
+}
+
+async function readBuiltinRegistry() {
+  await inventoryPaths.ensureInventoryStructure();
+  const appsFile = await inventoryPaths.getAppsRegistryFile();
+  const currentAppsExists = await fs.pathExists(appsFile);
+  if (!currentAppsExists) {
+    return [];
+  }
+
+  const currentApps = await fs.readJson(appsFile);
+  if (!Array.isArray(currentApps)) {
+    return [];
+  }
+
+  return currentApps.filter((app) => app && typeof app === 'object' && typeof app.id === 'string');
 }
 
 function normalizeWindow(value) {
@@ -236,6 +367,7 @@ function normalizeBuiltinApp(app) {
   const normalizedVersion = String(app.version || BUILTIN_DEFAULT_VERSION).trim() || BUILTIN_DEFAULT_VERSION;
   const normalizedEntry = typeof app.entry === 'string' && app.entry.trim() ? app.entry.trim() : '';
   const normalizedPermissions = Array.isArray(app.permissions) ? app.permissions.map(String).filter(Boolean) : [];
+  const normalizedFileAssociations = normalizeFileAssociations(app.fileAssociations);
   const normalizedWindow = normalizeWindow(app.window);
   const builtinType = appModel === APP_MODELS.SYSTEM ? 'system' : 'app';
 
@@ -252,6 +384,7 @@ function normalizeBuiltinApp(app) {
     runtimeType: 'builtin',
     source: 'system-registry',
     permissions: normalizedPermissions,
+    fileAssociations: normalizedFileAssociations,
     singleton: Boolean(app.singleton),
     icon: iconMeta.icon,
     iconType: iconMeta.iconType,
@@ -263,6 +396,7 @@ function normalizeBuiltinApp(app) {
       componentId: String(app.componentId || app.id || '').trim() || String(app.id || '').trim(),
       singleton: Boolean(app.singleton)
     },
+    dataBoundary: typeof app.dataBoundary === 'string' ? app.dataBoundary.trim() : '',
     manifestLike: {
       id: String(app.id || '').trim(),
       title: normalizedTitle,
@@ -274,6 +408,7 @@ function normalizeBuiltinApp(app) {
         entry: normalizedEntry
       },
       permissions: normalizedPermissions,
+      fileAssociations: normalizedFileAssociations,
       window: normalizedWindow
     }
   };
@@ -343,7 +478,11 @@ function resolveLaunchContract(app) {
   };
 }
 
-function resolveDataBoundary(ownerTier, launch) {
+function resolveDataBoundary(app, ownerTier, launch) {
+  const explicitBoundary = String(app?.dataBoundary || '').trim();
+  if (explicitBoundary === 'host-shared' || explicitBoundary === 'inventory-app-data' || explicitBoundary === 'none') {
+    return explicitBoundary;
+  }
   if (ownerTier === 'package-addon') {
     return 'inventory-app-data';
   }
@@ -367,7 +506,7 @@ function buildOwnershipMatrixItems(apps) {
       source: String(app?.source || '').trim(),
       runtimeType: String(app?.runtimeType || app?.runtime || '').trim(),
       launch,
-      dataBoundary: resolveDataBoundary(ownerTier, launch)
+      dataBoundary: resolveDataBoundary(app, ownerTier, launch)
     };
   });
 }
@@ -377,6 +516,7 @@ function normalizeSandboxManifest(manifest) {
   const runtimeProfile = normalizeRuntimeProfile(manifest);
   const resolvedEntry = runtimeProfile.entry;
   const mediaScopes = normalizeManifestMediaScopes(manifest);
+  const fileAssociations = normalizeFileAssociations(manifest.fileAssociations);
 
   if (typeof manifest.id !== 'string' || typeof manifest.title !== 'string') {
     return null;
@@ -415,6 +555,7 @@ function normalizeSandboxManifest(manifest) {
     media: {
       scopes: mediaScopes
     },
+    fileAssociations,
     author: manifest.author || '',
     repository: manifest.repository || '',
     window: normalizeWindow(manifest.window)
@@ -497,6 +638,7 @@ async function listSandboxApps() {
 
 const packageRegistryService = {
   normalizeManifestMediaScopes,
+  normalizeManifestFileAssociations: normalizeFileAssociations,
   OWNERSHIP_CONTRACT_VERSION,
 
   async listDesktopApps() {

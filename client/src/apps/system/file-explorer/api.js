@@ -129,6 +129,40 @@ export async function writeFile(path, content) {
   }));
 }
 
+export async function writeFileWithPolicy(path, content, options = {}) {
+  const payload = {
+    path,
+    content,
+    grantId: options.grantId || '',
+    appId: options.appId || '',
+    operationSource: options.operationSource || '',
+    overwrite: options.overwrite === true,
+    approval: options.approval && typeof options.approval === 'object'
+      ? options.approval
+      : undefined
+  };
+  return withNormalizedError('write', () => apiFetch('/api/fs/write', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }));
+}
+
+export async function createFileGrant(path, mode = 'read', appId = '', source = 'file-station') {
+  return withNormalizedError('read', () => apiFetch('/api/fs/grant', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      mode,
+      appId,
+      source
+    })
+  }));
+}
+
+export async function fetchDesktopApps() {
+  return withNormalizedError('config', () => apiFetch('/api/system/apps'));
+}
+
 export async function createDir(path) {
   return withNormalizedError('createDir', () => apiFetch('/api/fs/create-dir', {
     method: 'POST',
@@ -207,4 +241,3 @@ export async function addWebDAV(name, url, user, pass) {
     body: JSON.stringify({ name, url, user, pass })
   }));
 }
-

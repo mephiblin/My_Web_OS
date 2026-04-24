@@ -1,36 +1,55 @@
 # AGENTS.md
 
-This is the repository-level preset for coding agents working on My Web OS.
-It should be enough to begin work safely without rereading every document, while still pointing to the right source when product direction is unclear.
+This is the repository-level operating guide for coding agents working on My Web OS.
+It should be enough to start safely, choose the next useful task, and preserve the project direction without rereading every historical document.
 
-## Operating Mode
+## Operating Contract
 
 Default behavior:
 
-1. Classify the request into one or more layers: `Host`, `Web Desktop`, `Sandbox / Package`.
-2. Inspect existing code before inventing structure. Reuse current routes, services, stores, components, and API helpers.
-3. Work in this order: `API/service contract -> store/helper -> minimal UI -> verification -> docs update`.
-4. Handle boundaries, explicit errors, approvals, backup/rollback, and recovery before UI polish.
-5. Run the smallest useful verification for the touched area, or state why it was skipped.
-6. Never revert unrelated dirty work.
+1. Classify the request into one or more layers: `Host`, `Web Desktop`, `App Install / File Workflow`, `Sandbox / Package`, `Agent / Automation`.
+2. Inspect the relevant current code before inventing structure. Reuse existing routes, services, stores, components, API helpers, and inventory utilities.
+3. Work in this order: `contract/API -> service/helper/store -> minimal UI -> verification -> docs update`.
+4. Handle boundaries, explicit errors, approvals, backup/rollback, audit, and recoverability before UI polish.
+5. Do not move feature logic into `Desktop.svelte` or `Window.svelte`.
+6. Run the smallest useful verification for the touched area, or state clearly why it was not run.
+7. Never revert unrelated dirty work.
 
 Default development priority:
 
-`reliability/boundary -> Package Center operations -> local workstation core -> UI customization -> Agent/LLM -> media/home lab -> Docker portability`
+```text
+registry/file-workflow reliability
+-> File Station Open With and file grants
+-> Package Center installed operations
+-> local workstation core
+-> app/package addon parity
+-> UI customization
+-> Agent/LLM approval workflows
+-> media/home lab expansion
+-> Docker portability
+```
 
-## Project Identity
+## Product Identity
 
-My Web OS is not a kernel-level OS replacement.
-It is a personal Web OS layer around an existing local PC, exposed through a browser-based desktop for files, terminal access, system status, Docker, packages, runtimes, backup/recovery, and customization.
+My Web OS is not a kernel-level operating system replacement.
+It is a personal Web OS layer around an existing local PC.
 
-Core principles:
+The product should feel like an installable app environment for local work:
 
-- Local PC capabilities must be exposed through clear UI/API boundaries.
-- The web desktop should reduce real workflow friction, not only look like a desktop.
-- Package Center is a workshop and maintenance console, not only an app store.
-- Failures, logs, health, backup, rollback, and recovery options should be visible.
-- Customization means storing and reshaping workflows, not only colors.
-- Agent/LLM features start with explanation, summary, approval, and result reporting before autonomous execution.
+- Users manage apps through Web OS.
+- Apps open, preview, edit, import, and export real local files through File Station and Web OS APIs.
+- File access is explicit, permissioned, recoverable, and visible.
+- Package Center is a workshop and maintenance console, not only a store.
+- System apps remain privileged; ordinary apps and package addons must not silently bypass Web OS boundaries.
+
+The guiding model:
+
+```text
+File Station owns local file selection and path intent.
+Apps own focused workflows.
+Web OS owns permissions, approval, audit, lifecycle, and recovery.
+Package Center owns install/update/remove/runtime health.
+```
 
 ## Source Documents
 
@@ -39,25 +58,29 @@ Source of truth:
 - `doc/planning/project-identity-boundaries.md`: identity, Host/Sandbox boundaries, operational reliability
 - `doc/planning/feature-scope-priorities.md`: feature scope, priorities, Package Center, local workstation direction
 - `doc/planning/ui-ux-customization-agent.md`: UI/UX, customization, Start Menu, Taskbar, Window, Agent/CLI direction
+- `doc/planning/app-install-file-workflow-direction.md`: installable app model, File Station Open With, file grants, app file associations
 
 Reference documents:
 
-- `README.md`: user-facing overview, current features, run guide
-- `doc/README.md`: documentation index
-- `doc/reference/architecture-api-reference.md`: compact architecture and API map
-- `doc/reference/app-development-model.md`: built-in, system, sandbox/package app development model
-- `doc/reference/core-addon-separation-remediation.md`: full remediation plan for core/addon separation and legacy cleanup
-- `doc/operations/completed-backlog-log.md`: completed/worked backlog migration log
+- `doc/reference/app-development-model.md`: system apps, trusted built-in addons, sandbox/package app model
+- `doc/reference/core-addon-separation-remediation.md`: historical core/addon remediation plan; do not treat its completed state as architectural completion
+- `doc/reference/app-ownership-matrix.md`: current system/standard/package ownership model
+- `doc/reference/architecture-api-reference.md`: compact architecture/API map
+- `doc/reference/package-ecosystem-guide.md`: package authoring and sandbox SDK guide
+- `doc/operations/completed-backlog-log.md`: historical completed/worked backlog log
 - `doc/operations/local-run-guide.md`: local run and process checks
+- `doc/operations/package-troubleshooting.md`: package recovery and troubleshooting
 - `doc/policies/file-station-places-policy.md`: File Station Places policy
-- `doc/migrations/media-library-path-migration.md`: legacy wallpaper/media path migration
+- `doc/migrations/media-library-path-migration.md`: media/wallpaper migration reference
+- `README.md`: user-facing overview and run guide
 - `만들것들.md`: future package/widget/app ideas
 
 Conflict resolution:
 
-- Product direction follows the three `doc/planning/*` documents.
-- If docs conflict with current code, inspect the code and move gradually toward the planning direction.
-- Update docs only when behavior, scope, priority, or operating guidance materially changes.
+- Planning documents beat historical reference documents.
+- Current code must be inspected before applying a document literally.
+- If docs claim an item is complete but code does not satisfy the documented DoD, treat it as incomplete and correct the docs as part of the task.
+- Update docs only when behavior, scope, priority, workflow, or operating guidance materially changes.
 
 ## Architecture Layers
 
@@ -68,15 +91,16 @@ Touches the real local machine.
 - File system: `server/routes/fs.js`, `client/src/apps/system/file-explorer/`
 - Terminal: `server/services/terminal.js`, `client/src/apps/system/terminal/`
 - System status: `server/routes/system.js`, `client/src/apps/system/resource-monitor/`
-- Docker: `server/routes/docker.js`, `client/src/apps/system/docker-manager/`
+- Docker: `server/routes/docker.js`, `server/services/dockerService.js`, `client/src/apps/system/docker-manager/`
 - Server settings: `server/config/*`, `server/routes/settings.js`, `client/src/apps/system/settings/`
 - Logs/audit: `server/services/auditService.js`, `server/routes/logs.js`, `client/src/apps/system/log-viewer/`
 
 Rules:
 
 - Return explicit `code` and `message` for recoverable failures.
-- Use user-facing explanations and approval flows for risky actions.
-- Keep filesystem policy in backend guards/services, not UI-only checks.
+- Keep filesystem and path policy in backend guards/services.
+- Risky Host actions need approval, audit, and recovery paths.
+- Do not give sandbox/package addons broad Host file access by default.
 
 ### Web Desktop Layer
 
@@ -85,146 +109,144 @@ The user-facing operating surface.
 - Entry/auth: `client/src/App.svelte`
 - Desktop shell: `client/src/core/Desktop.svelte`
 - Window shell: `client/src/core/Window.svelte`
+- Launch registry: `client/src/core/appLaunchRegistry.js`
+- Ownership/launch helpers: `client/src/core/appOwnershipContract.js`, `client/src/core/shortcutLaunch.js`
 - Taskbar/overlays: `client/src/core/components/*`
 - State stores: `client/src/core/stores/*`
 - Shared API: `client/src/utils/api.js`
+- WebOS bridge: `client/src/utils/webosBridge.js`
 
 Rules:
 
 - `Desktop.svelte` orchestrates layers and window hosting only.
 - `Window.svelte` owns move, resize, focus, maximize, minimize, and snap behavior.
+- App launch should be registry/contract driven.
 - Feature logic belongs in app modules, stores, services, or API helpers.
+
+### App Install / File Workflow Layer
+
+Connects local files to apps without weakening Host boundaries.
+
+- File Station UI/API: `client/src/apps/system/file-explorer/`, `server/routes/fs.js`
+- Addon apps: `client/src/apps/addons/*`
+- Built-in app registry: `server/storage/inventory/system/apps.json`
+- Package manifests: `server/storage/inventory/apps/<appId>/manifest.json`
+- App registry service: `server/services/packageRegistryService.js`
+- Package Center installed app UI: `client/src/apps/system/package-center/PackageCenter.svelte`
+
+Rules:
+
+- File Station creates file intent; apps receive narrow launch context.
+- Apps should declare file associations.
+- Apps should receive file context/grants, not broad Host authority.
+- Read access and write access are separate.
+- Overwrite, delete, batch writes, protected paths, and command execution need approval/audit/recovery.
+- Trusted built-in addons may open local files, but should move toward Web OS APIs instead of ad hoc Host access.
 
 ### Sandbox / Package Layer
 
-Owns installed apps, package assets, app-owned data, runtime state, and lifecycle operations.
+Owns installed package assets, app-owned data, runtime state, and lifecycle operations.
 
 - Inventory root: `server/storage/inventory/`
 - Package APIs: `server/routes/packages.js`
 - Runtime APIs: `server/routes/runtime.js`
 - Sandbox APIs: `server/routes/sandbox.js`
-- Package services: `server/services/packageRegistryService.js`, `server/services/packageLifecycleService.js`
-- Runtime services: `server/services/runtimeManager.js`, `server/services/runtimeProfiles.js`
+- Package services: `server/services/packageRegistryService.js`, `server/services/packageLifecycleService.js`, `server/services/channelUpdatePolicyService.js`
+- Runtime services: `server/services/runtimeManager.js`, `server/services/runtimeProfiles.js`, `server/services/processSupervisor.js`, `server/services/runtimeStateStore.js`
 - Quality gate: `server/services/templateQualityGate.js`
-- Package Center UI: `client/src/apps/system/package-center/PackageCenter.svelte`
 - Sandbox frame: `client/src/core/components/SandboxAppFrame.svelte`
+- SDK: `server/static/webos-sandbox-sdk.js`
 
 Rules:
 
-- Serve app assets only through sandbox routes.
+- Serve package assets only through sandbox routes.
 - Keep app-owned data scoped to `server/storage/inventory/data/{appId}`.
-- Do not broaden Host file access without explicit approval design.
-- Package work must consider permissions, manifest validation, runtime profile validation, dependencies, SemVer compatibility, channel policy, quality gate, backup, rollback, health, logs, and events.
+- Manifest permissions and runtime profiles must be validated on the backend.
+- Package work must consider permissions, dependencies, compatibility, quality gate, channel policy, backup, rollback, health, logs, and events.
+
+### Agent / Automation Layer
+
+Agent features explain, summarize, request approval, execute, and report results.
+
+- Agent UI: `client/src/core/components/Agent.svelte`, `client/src/core/components/AgentChatPanel.svelte`
+- Agent store: `client/src/core/stores/agentStore.js`
+- Terminal: `client/src/apps/system/terminal/Terminal.svelte`, `server/services/terminal.js`
+- Action sources: `server/routes/logs.js`, `server/routes/docker.js`, `server/routes/packages.js`, `server/routes/runtime.js`
+
+Rules:
+
+- Risky actions must produce approval cards before execution.
+- Preserve raw terminal output separately from summaries.
+- Agent logic belongs in stores/services/routes, not `Desktop.svelte`.
+
+## App Classes
+
+### System Apps
+
+System apps wrap Host or operating capabilities.
+
+Examples: File Station, Terminal, Settings, Control Panel, Package Center, Resource Monitor, Log Viewer, Docker Manager, Transfer Manager.
+
+Rules:
+
+- Live under `client/src/apps/system/*`.
+- May call privileged backend routes.
+- Must surface explicit errors, approvals, audit, and recovery where needed.
+- Should not be converted into untrusted sandbox apps until a stronger permission model exists.
+
+### Trusted Built-in Addons
+
+Bundled apps that provide user workflows but are not core Host operators.
+
+Examples: Model Viewer, Document Viewer/Editor, Media Player, Code Editor, Widget Store.
+
+Rules:
+
+- Live under `client/src/apps/addons/*`.
+- Register as `appModel: "standard"`.
+- May open local files when File Station, Spotlight, or explicit open-file flows provide context.
+- Should use Web OS file APIs where practical.
+- Save/overwrite flows should move toward approval, audit, and recoverability.
+- Should be designed so they can later become package addons.
+
+### Package Addons
+
+Installed apps discovered from package manifests.
+
+Rules:
+
+- Live under `server/storage/inventory/apps/<appId>/`.
+- Register as `appModel: "package"`.
+- Declare permissions, runtime, entry, type, metadata, and eventually file associations.
+- Use sandbox/package APIs for app-owned data and local file operations.
+- Surface lifecycle, health, logs, backup, rollback, and runtime state in Package Center.
 
 ## Work Area Map
 
 Read the relevant files before editing.
 
-### Package Center Operations
+### Registry, App Model, Launch
 
-Use for registry, install/update, installed package console, lifecycle, health, backup, rollback, manifest editing, template scaffold, dependency, and channel policy.
+Use for app lists, app model metadata, ownership, launch mode, built-in registry, and package discovery.
 
 Read first:
 
-- `client/src/apps/system/package-center/PackageCenter.svelte`
-- `client/src/apps/system/package-center/api.js`
-- `server/routes/packages.js`
 - `server/services/packageRegistryService.js`
-- `server/services/packageLifecycleService.js`
-- `server/services/channelUpdatePolicyService.js`
-- `server/services/templateQualityGate.js`
-- `server/services/runtimeProfiles.js`
-- `server/utils/appPaths.js`
 - `server/utils/inventoryPaths.js`
-
-Keep registry, installed operations, runtime controls, and template/scaffold UI visually separated inside Package Center.
-
-### Runtime And Process Management
-
-Use for `process-node`, `process-python`, `binary`, start/stop/restart, logs, events, health, recovery, autostart, restart policy, and runtime validation.
-
-Read first:
-
-- `server/routes/runtime.js`
-- `server/services/runtimeManager.js`
-- `server/services/processSupervisor.js`
-- `server/services/runtimeStateStore.js`
-- `server/services/runtimeProfiles.js`
-- `server/storage/inventory/system/runtime-instances.json`
-- `client/src/apps/system/package-center/PackageCenter.svelte`
-
-Route handlers should call `runtimeManager`; process execution belongs in `processSupervisor`; persisted runtime state belongs in `runtimeStateStore`.
-
-### Sandbox Apps And App Data
-
-Read first:
-
-- `server/routes/sandbox.js`
-- `server/services/packageRegistryService.js`
 - `server/utils/appPaths.js`
-- `server/utils/inventoryPaths.js`
-- `client/src/core/components/SandboxAppFrame.svelte`
-- `server/storage/inventory/apps/`
-- `server/storage/inventory/data/`
-
-Keep manifest permissions and app-owned data boundaries intact.
-
-### Desktop Shell, Windows, Taskbar, Spotlight
-
-Read first:
-
+- `server/storage/inventory/system/apps.json`
+- `client/src/core/appLaunchRegistry.js`
+- `client/src/core/appOwnershipContract.js`
 - `client/src/core/Desktop.svelte`
 - `client/src/core/Window.svelte`
-- `client/src/core/Spotlight.svelte`
-- `client/src/core/components/Taskbar.svelte`
-- `client/src/core/components/ContextMenu.svelte`
-- `client/src/core/components/NotificationCenter.svelte`
-- `client/src/core/stores/windowStore.js`
-- `client/src/core/stores/desktopStore.js`
-- `client/src/core/stores/contextMenuStore.js`
-- `client/src/core/stores/spotlightStore.js`
-- `client/src/core/stores/notificationStore.js`
+- `doc/reference/app-ownership-matrix.md`
+- `doc/reference/core-addon-separation-remediation.md`
 
-Taskbar, Start Menu, and Spotlight logic should live in their own components/stores/helpers, not in app modules.
+Keep launch contract explicit: `component` for built-in apps, `sandbox` for package apps.
 
-### UI Customization And Control Panel
+### File Station And Open With
 
-Read first:
-
-- `client/src/apps/system/control-panel/ControlPanel.svelte`
-- `client/src/core/stores/systemStore.js`
-- `client/src/core/stores/desktopStore.js`
-- `client/src/core/stores/windowStore.js`
-- `client/src/core/stores/widgetStore.js`
-- `client/src/core/stores/shortcutStore.js`
-- `server/routes/system.js`
-- `server/services/stateStore.js`
-
-Control Panel is for user-facing customization. Settings is for server/runtime configuration.
-
-### Agent, LLM, And Wrapped CLI
-
-Read first:
-
-- `client/src/core/components/Agent.svelte`
-- `client/src/core/components/AgentChatPanel.svelte`
-- `client/src/core/stores/agentStore.js`
-- `client/src/apps/system/terminal/Terminal.svelte`
-- `server/services/terminal.js`
-- `server/routes/logs.js`
-- `server/routes/docker.js`
-- `server/routes/packages.js`
-- `server/routes/runtime.js`
-
-Likely new files:
-
-- `server/routes/ai.js`
-- `server/services/aiActionService.js`
-- `client/src/core/stores/agentActionStore.js`
-
-Risky actions must produce approval cards before execution. Preserve raw terminal output separately from Agent summaries.
-
-### File Station, Cloud, Share, Transfer
+Use for local file browsing, allowed roots, file associations, app opening, file grants, trash, upload/download, share links, and cloud boundaries.
 
 Read first:
 
@@ -240,9 +262,137 @@ Read first:
 - `server/services/indexService.js`
 - `server/middleware/pathGuard.js`
 - `server/utils/pathPolicy.js`
+- `doc/planning/app-install-file-workflow-direction.md`
 - `doc/policies/file-station-places-policy.md`
 
-Cloud paths must remain explicit virtual paths such as `cloud://...`.
+File Station should resolve file type, available apps, requested mode, and user intent. It should not accumulate model-viewer/editor/media-player feature logic.
+
+### Addon Apps: Media, Document, Model, Code
+
+Use for trusted built-in addons and their local file workflows.
+
+Read first:
+
+- `client/src/apps/addons/media-player/MediaPlayer.svelte`
+- `client/src/apps/addons/media-player/api.js`
+- `server/routes/media.js`
+- `server/services/mediaService.js`
+- `client/src/apps/addons/document-viewer/DocumentViewer.svelte`
+- `client/src/apps/addons/model-viewer/ModelViewer.svelte`
+- `client/src/apps/addons/code-editor/CodeEditor.svelte`
+- `client/src/apps/addons/code-editor/api.js`
+- `server/routes/fs.js`
+- `doc/planning/app-install-file-workflow-direction.md`
+- `doc/reference/app-development-model.md`
+
+These apps may work with local files, but file context should come from File Station, Spotlight, shortcuts, or an explicit open-file flow.
+
+### Package Center Operations
+
+Use for registry, install/update, installed package console, lifecycle, runtime, health, logs, events, backup, rollback, manifest editing, template scaffold, dependency, channel policy, file associations, permissions, and app data visibility.
+
+Read first:
+
+- `client/src/apps/system/package-center/PackageCenter.svelte`
+- `client/src/apps/system/package-center/api.js`
+- `server/routes/packages.js`
+- `server/services/packageRegistryService.js`
+- `server/services/packageLifecycleService.js`
+- `server/services/channelUpdatePolicyService.js`
+- `server/services/templateQualityGate.js`
+- `server/services/runtimeProfiles.js`
+- `server/utils/appPaths.js`
+- `server/utils/inventoryPaths.js`
+- `doc/planning/app-install-file-workflow-direction.md`
+- `doc/reference/package-ecosystem-guide.md`
+
+Keep registry, installed operations, runtime controls, template/scaffold, permissions, and file association concerns visually separated.
+
+### Sandbox Apps And App Data
+
+Read first:
+
+- `server/routes/sandbox.js`
+- `server/services/packageRegistryService.js`
+- `server/services/appApiPolicy.js`
+- `server/services/capabilityCatalog.js`
+- `server/utils/appPaths.js`
+- `server/utils/inventoryPaths.js`
+- `client/src/core/components/SandboxAppFrame.svelte`
+- `server/static/webos-sandbox-sdk.js`
+- `server/storage/inventory/apps/`
+- `server/storage/inventory/data/`
+
+Package addons should use manifest permissions and WebOS APIs. Do not broaden Host access without explicit permission design.
+
+### Runtime And Process Management
+
+Read first:
+
+- `server/routes/runtime.js`
+- `server/services/runtimeManager.js`
+- `server/services/processSupervisor.js`
+- `server/services/runtimeStateStore.js`
+- `server/services/runtimeProfiles.js`
+- `server/storage/inventory/system/runtime-instances.json`
+- `client/src/apps/system/package-center/PackageCenter.svelte`
+
+Route handlers should call `runtimeManager`. Process execution belongs in `processSupervisor`. Persisted runtime state belongs in `runtimeStateStore`.
+
+### Desktop Shell, Windows, Taskbar, Spotlight
+
+Read first:
+
+- `client/src/core/Desktop.svelte`
+- `client/src/core/Window.svelte`
+- `client/src/core/Spotlight.svelte`
+- `client/src/core/components/Taskbar.svelte`
+- `client/src/core/components/StartMenu.svelte`
+- `client/src/core/components/ContextMenu.svelte`
+- `client/src/core/components/NotificationCenter.svelte`
+- `client/src/core/stores/windowStore.js`
+- `client/src/core/stores/desktopStore.js`
+- `client/src/core/stores/contextMenuStore.js`
+- `client/src/core/stores/spotlightStore.js`
+- `client/src/core/stores/notificationStore.js`
+
+Taskbar, Start Menu, Spotlight, and context menu logic should live in their own components/stores/helpers.
+
+### UI Customization And Control Panel
+
+Read first:
+
+- `client/src/apps/system/control-panel/ControlPanel.svelte`
+- `client/src/core/stores/systemStore.js`
+- `client/src/core/stores/desktopStore.js`
+- `client/src/core/stores/windowStore.js`
+- `client/src/core/stores/widgetStore.js`
+- `client/src/core/stores/shortcutStore.js`
+- `server/routes/system.js`
+- `server/services/stateStore.js`
+- `doc/planning/ui-ux-customization-agent.md`
+
+Control Panel is for user-facing customization. Settings is for server/runtime configuration.
+
+### Agent, LLM, Wrapped CLI
+
+Read first:
+
+- `client/src/core/components/Agent.svelte`
+- `client/src/core/components/AgentChatPanel.svelte`
+- `client/src/core/stores/agentStore.js`
+- `client/src/apps/system/terminal/Terminal.svelte`
+- `server/services/terminal.js`
+- `server/routes/logs.js`
+- `server/routes/docker.js`
+- `server/routes/packages.js`
+- `server/routes/runtime.js`
+
+Likely future files:
+
+- `server/routes/ai.js`
+- `server/services/aiActionService.js`
+- `client/src/core/stores/agentActionStore.js`
 
 ### System, Services, Logs, Resource Monitor
 
@@ -268,24 +418,9 @@ Read first:
 - `client/src/apps/system/docker-manager/DockerManager.svelte`
 - `client/src/apps/system/docker-manager/api.js`
 - `server/routes/docker.js`
+- `server/services/dockerService.js`
 
-If Docker scope grows, move command execution/parsing out of `server/routes/docker.js` into a service. Use explicit errors for Docker not installed, daemon unavailable, and permission denied.
-
-### Media, Document, Model, Code Editor
-
-Read first:
-
-- `client/src/apps/addons/media-player/MediaPlayer.svelte`
-- `server/routes/media.js`
-- `server/services/mediaService.js`
-- `client/src/apps/addons/document-viewer/DocumentViewer.svelte`
-- `client/src/apps/addons/model-viewer/ModelViewer.svelte`
-- `client/src/apps/addons/code-editor/CodeEditor.svelte`
-- `client/src/apps/addons/code-editor/api.js`
-- `server/routes/fs.js`
-- `doc/migrations/media-library-path-migration.md`
-
-Media metadata belongs in `mediaService`; file read/write stays behind filesystem or package APIs.
+Use explicit errors for Docker not installed, daemon unavailable, and permission denied.
 
 ### Settings, Config, Storage, Inventory
 
@@ -301,7 +436,7 @@ Read first:
 - `server/utils/appPaths.js`
 - `server/storage/inventory/system/`
 
-Sensitive values must be masked or skipped as appropriate. Inventory paths should go through utility helpers.
+Inventory paths should go through utility helpers. Sensitive values must be masked or skipped.
 
 ### Tests And Documentation
 
@@ -315,95 +450,84 @@ Read first:
 - `doc/planning/project-identity-boundaries.md`
 - `doc/planning/feature-scope-priorities.md`
 - `doc/planning/ui-ux-customization-agent.md`
+- `doc/planning/app-install-file-workflow-direction.md`
 
 Add focused tests near changed behavior. If adding server tests, wire or update the official test command.
 
-## Development Order
+## Current Autonomous Backlog
 
-### 0. Inspect First
+When the user asks to proceed from `AGENTS.md` without naming a specific task, select the first unfinished item from this backlog. Work on one bounded item only.
 
-- Read relevant current code and only the needed planning/reference document.
-- Separate what exists from what is missing.
-- Reuse existing helpers and patterns.
+### P0: Registry And File Workflow Reliability
 
-### 1. Reliability And Boundaries
+- `P0-1` Built-in registry durability: make `server/storage/inventory/system/apps.json` available in fresh checkouts or generated by a reliable bootstrap path; fix ignore/seed behavior and verify `/api/system/apps`.
+- `P0-2` P5 status correction: update `AGENTS.md`, `doc/operations/completed-backlog-log.md`, and `doc/reference/core-addon-separation-remediation.md` so folder split, registry cleanup, and true architectural completion are not conflated.
+- `P0-3` File association contract: add built-in addon metadata for Model Viewer, Document Viewer, Media Player, Code Editor, and Widget Store.
+- `P0-4` File Station Open With foundation: resolve file associations and launch apps with normalized file context.
+- `P0-5` File grant model: introduce read/readwrite single-file grant shape for trusted built-in addons, then prepare package addon extension.
+- `P0-6` Save/overwrite policy: route addon file writes through backend policy, approval, audit, and recoverable behavior.
 
-Prioritize:
+### P1: Package Center App Operations
 
-- explicit error codes
-- recoverable flows
-- Host/Sandbox boundaries
-- state schema/defaults
-- backup/rollback availability
-- tests or syntax checks
+- `P1-1` Installed app visibility: show app model, runtime, owner tier, file associations, permissions, app data boundary, health, logs, lifecycle, backup, and rollback status.
+- `P1-2` Package manifest file associations: allow package manifests to declare file associations and validate them in preflight/package doctor.
+- `P1-3` Package addon file API parity: allow package addons to request permitted file operations through WebOS APIs and File Station grants.
+- `P1-4` Widget Store alignment: align Widget Store with package/widget type, app-owned data, and Package Center lifecycle expectations.
 
-### 2. Package Center Operations
+### P2: Local Workstation Core
 
-Priority:
+- `P2-1` File Station reliability: allowed roots, trash, share links, upload/download transfer state, cloud boundaries, large-operation status.
+- `P2-2` Terminal reliability: session stability and risky-command approval model.
+- `P2-3` Resource Monitor / Log Viewer operations: service-runtime-package status integration.
+- `P2-4` Docker Manager operations: logs, ports, volumes, health, then Compose.
 
-1. Installed-tab runtime/lifecycle/health/log/event visibility
-2. install/update preflight review
-3. backup/rollback/recover impact explanation
-4. manifest/file editing with Code Editor
-5. Widget Store alignment with package-type model
+### P3: UI Customization And Desktop Workflow
 
-### 3. Local Workstation Core
+- `P3-1` Start Menu and Taskbar refinement.
+- `P3-2` Desktop layout persistence and edit mode.
+- `P3-3` Window defaults and app-specific style model.
+- `P3-4` Control Panel customization sections.
+- `P3-5` Theme preset save/load.
+- `P3-6` Context menu customization connected to Open With/file actions.
 
-Priority:
+### P4: Agent And Approval Workflows
 
-1. File Station boundaries, trash, share, upload, cloud, large-operation state
-2. Terminal session stability and risky-command approval model
-3. Resource Monitor / Log Viewer service-runtime-package status
-4. Docker logs, ports, volumes, health, then Compose
+- `P4-1` Agent states and result cards.
+- `P4-2` Approval cards for file overwrite/delete, rollback, package install overwrite, and terminal command execution.
+- `P4-3` Small OS actions: open app, open file path, run package health check, inspect Docker status, summarize recent error logs.
+- `P4-4` LLM proxy API and raw terminal output preservation.
+- `P4-5` Wrapped Assistant Mode hardening.
 
-### 4. UI Customization Foundation
+### P5: Expansion And Portability
 
-Priority:
+- `P5-1` Media playlist/repeat/shuffle/background audio.
+- `P5-2` Document Viewer PDF controls/search/metadata.
+- `P5-3` Model Viewer wireframe/axes/material info/screenshot.
+- `P5-4` WebDAV/cloud write/upload/mount status.
+- `P5-5` Backup job manager and richer transfer manager.
+- `P5-6` Docker packaging/portability: storage volume strategy, Host path binding, Dockerfile/Compose, container logs.
 
-1. Start Menu base
-2. Desktop state persistence
-3. Taskbar settings model
-4. Window defaults/app-specific style model
-5. Control Panel customization sections
-6. Theme preset save/load
-7. Desktop layout edit mode
-8. Context Menu customization
+## Autonomous Roadmap Loop
 
-### 5. Agent, LLM, CLI Integration
+At the start of an autonomous backlog task:
 
-Priority:
+- State the selected backlog item.
+- State the relevant layer(s).
+- State the files you will inspect first.
+- If the user explicitly requested sub-agents, split only non-overlapping work.
 
-1. Agent states: `idle`, `listening`, `thinking`, `executing`, `success`, `warning`, `error`, `terminal`
-2. Agent chat panel
-3. Message persistence model
-4. Result cards and approval cards
-5. Small OS actions: open app, open file path, package health check, Docker status, recent error log summary
-6. LLM proxy API
-7. Raw Terminal output preservation
-8. Wrapped Assistant Mode
+During implementation:
 
-### 6. Media, Home Lab, Docker
+- Keep the change bounded to the selected item.
+- Follow `contract/API -> service/helper/store -> minimal UI -> verification -> docs`.
+- Do not start the next backlog item unless the user explicitly asked to continue through multiple items.
 
-Expand after P0/P1 foundations are stable:
+At the end:
 
-- Media playlist/repeat/shuffle/background audio
-- Document Viewer PDF controls/search/metadata
-- Model Viewer wireframe/axes/material info/screenshot
-- Docker Compose and richer container operations
-- WebDAV/cloud write/upload/mount status
-- Backup job manager and transfer manager
-
-### 7. Docker Portability
-
-Treat as late-stage packaging:
-
-- `storage/` volume persistence
-- Host path binding strategy
-- Dockerfile/docker-compose
-- container logs
-- script runner isolation upgrade
-
-Do not weaken Host/Sandbox boundaries for Docker portability.
+- Summarize what changed.
+- Summarize verification or why it was skipped.
+- State the next recommended backlog item.
+- Ask whether to continue, choose another item, commit, or stop.
 
 ## Implementation Rules
 
@@ -411,8 +535,8 @@ Do not weaken Host/Sandbox boundaries for Docker portability.
 - For persistent UI state, design store state and backend `system/state` schema before adding controls.
 - Split responsibilities: route for HTTP contract, service for state/business logic, utility for reusable path/policy helpers, store for frontend state, component for UI.
 - Add new abstractions only for real boundaries or repeated call sites.
-- Keep Package Center registry, installed operations, lifecycle, runtime, template/scaffold concerns separated.
-- Never make command execution, deletion, rollback, or overwrite install silent.
+- Keep Package Center registry, installed operations, lifecycle, runtime, template/scaffold, permission, and file association concerns separated.
+- Never make command execution, deletion, rollback, overwrite install, or Host file overwrite silent.
 - Avoid committing autogenerated churn. `server/storage/index.json` is usually autogenerated and should usually stay out of commits.
 
 ## Frontend Rules
@@ -423,6 +547,7 @@ Do not weaken Host/Sandbox boundaries for Docker portability.
 - Do not turn operational tools into landing pages.
 - Preserve keyboard/focus visibility and usable hit areas.
 - Do not put app-specific logic in `Desktop.svelte` or `Window.svelte`.
+- File Station and Package Center should be operational, scannable tools, not marketing surfaces.
 
 ## Backend Rules
 
@@ -432,16 +557,23 @@ Do not weaken Host/Sandbox boundaries for Docker portability.
 - `server/config/*.js`: defaults, env, public settings
 - `server/utils/*.js`: path, inventory, policy helpers
 
-Route handlers should stay thin. Validate app id, paths, runtime profile, manifest, and package file operations on the backend.
+Route handlers should stay thin. Validate app id, paths, runtime profile, manifest, package file operations, file association input, and file grant scope on the backend.
 
 ## Package And Runtime Conventions
 
 Runtime types:
 
+- `builtin`: trusted built-in component app
 - `sandbox-html`: iframe/static UI package
 - `process-node`: managed Node.js process
 - `process-python`: managed Python process
 - `binary`: allowlisted local binary process
+
+App models:
+
+- `system`: privileged system app
+- `standard`: trusted built-in addon
+- `package`: installed package addon
 
 Package types:
 
@@ -451,35 +583,62 @@ Package types:
 - `hybrid`: UI plus background service
 - `developer`: tools for package creation/testing
 
-## Autonomous Roadmap Loop
+File association actions:
 
-When the user asks to proceed from `AGENTS.md` without naming a specific task:
+- `preview`: read-only quick inspection
+- `open`: read-only full app view
+- `edit`: read/write workflow
+- `import`: copy into app-owned data
+- `export`: write a new file chosen by user
 
-1. Check the backlog table below, `doc/operations/completed-backlog-log.md`, and `doc/reference/core-addon-separation-remediation.md`.
-2. Select one bounded unfinished item following the default development priority.
-3. State the selected item and relevant files.
-4. Implement one bounded change.
-5. Verify the touched area.
-6. Summarize changes, verification, and the next recommended item.
-7. Do not start the next backlog item unless the user explicitly asks to continue.
+## Verification
 
-### Completed P0-P4 Summary
+Use the smallest checks that cover the change.
 
-P0-P4 are closed foundation tracks. Keep only this summary in `AGENTS.md`; use `doc/operations/completed-backlog-log.md` for detailed history.
+Backend syntax checks:
 
-- P0: app model contract, Host boundary baseline, package manifest validation, desktop shell purity
-- P1: built-in app metadata normalization, Package Center app-model visibility, app API bridge skeleton, system app module split
-- P2: sandbox permission UX, app SDK capability metadata, system app observability
-- P3: third-party package onboarding, versioned app API policy, advanced lifecycle safeguards
-- P4: sandbox SDK delivery, package ecosystem docs/tooling, registry-driven launch cleanup
+```bash
+node --check server/routes/packages.js
+node --check server/routes/runtime.js
+node --check server/routes/fs.js
+node --check server/services/packageRegistryService.js
+node --check server/services/runtimeManager.js
+node --check server/services/packageLifecycleService.js
+node --check server/services/templateQualityGate.js
+node --check tools/package-doctor.js
+node --check tools/migrate-apps-registry.js
+```
 
-### Backlog P5 (Core/Add-on Separation Remediation)
+Registry/package checks:
 
-- `P5-1` App ownership matrix finalize: lock `system/standard/package` ownership map and launch mode contract from remediation Phase 1. `Status: done (2026-04-24)`
-- `P5-2` Client app folder split: separate `client/src/apps/system/*` and `client/src/apps/addons/*` with import/registry sync from remediation Phase 2. `Status: done (2026-04-24)`
-- `P5-3` Legacy app registry fallback removal: remove `server/storage/apps.json` fallback and standardize on `server/storage/inventory/system/apps.json`; include one-time migration script from remediation Phase 3. `Status: pending`
-- `P5-4` Add-on runtime standardization: enforce manifest-like fields for `standard` apps and strengthen add-on validation rules from remediation Phase 4. `Status: pending`
-- `P5-5` Ops/docs consistency closure: align AGENTS backlog status, completion log, and architecture-complete checklist from remediation Phase 5. `Status: pending`
+```bash
+npm run apps:registry:migrate
+npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json
+```
+
+Frontend build:
+
+```bash
+cd client
+npm run build
+```
+
+Server tests:
+
+```bash
+npm test
+```
+
+Run locally:
+
+```bash
+node server/index.js
+```
+
+```bash
+cd client
+npm run dev
+```
 
 ## Multi-Agent Orchestration
 
@@ -495,47 +654,6 @@ Rules:
 - Tell workers they are not alone in the codebase and must not revert unrelated changes.
 - Review returned changes before integrating or reporting completion.
 
-Prompt shape:
-
-```text
-Use two sub-agents in parallel.
-Explorer 1: inspect <area> and report exact files, risks, and recommended changes. Do not edit files.
-Worker 1: implement <bounded change> in <explicit files/modules>. Do not touch other areas or revert unrelated changes.
-Main agent: keep the critical path locally, review both results, integrate, verify, and summarize.
-```
-
-## Verification
-
-Use the smallest checks that cover the change.
-
-Backend syntax checks:
-
-```bash
-node --check server/routes/packages.js
-node --check server/routes/runtime.js
-node --check server/services/runtimeManager.js
-node --check server/services/packageLifecycleService.js
-node --check server/services/templateQualityGate.js
-```
-
-Frontend build:
-
-```bash
-cd client
-npm run build
-```
-
-Run locally:
-
-```bash
-node server/index.js
-```
-
-```bash
-cd client
-npm run dev
-```
-
 ## Git And Workspace Rules
 
 - The worktree may already contain user changes.
@@ -543,13 +661,15 @@ npm run dev
 - Do not use destructive git commands unless explicitly requested.
 - Do not commit autogenerated index churn unless explicitly requested.
 - `server/storage/index.json` is frequently autogenerated and should usually stay out of commits.
+- Inventory files are often ignored; if a registry or seed file must be portable, explicitly fix ignore/seed behavior instead of assuming local files will be committed.
 
 ## Good Change Definition
 
 A good change:
 
 - moves the project closer to the planning documents
-- keeps Host, Desktop, and Sandbox/Package boundaries clear
+- keeps Host, Desktop, App Install/File Workflow, and Sandbox/Package boundaries clear
+- lets useful apps work with local files through explicit Web OS contracts
 - improves failure visibility or recoverability
 - preserves the current glass desktop language
 - avoids unrelated broad refactors
@@ -561,4 +681,3 @@ A good change:
 
 This repository uses `AGENTS.md` as the canonical agent guide.
 If another tool needs `CLAUDE.md` or `.github/copilot-instructions.md`, mirror this file rather than maintaining conflicting instructions.
-

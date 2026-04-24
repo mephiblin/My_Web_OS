@@ -7,6 +7,8 @@
   import { contextMenuSettings } from '../../../core/stores/contextMenuStore.js';
   import { taskbarSettings } from '../../../core/stores/taskbarStore.js';
   import { windowDefaultsSettings } from '../../../core/stores/windowDefaultsStore.js';
+  import { apiFetch } from '../../../utils/api.js';
+  import { startMenuState, setStartMenuLayout, initStartMenuState } from '../../../core/stores/startMenuStore.js';
   import FilePicker from '../../../core/components/FilePicker.svelte';
   import { fetchWallpaperLibraryItems, uploadWallpaperFile, importWallpaperFromLocalPath } from './api.js';
 
@@ -17,6 +19,9 @@
   let newPresetName = $state('');
   let appBackgroundTarget = $state('files');
   let appBackgroundValue = $state('rgba(10, 14, 22, 0.82)');
+  let openWithExtension = $state('');
+  let openWithAppId = $state('');
+  let desktopApps = $state([]);
   let fileInput;
   
   const tabs = [
@@ -130,9 +135,48 @@
     addToast(`Window background removed for "${appId}"`, 'info');
   }
 
+  async function loadDesktopApps() {
+    try {
+      const data = await apiFetch('/api/system/apps');
+      desktopApps = (Array.isArray(data) ? data : []).sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+      if (!openWithAppId && desktopApps.length > 0) {
+        openWithAppId = desktopApps[0].id;
+      }
+    } catch (error) {
+      console.error('Failed to load desktop apps:', error);
+      desktopApps = [];
+    }
+  }
+
+  function setOpenWithMapping() {
+    const ext = String(openWithExtension || '').trim().toLowerCase().replace(/^\./, '');
+    const appId = String(openWithAppId || '').trim();
+    if (!ext || !appId) {
+      addToast('Extension and app are required', 'error');
+      return;
+    }
+    const next = {
+      ...($contextMenuSettings.openWithByExtension || {}),
+      [ext]: appId
+    };
+    contextMenuSettings.updateSettings({ openWithByExtension: next });
+    addToast(`Open With default updated for .${ext}`, 'success');
+  }
+
+  function removeOpenWithMapping(ext) {
+    const target = String(ext || '').trim().toLowerCase();
+    if (!target) return;
+    const next = { ...($contextMenuSettings.openWithByExtension || {}) };
+    delete next[target];
+    contextMenuSettings.updateSettings({ openWithByExtension: next });
+    addToast(`Removed Open With default for .${target}`, 'info');
+  }
+
   onMount(() => {
     fetchWallpapers();
     themePresets.init();
+    loadDesktopApps();
+    initStartMenuState();
   });
 
   const gradientPresets = [
@@ -347,6 +391,39 @@
         <div class="setting-divider"></div>
 
         <div class="setting-group">
+          <label>Start Menu</label>
+          <div class="taskbar-settings glass-effect">
+            <div class="taskbar-row">
+              <span>Layout</span>
+              <div class="size-segment">
+                <button
+                  class:active={$startMenuState.layout === 'default'}
+                  onclick={() => setStartMenuLayout('default')}
+                >
+                  Default
+                </button>
+                <button
+                  class:active={$startMenuState.layout === 'compact'}
+                  onclick={() => setStartMenuLayout('compact')}
+                >
+                  Compact
+                </button>
+                <button
+                  class:active={$startMenuState.layout === 'wide'}
+                  onclick={() => setStartMenuLayout('wide')}
+                >
+                  Wide
+                </button>
+              </div>
+            </div>
+            <div class="taskbar-row">
+              <span>Pinned apps</span>
+              <span>{Array.isArray($startMenuState.pinnedAppIds) ? $startMenuState.pinnedAppIds.length : 0}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-group">
           <label>Taskbar</label>
           <div class="taskbar-settings glass-effect">
             <div class="taskbar-row">
@@ -539,6 +616,42 @@
                 </button>
               </div>
             </div>
+
+            <div class="taskbar-row wrap">
+              <span>Open With Defaults</span>
+              <div class="ops-inline">
+                <input
+                  type="text"
+                  value={openWithExtension}
+                  placeholder="extension (e.g. fbx)"
+                  oninput={(e) => openWithExtension = e.currentTarget.value}
+                />
+                <select value={openWithAppId} onchange={(e) => openWithAppId = e.currentTarget.value}>
+                  {#each desktopApps as app}
+                    <option value={app.id}>{app.title} ({app.id})</option>
+                  {/each}
+                </select>
+                <button class="btn-save-preset" onclick={setOpenWithMapping}>Set</button>
+              </div>
+            </div>
+            {#if Object.keys($contextMenuSettings.openWithByExtension || {}).length > 0}
+              <div class="theme-preset-list">
+                {#each Object.entries($contextMenuSettings.openWithByExtension || {}) as [ext, appId]}
+                  <div class="theme-preset-row">
+                    <div class="theme-preset-meta">
+                      <strong>.{ext}</strong>
+                      <span>{appId}</span>
+                    </div>
+                    <div class="theme-preset-actions">
+                      <button class="pill-btn danger" onclick={() => removeOpenWithMapping(ext)}>
+                        <Trash2 size={12} />
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         </div>
 
@@ -915,4 +1028,3 @@
   .content-area::-webkit-scrollbar-track { background: transparent; }
   .content-area::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
 </style>
-

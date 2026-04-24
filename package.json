@@ -5,6 +5,7 @@
   "scripts": {
     "test": "npm run test:server",
     "test:server": "node --test server/tests",
+    "apps:registry:migrate": "node tools/migrate-apps-registry.js",
     "package:doctor": "node tools/package-doctor.js",
     "package:doctor:json": "node tools/package-doctor.js --json"
   },

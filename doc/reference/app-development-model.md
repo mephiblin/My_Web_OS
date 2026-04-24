@@ -6,6 +6,8 @@ It is based on the principle that the Web OS core provides the operating surface
 ## Core Principle
 
 Build tools as separate apps, then register and run them inside Web OS.
+For the installed-app and local-file workflow direction, see
+`doc/planning/app-install-file-workflow-direction.md`.
 
 ```text
 Develop as an independent app.
@@ -53,12 +55,22 @@ There are two valid app shapes in the current project.
 
 Current structure:
 
-- UI lives under `client/src/apps/<app-name>/`
+- UI lives under `client/src/apps/system/<app-name>/` or `client/src/apps/addons/<app-name>/`
 - app is mapped from `client/src/core/Desktop.svelte`
 - metadata is listed through the server app registry
 - backend behavior is provided through shared routes/services
 
 This is practical for core workstation apps and early-stage built-in tools.
+
+Built-in registry contract (`server/storage/inventory/system/apps.json`):
+
+- `id`: unique app id
+- `title`: display title
+- `appModel`: `system` or `standard`
+- `runtime`: `builtin`
+- `version`: semver-like string (required for `standard`)
+- `entry`: module key/path-like identifier (required for `standard`)
+- `permissions`: explicit capability list (empty array allowed)
 
 ### Sandbox / Package Apps
 
@@ -224,4 +236,3 @@ System apps = privileged modules around Host capabilities
 Ordinary apps = independent tools
 Package apps = manifest + permissions + lifecycle
 ```
-

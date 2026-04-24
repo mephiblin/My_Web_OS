@@ -31,6 +31,14 @@
 
 ## 해결 전략 (단계별)
 
+## 실행 상태 (2026-04-24)
+
+- Phase 1: 완료
+- Phase 2: 완료
+- Phase 3: 완료 (`readBuiltinRegistry` legacy fallback 제거, `tools/migrate-apps-registry.js` 추가)
+- Phase 4: 완료 (built-in registry manifest-like 필드 정규화, `tools/package-doctor.js` builtin registry 검증 확장)
+- Phase 5: 완료 (`AGENTS.md`/`doc/operations/completed-backlog-log.md`/본 문서 상태 동기화)
+
 ### Phase 1. 분류/소유권 확정
 
 1. 앱 분류표 확정 (`system`, `standard`, `package`) 및 소유권 선언
@@ -81,6 +89,11 @@
 1. `AGENTS.md`의 backlog done 상태와 실제 체크리스트를 연결
 2. “구현 완료”와 “아키텍처 완료”를 분리 기록
 3. 미완 룰은 `doc/operations/completed-backlog-log.md`에 후속 항목으로 명시
+
+현재 판단:
+
+- Phase 5는 문서 동기화 자체는 완료.
+- 그러나 File Station Open With, file grant, addon overwrite 승인, package addon 파일 API parity가 모두 완료되기 전까지는 “아키텍처 정합 완료”로 간주하지 않음.
 
 ## 파일 경계 원칙
 

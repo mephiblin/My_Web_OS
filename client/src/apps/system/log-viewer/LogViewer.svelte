@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { RotateCcw, Search, Shield, Files, Monitor, Info, LayoutDashboard, AlertTriangle, XCircle, Clock, Terminal, Container, Settings } from 'lucide-svelte';
-  import { fetchLogs } from './api.js';
+  import { fetchLogs, fetchOpsSummary } from './api.js';
   import { Line } from 'svelte-chartjs';
   import {
     Chart as ChartJS,
@@ -22,6 +22,7 @@
   let activeTab = $state('OVERVIEW'); // OVERVIEW, SYSTEM, CONNECTION, FILE_TRANSFER
   let searchQuery = $state('');
   let levelFilter = $state('ALL');
+  let opsSummary = $state(null);
   let interval;
 
   const categories = [
@@ -49,6 +50,14 @@
       console.error('Failed to load logs:', err);
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadOpsSummary() {
+    try {
+      opsSummary = await fetchOpsSummary();
+    } catch (_err) {
+      opsSummary = null;
     }
   }
 
@@ -143,6 +152,7 @@
 
   onMount(() => {
     loadLogs();
+    loadOpsSummary();
     interval = setInterval(loadLogs, 5000);
   });
 
@@ -152,6 +162,9 @@
 
   $effect(() => {
     loadLogs();
+    if (activeTab === 'OVERVIEW') {
+      loadOpsSummary();
+    }
   });
 </script>
 
@@ -198,6 +211,11 @@
             <div class="stat-val">{stats().errors24}</div>
             <div class="stat-label">Critical Errors (24h)</div>
             <XCircle size={24} class="stat-icon" />
+          </div>
+          <div class="stat-card blue">
+            <div class="stat-val">{opsSummary?.runtime?.running ?? 0}/{opsSummary?.runtime?.total ?? 0}</div>
+            <div class="stat-label">Runtime Healthy</div>
+            <Terminal size={24} class="stat-icon" />
           </div>
         </div>
 
@@ -380,4 +398,3 @@
   .scrollbar::-webkit-scrollbar { width: 6px; }
   .scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
 </style>
-

@@ -168,6 +168,25 @@
           content: content == null ? '' : content
         });
       }
+    },
+    files: {
+      read: function read(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('app.data.read', 'host.file.read', {
+          path: payload.path || '',
+          grantId: payload.grantId || ''
+        });
+      },
+      write: function write(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('app.data.write', 'host.file.write', {
+          path: payload.path || '',
+          grantId: payload.grantId || '',
+          content: payload.content == null ? '' : payload.content,
+          overwrite: payload.overwrite === true,
+          approval: payload.approval && typeof payload.approval === 'object' ? payload.approval : undefined
+        });
+      }
     }
   };
 

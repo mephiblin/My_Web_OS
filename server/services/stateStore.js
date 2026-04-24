@@ -67,7 +67,8 @@ const DEFAULT_WINDOW_DEFAULTS = {
 const DEFAULT_CONTEXT_MENU = {
   showIcons: true,
   confirmDanger: true,
-  density: 'cozy'
+  density: 'cozy',
+  openWithByExtension: {}
 };
 
 const DEFAULT_AGENT_CHAT = {
@@ -356,10 +357,19 @@ function normalizeContextMenu(value) {
   if (!isObject(value)) {
     return clone(DEFAULT_CONTEXT_MENU);
   }
+  const openWithByExtension = isObject(value.openWithByExtension)
+    ? Object.fromEntries(
+      Object.entries(value.openWithByExtension)
+        .map(([extension, appId]) => [String(extension || '').trim().toLowerCase().replace(/^\./, ''), asTrimmedString(appId, '', 128)])
+        .filter(([extension, appId]) => extension && appId)
+        .slice(0, 200)
+    )
+    : {};
   return {
     showIcons: typeof value.showIcons === 'boolean' ? value.showIcons : DEFAULT_CONTEXT_MENU.showIcons,
     confirmDanger: typeof value.confirmDanger === 'boolean' ? value.confirmDanger : DEFAULT_CONTEXT_MENU.confirmDanger,
-    density: ['compact', 'cozy'].includes(value.density) ? value.density : DEFAULT_CONTEXT_MENU.density
+    density: ['compact', 'cozy'].includes(value.density) ? value.density : DEFAULT_CONTEXT_MENU.density,
+    openWithByExtension
   };
 }
 
