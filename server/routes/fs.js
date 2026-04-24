@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const fs = require('fs-extra');
+const multer = require('multer');
 const path = require('path');
 const pathGuard = require('../middleware/pathGuard');
 const auth = require('../middleware/auth');
