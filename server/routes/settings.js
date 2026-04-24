@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
 const serverConfig = require('../config/serverConfig');
+const auditService = require('../services/auditService');
 
 const MUTABLE_KEYS = [
   'PORT',
@@ -41,6 +42,15 @@ router.put('/', auth, async (req, res) => {
     }
 
     const result = await serverConfig.update(updates, { mutableKeys: MUTABLE_KEYS });
+    await auditService.log(
+      'SYSTEM',
+      'Settings: Update Server Configuration',
+      {
+        user: req.user?.username,
+        updatedKeys: result.updatedKeys
+      },
+      'WARNING'
+    );
 
     res.json({
       success: true,

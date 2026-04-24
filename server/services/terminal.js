@@ -1,4 +1,5 @@
 const os = require('os');
+const auditService = require('./auditService');
 
 let pty = null;
 try {
@@ -17,6 +18,7 @@ function initTerminalService(io) {
   io.on('connection', (socket) => {
     socket.on('terminal:init', ({ cols, rows }) => {
       if (!pty) {
+        auditService.log('SYSTEM', 'Terminal: Fallback Session Initialized', { socketId: socket.id }, 'WARNING').catch(() => {});
         socket.emit('terminal:output', 'Terminal service is running in fallback mode because node-pty is unavailable.\r\n');
         socket.emit('terminal:exit', { exitCode: 0, signal: null });
         return;
@@ -34,6 +36,7 @@ function initTerminalService(io) {
 
       const sessionId = socket.id;
       sessions.set(sessionId, ptyProcess);
+      auditService.log('SYSTEM', 'Terminal: Session Started', { socketId: sessionId }, 'INFO').catch(() => {});
 
       ptyProcess.onData((data) => {
         socket.emit('terminal:output', data);
@@ -42,6 +45,12 @@ function initTerminalService(io) {
       ptyProcess.onExit(({ exitCode, signal }) => {
         socket.emit('terminal:exit', { exitCode, signal });
         sessions.delete(sessionId);
+        auditService.log(
+          'SYSTEM',
+          'Terminal: Session Ended',
+          { socketId: sessionId, exitCode, signal },
+          exitCode === 0 ? 'INFO' : 'WARNING'
+        ).catch(() => {});
       });
 
       console.log(`Terminal session started for socket ${socket.id}`);
@@ -66,6 +75,7 @@ function initTerminalService(io) {
       if (ptyProcess) {
         ptyProcess.kill();
         sessions.delete(socket.id);
+        auditService.log('SYSTEM', 'Terminal: Session Killed On Disconnect', { socketId: socket.id }, 'WARNING').catch(() => {});
         console.log(`Terminal session killed for socket ${socket.id}`);
       }
     });

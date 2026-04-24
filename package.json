@@ -4,7 +4,9 @@
   "main": "index.js",
   "scripts": {
     "test": "npm run test:server",
-    "test:server": "node --test server/tests"
+    "test:server": "node --test server/tests",
+    "package:doctor": "node tools/package-doctor.js",
+    "package:doctor:json": "node tools/package-doctor.js --json"
   },
   "keywords": [],
   "author": "",

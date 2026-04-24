@@ -235,7 +235,7 @@ docker compose down
 
 배경화면/미디어 참조를 기존 직접 경로 방식에서 Media Library 표준 경로로 옮길 때는 아래 가이드를 사용하세요.
 
-- [Media Library 마이그레이션 가이드](MEDIA_LIBRARY_MIGRATION.md)
+- [Media Library 마이그레이션 가이드](doc/migrations/media-library-path-migration.md)
 
 핵심 기준:
 

@@ -11,6 +11,8 @@ const packageRegistryService = require('../services/packageRegistryService');
 const packageLifecycleService = require('../services/packageLifecycleService');
 const channelUpdatePolicyService = require('../services/channelUpdatePolicyService');
 const templateQualityGate = require('../services/templateQualityGate');
+const { CAPABILITY_CATALOG } = require('../services/capabilityCatalog');
+const { APP_API_POLICY, checkCompatibility } = require('../services/appApiPolicy');
 const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
 const { normalizeRuntimeProfile, assertValidRuntimeProfile, toManifestRuntimeFields } = require('../services/runtimeProfiles');
@@ -29,44 +31,6 @@ const ICON_FILE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
 const REGISTRY_DOWNLOAD_TIMEOUT_MS = 15000;
 const REGISTRY_DOWNLOAD_MAX_BYTES = 80 * 1024 * 1024;
 const ECOSYSTEM_TEMPLATE_NAMESPACE = 'official';
-const CAPABILITY_CATALOG = [
-  {
-    id: 'app.data.list',
-    category: 'storage',
-    risk: 'low',
-    summary: 'List files and directories in the package-owned data root.'
-  },
-  {
-    id: 'app.data.read',
-    category: 'storage',
-    risk: 'low',
-    summary: 'Read files from the package-owned data root.'
-  },
-  {
-    id: 'app.data.write',
-    category: 'storage',
-    risk: 'medium',
-    summary: 'Write files to the package-owned data root.'
-  },
-  {
-    id: 'ui.notification',
-    category: 'ui',
-    risk: 'low',
-    summary: 'Display user-visible notifications.'
-  },
-  {
-    id: 'window.open',
-    category: 'ui',
-    risk: 'medium',
-    summary: 'Open another desktop app window.'
-  },
-  {
-    id: 'system.info',
-    category: 'system',
-    risk: 'medium',
-    summary: 'Read system overview metrics exposed by the gateway.'
-  }
-];
 const upload = multer({
   storage: multer.diskStorage({
     destination: async (_req, _file, cb) => {
@@ -1131,12 +1095,24 @@ async function buildPackageOpsSummary(appId, options = {}) {
     }
   }
 
+  const safeguards = buildLifecycleSafeguards({
+    operationType: 'ops-summary',
+    existing: true,
+    lifecycle,
+    runtimeStatus,
+    dependencyCompatibility: lastHealthReport
+      ? { checks: Array.isArray(lastHealthReport.checks) ? lastHealthReport.checks : [] }
+      : null,
+    backupPlan: { required: false }
+  });
+
   return {
     appId: safeAppId,
     runtimeStatus,
     lifecycle,
     recentRuntimeEvents,
-    lastHealthReport
+    lastHealthReport,
+    lifecycleSafeguards: safeguards
   };
 }
 
@@ -1403,6 +1379,242 @@ function buildBackupPlanSummary(options = {}) {
   };
 }
 
+function buildLifecycleSafeguards(options = {}) {
+  const operationType = String(options.operationType || 'operation').trim() || 'operation';
+  const existing = Boolean(options.existing);
+  const lifecycle = options.lifecycle && typeof options.lifecycle === 'object' ? options.lifecycle : null;
+  const runtimeStatus = options.runtimeStatus && typeof options.runtimeStatus === 'object' ? options.runtimeStatus : null;
+  const dependencyCompatibility =
+    options.dependencyCompatibility && typeof options.dependencyCompatibility === 'object'
+      ? options.dependencyCompatibility
+      : null;
+  const backupPlan = options.backupPlan && typeof options.backupPlan === 'object' ? options.backupPlan : null;
+
+  const checks = [];
+  const backups = Array.isArray(lifecycle?.backups) ? lifecycle.backups : [];
+  const backupCount = backups.length;
+  const isRuntimeHot = ['running', 'starting', 'degraded'].includes(String(runtimeStatus?.status || '').toLowerCase());
+
+  if (!existing) {
+    checks.push({
+      id: 'safeguard.lifecycle',
+      level: 'pass',
+      message: 'No prior lifecycle state found; fresh install path is clear.'
+    });
+  } else if (operationType === 'rollback') {
+    if (backupCount === 0) {
+      checks.push({
+        id: 'safeguard.rollback.backups',
+        level: 'fail',
+        code: 'ROLLBACK_BACKUP_REQUIRED',
+        message: 'Rollback requires at least one valid backup snapshot.'
+      });
+    } else {
+      checks.push({
+        id: 'safeguard.rollback.backups',
+        level: 'pass',
+        message: `Rollback snapshots available (${backupCount}).`
+      });
+    }
+  } else if (backupPlan?.required && backupCount === 0) {
+    checks.push({
+      id: 'safeguard.update.backup-readiness',
+      level: 'warn',
+      code: 'UPDATE_BACKUP_RECOMMENDED',
+      message: 'No historical backup found. Create a snapshot before overwrite/update.'
+    });
+  } else {
+    checks.push({
+      id: 'safeguard.backup-readiness',
+      level: 'pass',
+      message: backupCount > 0
+        ? `Backup snapshots available (${backupCount}).`
+        : 'No backup requirement for this operation.'
+    });
+  }
+
+  if (isRuntimeHot && (operationType === 'update' || operationType === 'manifest-update' || operationType === 'rollback')) {
+    checks.push({
+      id: 'safeguard.runtime-hot',
+      level: 'warn',
+      code: 'RUNTIME_ACTIVE_DURING_CHANGE',
+      message: `Runtime is currently ${runtimeStatus.status}. Consider stop/backup before ${operationType}.`
+    });
+  } else {
+    checks.push({
+      id: 'safeguard.runtime-hot',
+      level: 'pass',
+      message: 'Runtime active-change risk is acceptable.'
+    });
+  }
+
+  const failedDependencyChecks = Array.isArray(dependencyCompatibility?.checks)
+    ? dependencyCompatibility.checks.filter((check) => check.level === 'fail')
+    : [];
+  if (failedDependencyChecks.length > 0) {
+    checks.push({
+      id: 'safeguard.compatibility-critical',
+      level: 'fail',
+      code: 'DEPENDENCY_COMPATIBILITY_BLOCKED',
+      message: `Critical dependency/compatibility failures detected (${failedDependencyChecks.length}).`
+    });
+  } else {
+    checks.push({
+      id: 'safeguard.compatibility-critical',
+      level: 'pass',
+      message: 'No critical dependency/compatibility failures detected.'
+    });
+  }
+
+  const qaCheckedAtRaw = lifecycle?.lastQaReport?.checkedAt;
+  const qaCheckedAt = qaCheckedAtRaw ? new Date(qaCheckedAtRaw) : null;
+  const qaAgeHours = qaCheckedAt && !Number.isNaN(qaCheckedAt.getTime())
+    ? Math.floor((Date.now() - qaCheckedAt.getTime()) / (1000 * 60 * 60))
+    : null;
+  if (qaAgeHours == null) {
+    checks.push({
+      id: 'safeguard.qa-recency',
+      level: existing ? 'warn' : 'pass',
+      message: existing
+        ? 'No recent QA report found. Run health check before high-impact changes.'
+        : 'QA recency not required for first install.'
+    });
+  } else if (qaAgeHours > 72) {
+    checks.push({
+      id: 'safeguard.qa-recency',
+      level: 'warn',
+      message: `Last QA report is ${qaAgeHours}h old. Refresh health diagnostics before change.`
+    });
+  } else {
+    checks.push({
+      id: 'safeguard.qa-recency',
+      level: 'pass',
+      message: `Last QA report is recent (${qaAgeHours}h).`
+    });
+  }
+
+  const status = checks.some((check) => check.level === 'fail')
+    ? 'fail'
+    : checks.some((check) => check.level === 'warn')
+      ? 'warn'
+      : 'pass';
+
+  return {
+    status,
+    checks,
+    summary: status === 'fail'
+      ? 'Lifecycle safeguards found blocking risks.'
+      : status === 'warn'
+        ? 'Lifecycle safeguards found warnings to review.'
+        : 'Lifecycle safeguards are clear.'
+  };
+}
+
+function toSafeguardBlockers(safeguards = null) {
+  const checks = Array.isArray(safeguards?.checks) ? safeguards.checks : [];
+  return checks
+    .filter((check) => check.level === 'fail')
+    .map((check) => ({
+      code: check.code || 'LIFECYCLE_SAFEGUARD_FAILED',
+      message: check.message || 'Lifecycle safeguard check failed.',
+      area: 'lifecycleSafeguard'
+    }));
+}
+
+function buildExternalOnboardingGuide(options = {}) {
+  const manifest = options.manifest && typeof options.manifest === 'object' ? options.manifest : {};
+  const operationType = String(options.operationType || 'create').trim() || 'create';
+  const templateId = String(options.templateId || '').trim();
+  const sourceId = String(options.sourceId || '').trim();
+  const packageId = String(options.packageId || manifest.id || '').trim();
+  const zipUrl = String(options.zipUrl || '').trim();
+  const qualityGate = options.qualityGate && typeof options.qualityGate === 'object' ? options.qualityGate : null;
+  const dependencyCompatibility =
+    options.dependencyCompatibility && typeof options.dependencyCompatibility === 'object'
+      ? options.dependencyCompatibility
+      : null;
+
+  const steps = [];
+
+  steps.push({
+    id: 'manifest.identity',
+    status: manifest.id && manifest.title ? 'pass' : 'warn',
+    label: 'Manifest identity (id/title) is set.',
+    detail: manifest.id && manifest.title
+      ? `${manifest.id} / ${manifest.title}`
+      : 'Set both package id and title for third-party onboarding.'
+  });
+
+  steps.push({
+    id: 'quality.gate',
+    status: String(qualityGate?.status || '').toLowerCase() === 'fail'
+      ? 'fail'
+      : String(qualityGate?.status || '').toLowerCase() === 'warn'
+        ? 'warn'
+        : 'pass',
+    label: 'Template quality gate review completed.',
+    detail: qualityGate?.summary || 'No quality summary available.'
+  });
+
+  steps.push({
+    id: 'compatibility.review',
+    status: String(dependencyCompatibility?.status || '').toLowerCase() === 'fail'
+      ? 'fail'
+      : String(dependencyCompatibility?.status || '').toLowerCase() === 'warn'
+        ? 'warn'
+        : 'pass',
+    label: 'Dependency and compatibility review completed.',
+    detail: dependencyCompatibility?.status
+      ? `Compatibility status: ${String(dependencyCompatibility.status).toUpperCase()}.`
+      : 'No dependency/compatibility diagnostics available.'
+  });
+
+  const policyCompatibility = checkCompatibility(APP_API_POLICY.currentVersion);
+  steps.push({
+    id: 'app-api.policy',
+    status: policyCompatibility.compatible ? 'pass' : 'fail',
+    label: `App API policy ${APP_API_POLICY.currentVersion} is published for package clients.`,
+    detail: policyCompatibility.reason
+  });
+
+  if (zipUrl) {
+    steps.push({
+      id: 'distribution.zip',
+      status: 'pass',
+      label: 'Distribution zip URL is available for install flow.',
+      detail: zipUrl
+    });
+  } else {
+    steps.push({
+      id: 'distribution.zip',
+      status: operationType === 'install' ? 'fail' : 'warn',
+      label: 'Distribution zip URL should be prepared for third-party onboarding.',
+      detail: 'Publish package zip and registry metadata before distribution.'
+    });
+  }
+
+  const commands = [
+    `curl -X POST /api/packages/wizard/preflight -d '{\"manifest\":{\"id\":\"${manifest.id || 'my-app'}\"}}'`,
+    `curl -X POST /api/packages/registry/preflight -d '{\"sourceId\":\"${sourceId || 'your-source'}\",\"packageId\":\"${packageId || 'your-package'}\"}'`
+  ];
+
+  return {
+    status: steps.some((item) => item.status === 'fail')
+      ? 'fail'
+      : steps.some((item) => item.status === 'warn')
+        ? 'warn'
+        : 'pass',
+    summary: `Third-party onboarding checklist prepared for ${operationType} flow.`,
+    source: {
+      templateId: templateId || null,
+      sourceId: sourceId || null,
+      packageId: packageId || null
+    },
+    steps,
+    commands
+  };
+}
+
 async function createLocalPackageFromManifest(manifestInput, options = {}) {
   const manifest = normalizeManifestInput(manifestInput || {});
   const appRoot = await appPaths.getAppRoot(manifest.id);
@@ -1454,6 +1666,9 @@ async function buildWizardPreflight(manifestInput, options = {}) {
   const appId = manifest.id;
   const templateId = String(options.templateId || '').trim();
   const existing = await packageRegistryService.getSandboxApp(appId);
+  const runtimeManager = options.runtimeManager || null;
+  const lifecycle = existing ? await packageLifecycleService.getLifecycle(appId).catch(() => null) : null;
+  const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
   const permissionsReview = buildPermissionReview(manifest);
 
   let qualityGate = null;
@@ -1485,6 +1700,21 @@ async function buildWizardPreflight(manifestInput, options = {}) {
     overwrite: false,
     existing
   });
+  const lifecycleSafeguards = buildLifecycleSafeguards({
+    operationType: 'create',
+    existing: Boolean(existing),
+    lifecycle,
+    runtimeStatus,
+    dependencyCompatibility,
+    backupPlan
+  });
+  const onboarding = buildExternalOnboardingGuide({
+    manifest,
+    templateId,
+    operationType: 'create',
+    qualityGate,
+    dependencyCompatibility
+  });
   const blockers = [];
 
   if (existing) {
@@ -1502,6 +1732,8 @@ async function buildWizardPreflight(manifestInput, options = {}) {
       area: 'qualityGate'
     });
   }
+
+  blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
 
   return {
     operation: {
@@ -1523,6 +1755,8 @@ async function buildWizardPreflight(manifestInput, options = {}) {
     qualityGate,
     dependencyCompatibility,
     backupPlan,
+    lifecycleSafeguards,
+    onboarding,
     executionReadiness: {
       ready: blockers.length === 0,
       blockers
@@ -1567,6 +1801,33 @@ function mapWizardStatusToHttpStatus(err) {
   return 500;
 }
 
+function buildManifestValidation(runtimeError = null) {
+  const checks = [
+    {
+      id: 'manifest.structure',
+      status: 'pass',
+      message: 'Manifest payload shape is valid.'
+    }
+  ];
+
+  if (runtimeError) {
+    checks.push({
+      id: 'manifest.runtime',
+      status: 'fail',
+      code: runtimeError.code || 'RUNTIME_PROFILE_INVALID',
+      message: runtimeError.message || 'Runtime profile is invalid.'
+    });
+  } else {
+    checks.push({
+      id: 'manifest.runtime',
+      status: 'pass',
+      message: 'Runtime profile is valid.'
+    });
+  }
+
+  return { checks };
+}
+
 router.get('/', async (req, res) => {
   try {
     const packages = await packageRegistryService.listSandboxApps();
@@ -1609,18 +1870,21 @@ router.post('/wizard/preflight', async (req, res) => {
     }
 
     const preflight = await buildWizardPreflight(body.manifest, {
-      templateId: body.templateId
+      templateId: body.templateId,
+      runtimeManager: req.app.get('runtimeManager')
     });
 
     return res.json({
       success: true,
-      preflight
+      preflight,
+      validation: buildManifestValidation()
     });
   } catch (err) {
     return res.status(mapWizardStatusToHttpStatus(err)).json({
       error: true,
       code: err.code || 'PACKAGE_WIZARD_PREFLIGHT_FAILED',
-      message: err.message
+      message: err.message,
+      validation: err.code === 'RUNTIME_PROFILE_INVALID' ? buildManifestValidation(err) : undefined
     });
   }
 });
@@ -1645,13 +1909,20 @@ router.post('/wizard/create', async (req, res) => {
     return res.status(201).json({
       success: true,
       package: created.package,
-      manifest: created.manifest
+      manifest: created.manifest,
+      onboarding: buildExternalOnboardingGuide({
+        manifest: created.manifest,
+        templateId: body.templateId,
+        operationType: 'create'
+      }),
+      validation: buildManifestValidation()
     });
   } catch (err) {
     return res.status(mapWizardStatusToHttpStatus(err)).json({
       error: true,
       code: err.code || 'PACKAGE_WIZARD_CREATE_FAILED',
-      message: err.message
+      message: err.message,
+      validation: err.code === 'RUNTIME_PROFILE_INVALID' ? buildManifestValidation(err) : undefined
     });
   }
 });
@@ -2201,6 +2472,25 @@ router.post('/registry/preflight', async (req, res) => {
       overwrite: target.overwrite,
       existing
     });
+    const runtimeManager = req.app.get('runtimeManager');
+    const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
+    const lifecycleSafeguards = buildLifecycleSafeguards({
+      operationType: existing ? 'update' : 'install',
+      existing: Boolean(existing),
+      lifecycle,
+      runtimeStatus,
+      dependencyCompatibility,
+      backupPlan
+    });
+    const onboarding = buildExternalOnboardingGuide({
+      manifest: incomingManifest,
+      operationType: existing ? 'update' : 'install',
+      sourceId: target.sourceId,
+      packageId: target.packageId || incomingManifest.id,
+      zipUrl: target.zipUrl,
+      qualityGate: qualityGateReport,
+      dependencyCompatibility
+    });
     const operationType = existing ? 'update' : 'install';
     const blockers = [];
 
@@ -2240,6 +2530,8 @@ router.post('/registry/preflight', async (req, res) => {
       }
     }
 
+    blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
+
     return res.json({
       success: true,
       preflight: {
@@ -2271,6 +2563,8 @@ router.post('/registry/preflight', async (req, res) => {
         qualityGate: qualityGateReport,
         dependencyCompatibility,
         backupPlan,
+        lifecycleSafeguards,
+        onboarding,
         updatePolicy: updatePolicy || {
           evaluated: false
         },
@@ -2468,6 +2762,7 @@ router.get('/ecosystem/templates', async (_req, res) => {
 });
 
 router.post('/ecosystem/templates/:templateId/quality-check', async (req, res) => {
+  let manifest = null;
   try {
     const template = getEcosystemTemplate(req.params.templateId);
     if (!template) {
@@ -2478,7 +2773,7 @@ router.post('/ecosystem/templates/:templateId/quality-check', async (req, res) =
       });
     }
 
-    const manifest = buildTemplateManifestInput(template, req.body || {});
+    manifest = buildTemplateManifestInput(template, req.body || {});
     const report = await templateQualityGate.evaluate({
       templateId: template.id,
       appId: manifest.id,
@@ -2492,7 +2787,8 @@ router.post('/ecosystem/templates/:templateId/quality-check', async (req, res) =
         id: template.id,
         namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
       },
-      report
+      report,
+      validation: buildManifestValidation()
     });
   } catch (err) {
     const status =
@@ -2505,12 +2801,14 @@ router.post('/ecosystem/templates/:templateId/quality-check', async (req, res) =
     return res.status(status).json({
       error: true,
       code: err.code || 'ECOSYSTEM_TEMPLATE_QUALITY_CHECK_FAILED',
-      message: err.message
+      message: err.message,
+      validation: err.code === 'RUNTIME_PROFILE_INVALID' ? buildManifestValidation(err) : undefined
     });
   }
 });
 
 router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
+  let manifest = null;
   try {
     const template = getEcosystemTemplate(req.params.templateId);
     if (!template) {
@@ -2521,7 +2819,7 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
       });
     }
 
-    const manifest = buildTemplateManifestInput(template, req.body || {});
+    manifest = buildTemplateManifestInput(template, req.body || {});
 
     const appRoot = await appPaths.getAppRoot(manifest.id);
     if (await fs.pathExists(appRoot)) {
@@ -2619,7 +2917,8 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
         namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
       },
       package: created,
-      report
+      report,
+      validation: buildManifestValidation()
     });
   } catch (err) {
     const status =
@@ -2632,7 +2931,8 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
     return res.status(status).json({
       error: true,
       code: err.code || 'ECOSYSTEM_TEMPLATE_SCAFFOLD_FAILED',
-      message: err.message
+      message: err.message,
+      validation: err.code === 'RUNTIME_PROFILE_INVALID' ? buildManifestValidation(err) : undefined
     });
   }
 });
@@ -2777,6 +3077,66 @@ router.post(`/${APP_ID_ROUTE}/backup`, async (req, res) => {
   }
 });
 
+router.post(`/${APP_ID_ROUTE}/rollback/preflight`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const backupId = String(req.body?.backupId || '').trim();
+    const lifecycle = await packageLifecycleService.getLifecycle(appId).catch(() => null);
+    const runtimeManager = req.app.get('runtimeManager');
+    const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
+    const backups = Array.isArray(lifecycle?.backups) ? lifecycle.backups : [];
+    const selectedBackup = backupId ? backups.find((item) => item.id === backupId) || null : null;
+
+    const safeguards = buildLifecycleSafeguards({
+      operationType: 'rollback',
+      existing: true,
+      lifecycle,
+      runtimeStatus,
+      dependencyCompatibility: null,
+      backupPlan: { required: true, reason: 'rollback' }
+    });
+
+    const blockers = [
+      ...toSafeguardBlockers(safeguards),
+      ...(backupId && !selectedBackup
+        ? [{
+            code: 'PACKAGE_BACKUP_NOT_FOUND',
+            message: `Backup "${backupId}" was not found.`,
+            area: 'rollback'
+          }]
+        : [])
+    ];
+
+    return res.json({
+      success: true,
+      preflight: {
+        operation: {
+          type: 'rollback',
+          appId,
+          backupId: backupId || null
+        },
+        availableBackups: backups,
+        selectedBackup,
+        lifecycleSafeguards: safeguards,
+        executionReadiness: {
+          ready: blockers.length === 0,
+          blockers
+        }
+      }
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID' || err.code === 'PACKAGE_NOT_FOUND'
+        ? 400
+        : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_ROLLBACK_PREFLIGHT_FAILED',
+      message: err.message
+    });
+  }
+});
+
 router.post(`/${APP_ID_ROUTE}/rollback`, async (req, res) => {
   try {
     const appId = appPaths.assertSafeAppId(req.params.id);
@@ -2791,6 +3151,29 @@ router.post(`/${APP_ID_ROUTE}/rollback`, async (req, res) => {
 
     const runtimeManager = req.app.get('runtimeManager');
     const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
+    const rollbackPreflightLifecycle = await packageLifecycleService.getLifecycle(appId).catch(() => null);
+    const rollbackPreflight = buildLifecycleSafeguards({
+      operationType: 'rollback',
+      existing: true,
+      lifecycle: rollbackPreflightLifecycle,
+      runtimeStatus,
+      dependencyCompatibility: null,
+      backupPlan: { required: true, reason: 'rollback' }
+    });
+    const rollbackBlockers = toSafeguardBlockers(rollbackPreflight);
+    if (rollbackBlockers.length > 0) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_ROLLBACK_GUARD_BLOCKED',
+        message: 'Rollback is blocked by lifecycle safeguards.',
+        executionReadiness: {
+          ready: false,
+          blockers: rollbackBlockers
+        },
+        lifecycleSafeguards: rollbackPreflight
+      });
+    }
+
     const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
     if (wasRunning) {
       await runtimeManager?.stopApp?.(appId).catch(() => {});
@@ -2810,7 +3193,8 @@ router.post(`/${APP_ID_ROUTE}/rollback`, async (req, res) => {
 
     return res.json({
       success: true,
-      restored
+      restored,
+      lifecycleSafeguards: rollbackPreflight
     });
   } catch (err) {
     const status =
@@ -2961,6 +3345,9 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
 
     const permissionsReview = buildPermissionReview(manifest);
     const previousManifest = await readManifestRaw(routeAppId);
+    const lifecycle = await packageLifecycleService.getLifecycle(routeAppId).catch(() => null);
+    const runtimeManager = req.app.get('runtimeManager');
+    const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[routeAppId] || null;
     const mediaScopeReview = buildMediaScopeReview(manifest, {
       previousManifest,
       approvalReceived: approvals.mediaScopesAccepted === true
@@ -3013,6 +3400,16 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
       });
     }
 
+    const lifecycleSafeguards = buildLifecycleSafeguards({
+      operationType: 'manifest-update',
+      existing: true,
+      lifecycle,
+      runtimeStatus,
+      dependencyCompatibility,
+      backupPlan: { required: true, reason: 'manifest-update' }
+    });
+    blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
+
     return res.json({
       success: true,
       preflight: {
@@ -3023,6 +3420,12 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
         permissionsReview,
         mediaScopeReview,
         dependencyCompatibility,
+        lifecycleSafeguards,
+        onboarding: buildExternalOnboardingGuide({
+          manifest,
+          operationType: 'manifest-update',
+          dependencyCompatibility
+        }),
         executionReadiness: {
           ready: blockers.length === 0,
           blockers
@@ -3128,14 +3531,16 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
       success: true,
       package: updated,
       manifest,
-      mediaScopeReview
+      mediaScopeReview,
+      validation: buildManifestValidation()
     });
   } catch (err) {
     const status = err.code === 'APP_ID_INVALID' || err.code?.startsWith('PACKAGE_') || err.code === 'RUNTIME_PROFILE_INVALID' ? 400 : 500;
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_MANIFEST_UPDATE_FAILED',
-      message: err.message
+      message: err.message,
+      validation: err.code === 'RUNTIME_PROFILE_INVALID' ? buildManifestValidation(err) : undefined
     });
   }
 });

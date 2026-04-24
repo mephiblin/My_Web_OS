@@ -5,9 +5,21 @@ const path = require('path');
 const auth = require('../middleware/auth');
 const auditService = require('../services/auditService');
 const packageRegistryService = require('../services/packageRegistryService');
+const { CAPABILITY_CATALOG } = require('../services/capabilityCatalog');
 const appPaths = require('../utils/appPaths');
 
 const router = express.Router();
+const SANDBOX_SDK_FILE = path.join(__dirname, '../static/webos-sandbox-sdk.js');
+
+const CAPABILITY_BY_ID = new Map(CAPABILITY_CATALOG.map((item) => [item.id, item]));
+
+function buildAppCapabilityMap(app) {
+  const declared = Array.isArray(app?.permissions) ? app.permissions : [];
+  return CAPABILITY_CATALOG.map((item) => ({
+    ...item,
+    declared: declared.includes(item.id)
+  }));
+}
 
 async function ensurePermittedSandboxApp(res, appId, permission) {
   try {
@@ -22,10 +34,33 @@ async function ensurePermittedSandboxApp(res, appId, permission) {
     }
 
     if (!app.permissions.includes(permission)) {
+      const capability = CAPABILITY_BY_ID.get(permission) || null;
+      auditService.log(
+        'SANDBOX',
+        `Sandbox permission denied: ${app.id}`,
+        {
+          appId: app.id,
+          requiredPermission: permission,
+          declaredPermissions: Array.isArray(app.permissions) ? app.permissions : [],
+          capabilityRisk: capability?.risk || 'unknown'
+        },
+        'WARNING'
+      ).catch(() => {});
+
       res.status(403).json({
         error: true,
         code: 'APP_PERMISSION_DENIED',
-        message: `Sandbox app is not allowed to use "${permission}".`
+        message: `Sandbox app is not allowed to use "${permission}".`,
+        permission,
+        declaredPermissions: Array.isArray(app.permissions) ? app.permissions : [],
+        capability: capability
+          ? {
+              id: capability.id,
+              category: capability.category,
+              risk: capability.risk,
+              summary: capability.summary
+            }
+          : null
       });
       return null;
     }
@@ -44,6 +79,19 @@ async function ensurePermittedSandboxApp(res, appId, permission) {
 async function readJsonBody(req) {
   return req.body && typeof req.body === 'object' ? req.body : {};
 }
+
+router.get('/sdk.js', async (_req, res) => {
+  try {
+    if (!(await fs.pathExists(SANDBOX_SDK_FILE))) {
+      return res.status(404).send('Sandbox SDK not found.');
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.sendFile(SANDBOX_SDK_FILE);
+  } catch (err) {
+    return res.status(500).send(err.message || 'Failed to load sandbox SDK.');
+  }
+});
 
 router.post('/:appId/data/list', auth, async (req, res) => {
   const app = await ensurePermittedSandboxApp(res, req.params.appId, 'app.data.list');
@@ -65,6 +113,32 @@ router.post('/:appId/data/list', auth, async (req, res) => {
   } catch (err) {
     const status = err.code === 'APP_PATH_OUTSIDE_ROOT' ? 400 : 500;
     res.status(status).json({ error: true, message: err.message, code: err.code || 'SANDBOX_LIST_FAILED' });
+  }
+});
+
+router.get('/:appId/capabilities', auth, async (req, res) => {
+  try {
+    const app = await packageRegistryService.getSandboxApp(req.params.appId);
+    if (!app) {
+      return res.status(404).json({
+        error: true,
+        code: 'APP_NOT_FOUND',
+        message: 'Sandbox app not found.'
+      });
+    }
+
+    return res.json({
+      success: true,
+      appId: app.id,
+      declaredPermissions: Array.isArray(app.permissions) ? app.permissions : [],
+      capabilities: buildAppCapabilityMap(app)
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: true,
+      code: err.code || 'SANDBOX_CAPABILITIES_FETCH_FAILED',
+      message: err.message
+    });
   }
 });
 

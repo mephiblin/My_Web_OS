@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Send } from 'lucide-svelte';
+  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Send, AlertTriangle, Check } from 'lucide-svelte';
   import { openWindow } from '../stores/windowStore.js';
   import { addToast } from '../stores/toastStore.js';
   import { notifications } from '../stores/notificationStore.js';
@@ -23,7 +23,14 @@
   let frameEl;
   let loading = $state(true);
   let lastError = $state('');
+  let lastErrorCode = $state('');
   let bridgeReady = $state(false);
+  let capabilityCatalog = $state([]);
+  let apiPolicy = $state(null);
+  let capabilityById = $state({});
+  let approvalMemory = $state({});
+  let pendingApproval = $state(null);
+  let recentDenied = $state(null);
 
   const appId = $derived(app?.appId || app?.id || '');
   const declaredPermissions = $derived(new Set(Array.isArray(app?.permissions) ? app.permissions : []));
@@ -45,6 +52,8 @@
     'app.data.read': 'app.data.read',
     'app.data.write': 'app.data.write'
   };
+
+  const SENSITIVE_RISK_LEVELS = new Set(['medium', 'high']);
 
   function postToFrame(payload) {
     if (!frameEl?.contentWindow || typeof window === 'undefined') return;
@@ -101,6 +110,8 @@
       err.code = 'APP_PERMISSION_DENIED';
       throw err;
     }
+
+    await ensureRequestApproval(request, requiredPermission);
 
     const params = request.params || {};
 
@@ -169,7 +180,131 @@
     }
   }
 
+  function getCapability(permission) {
+    if (!permission) return null;
+    return capabilityById[permission] || null;
+  }
+
+  function getRiskLabel(permission) {
+    const capability = getCapability(permission);
+    return String(capability?.risk || 'low').toUpperCase();
+  }
+
+  function shouldRequireApproval(permission) {
+    const capability = getCapability(permission);
+    const risk = String(capability?.risk || '').toLowerCase();
+    if (SENSITIVE_RISK_LEVELS.has(risk)) return true;
+    return permission === 'window.open' || permission === 'app.data.write';
+  }
+
+  function describeRequest(request, permission) {
+    const params = request?.params || {};
+    if (permission === 'window.open') {
+      return `Open window "${String(params.appId || 'unknown')}".`;
+    }
+    if (permission === 'app.data.write') {
+      return `Write app data path "${String(params.path || '/').trim() || '/'}".`;
+    }
+    if (permission === 'system.info') {
+      return 'Read current host system overview metrics.';
+    }
+    return `Execute "${request?.method || 'unknown'}".`;
+  }
+
+  async function ensureRequestApproval(request, permission) {
+    if (!shouldRequireApproval(permission)) return;
+    if (approvalMemory[permission] === true) return;
+
+    if (pendingApproval) {
+      const err = new Error('Another approval is already pending.');
+      err.code = 'SANDBOX_APPROVAL_BUSY';
+      throw err;
+    }
+
+    await new Promise((resolve, reject) => {
+      pendingApproval = {
+        permission,
+        method: request.method,
+        risk: getRiskLabel(permission),
+        description: describeRequest(request, permission),
+        resolve,
+        reject
+      };
+    });
+  }
+
+  function denyPendingApproval() {
+    if (!pendingApproval) return;
+    const reject = pendingApproval.reject;
+    const denied = {
+      permission: pendingApproval.permission,
+      method: pendingApproval.method,
+      risk: pendingApproval.risk,
+      deniedAt: new Date().toISOString()
+    };
+    pendingApproval = null;
+    recentDenied = denied;
+    const err = new Error('User denied sandbox request approval.');
+    err.code = 'SANDBOX_APPROVAL_DENIED';
+    reject(err);
+  }
+
+  function approvePendingApproval(remember = false) {
+    if (!pendingApproval) return;
+    const permission = pendingApproval.permission;
+    const resolve = pendingApproval.resolve;
+    pendingApproval = null;
+    if (remember) {
+      approvalMemory = {
+        ...approvalMemory,
+        [permission]: true
+      };
+    }
+    resolve(true);
+  }
+
+  async function loadCapabilityCatalog() {
+    try {
+      const payload = await apiFetch('/api/packages/runtime/capabilities');
+      const capabilities = Array.isArray(payload?.capabilities) ? payload.capabilities : [];
+      capabilityCatalog = capabilities;
+      const next = {};
+      for (const item of capabilities) {
+        if (!item?.id) continue;
+        next[item.id] = item;
+      }
+      capabilityById = next;
+      if (bridgeReady) {
+        postToFrame({
+          type: 'webos:capabilities',
+          capabilities
+        });
+      }
+    } catch (_err) {
+      capabilityCatalog = [];
+      capabilityById = {};
+    }
+  }
+
+  async function loadApiPolicy() {
+    try {
+      const payload = await apiFetch('/api/system/app-api-policy?clientVersion=0.1.0');
+      apiPolicy = payload?.policy || null;
+      if (bridgeReady && apiPolicy) {
+        postToFrame({
+          type: 'webos:api-policy',
+          policy: apiPolicy
+        });
+      }
+    } catch (_err) {
+      apiPolicy = null;
+    }
+  }
+
   onMount(() => {
+    loadCapabilityCatalog().catch(() => {});
+    loadApiPolicy().catch(() => {});
+
     async function handleMessage(event) {
       if (typeof window === 'undefined') return;
       if (event.source !== frameEl?.contentWindow) return;
@@ -188,8 +323,11 @@
             title: app.title,
             description: app.description || '',
             permissions: Array.isArray(app.permissions) ? app.permissions : [],
-            runtime: app.runtime
-          }
+            runtime: app.runtime,
+            sdkUrl: '/api/sandbox/sdk.js'
+          },
+          capabilities: capabilityCatalog,
+          apiPolicy
         });
         return;
       }
@@ -206,6 +344,7 @@
         });
       } catch (err) {
         lastError = err.message || 'Sandbox request failed.';
+        lastErrorCode = err.code || 'SANDBOX_REQUEST_FAILED';
         postToFrame({
           type: 'webos:response',
           requestId: payload.requestId,
@@ -231,6 +370,7 @@
   function handleFrameError() {
     loading = false;
     lastError = 'Failed to load sandbox app.';
+    lastErrorCode = 'SANDBOX_FRAME_LOAD_FAILED';
   }
 </script>
 
@@ -240,7 +380,61 @@
   {/if}
 
   {#if lastError}
-    <div class="overlay error">{lastError}</div>
+    <div class="overlay error">
+      <strong>{lastErrorCode || 'ERROR'}</strong>
+      <span>{lastError}</span>
+    </div>
+  {/if}
+
+  {#if app?.permissions?.length > 0}
+    <div class="overlay permissions">
+      <div class="permissions-title">
+        <Shield size={12} />
+        Sandbox Permissions
+      </div>
+      <div class="permission-list">
+        {#each app.permissions as permission}
+          <span class="permission-chip {shouldRequireApproval(permission) ? 'sensitive' : ''}">
+            {permission}
+            <em>{getRiskLabel(permission)}</em>
+          </span>
+        {/each}
+      </div>
+      {#if recentDenied}
+        <div class="denied-note">
+          <AlertTriangle size={12} />
+          Denied: {recentDenied.permission}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if pendingApproval}
+    <div class="approval-overlay">
+      <div class="approval-card glass-effect">
+        <div class="approval-head">
+          <AlertTriangle size={14} />
+          <strong>Sandbox Approval Required</strong>
+        </div>
+        <div class="approval-body">
+          <div><b>Method:</b> {pendingApproval.method}</div>
+          <div><b>Permission:</b> {pendingApproval.permission}</div>
+          <div><b>Risk:</b> {pendingApproval.risk}</div>
+          <p>{pendingApproval.description}</p>
+        </div>
+        <div class="approval-actions">
+          <button class="btn ghost" onclick={denyPendingApproval}>Deny</button>
+          <button class="btn ghost" onclick={() => approvePendingApproval(false)}>
+            <Check size={13} />
+            Allow Once
+          </button>
+          <button class="btn primary" onclick={() => approvePendingApproval(true)}>
+            <Check size={13} />
+            Always Allow
+          </button>
+        </div>
+      </div>
+    </div>
   {/if}
 
   <iframe
@@ -290,5 +484,138 @@
     color: #fee2e2;
     background: rgba(127, 29, 29, 0.72);
     border: 1px solid rgba(248, 113, 113, 0.45);
+    display: grid;
+    gap: 2px;
+    max-width: min(520px, calc(100% - 32px));
+    border-radius: 12px;
+  }
+
+  .permissions {
+    left: 16px;
+    right: auto;
+    top: 16px;
+    border-radius: 12px;
+    background: rgba(8, 20, 36, 0.78);
+    border: 1px solid rgba(125, 211, 252, 0.3);
+    min-width: 320px;
+    max-width: min(640px, calc(100% - 32px));
+    color: #dbeafe;
+    display: grid;
+    gap: 8px;
+  }
+
+  .permissions-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #bae6fd;
+  }
+
+  .permission-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .permission-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 999px;
+    background: rgba(2, 6, 23, 0.55);
+    padding: 4px 8px;
+    font-size: 11px;
+    color: #dbeafe;
+  }
+
+  .permission-chip em {
+    font-style: normal;
+    opacity: 0.7;
+    font-size: 10px;
+  }
+
+  .permission-chip.sensitive {
+    border-color: rgba(251, 191, 36, 0.45);
+    color: #fde68a;
+  }
+
+  .denied-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #fecaca;
+    font-size: 11px;
+  }
+
+  .approval-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    background: rgba(2, 6, 23, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+
+  .approval-card {
+    width: min(460px, 100%);
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    border-radius: 12px;
+    background: rgba(15, 23, 36, 0.85);
+    padding: 12px;
+    display: grid;
+    gap: 10px;
+    color: #e2e8f0;
+  }
+
+  .approval-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #fde68a;
+  }
+
+  .approval-body {
+    display: grid;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .approval-body p {
+    margin: 0;
+    color: #cbd5e1;
+  }
+
+  .approval-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .btn {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    background: rgba(15, 23, 36, 0.8);
+    color: #e2e8f0;
+    border-radius: 8px;
+    padding: 6px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+
+  .btn.ghost:hover {
+    background: rgba(30, 41, 59, 0.9);
+  }
+
+  .btn.primary {
+    border-color: rgba(56, 189, 248, 0.45);
+    background: rgba(3, 105, 161, 0.5);
+    color: #dbeafe;
   }
 </style>
