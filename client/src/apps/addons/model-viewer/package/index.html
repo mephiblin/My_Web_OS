@@ -51,7 +51,8 @@
       <button id="wireframe">Wireframe</button>
       <button id="axes" class="active">Axes</button>
       <button id="animation" disabled>Animation: Off</button>
-      <button id="fit">Fit</button>
+      <button id="fit" title="Refit camera to the visible mesh bounds">Fit Mesh</button>
+      <button id="home" title="Reset camera to the current model center">Home View</button>
       <button id="shot">Screenshot</button>
       <a id="download" href="#" download>Download</a>
     </div>
@@ -76,6 +77,7 @@
       const axesEl = document.getElementById('axes');
       const animationEl = document.getElementById('animation');
       const fitEl = document.getElementById('fit');
+      const homeEl = document.getElementById('home');
       const shotEl = document.getElementById('shot');
       const downloadEl = document.getElementById('download');
 
@@ -263,6 +265,11 @@
         renderer?.render(scene, camera);
       }
 
+      function homeView() {
+        if (!model) return;
+        frameModel(model);
+      }
+
       async function waitForViewportSize() {
         for (let i = 0; i < 20; i += 1) {
           if (viewport.clientWidth > 10 && viewport.clientHeight > 10) return;
@@ -406,6 +413,7 @@
         }
       });
       fitEl.addEventListener('click', () => model && frameModel(model));
+      homeEl.addEventListener('click', homeView);
       shotEl.addEventListener('click', () => {
         renderer.render(scene, camera);
         const link = document.createElement('a');
