@@ -26,7 +26,7 @@
   import { apiFetch } from '../utils/api.js';
   import { buildShortcutLaunch } from './shortcutLaunch.js';
   import { installWebOSBridge } from '../utils/webosBridge.js';
-  import { resolveWindowLaunch } from './appLaunchRegistry.js';
+  import { loadBuiltinComponent, resolveWindowLaunch } from './appLaunchRegistry.js';
   import { normalizeAppModel, deriveOwnerTier, normalizeLaunchContract, normalizeDataBoundary } from './appOwnershipContract.js';
 
   const iconMap = {
@@ -62,6 +62,8 @@
 
   let apps = $state([]);
   let startButtonEl = $state(null);
+  let loadedBuiltinComponents = $state({});
+  let builtinComponentErrors = $state({});
   
   async function loadApps() {
     try {
@@ -221,6 +223,42 @@
     return { opened: true, appId: normalizedId };
   }
 
+  function getLoadedBuiltinComponent(componentKey) {
+    return loadedBuiltinComponents[String(componentKey || '').trim()] || null;
+  }
+
+  function getBuiltinComponentError(componentKey) {
+    return builtinComponentErrors[String(componentKey || '').trim()] || '';
+  }
+
+  async function ensureBuiltinComponent(componentKey) {
+    const key = String(componentKey || '').trim();
+    if (!key || loadedBuiltinComponents[key] || builtinComponentErrors[key]) return;
+
+    try {
+      const component = await loadBuiltinComponent(key);
+      if (!component) return;
+      loadedBuiltinComponents = {
+        ...loadedBuiltinComponents,
+        [key]: component
+      };
+    } catch (err) {
+      builtinComponentErrors = {
+        ...builtinComponentErrors,
+        [key]: err?.message || 'Failed to load app component.'
+      };
+    }
+  }
+
+  $effect(() => {
+    for (const win of visibleWindows) {
+      const resolved = resolveWindowLaunch(win);
+      if (resolved.hasBuiltinComponent) {
+        ensureBuiltinComponent(resolved.componentKey);
+      }
+    }
+  });
+
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -241,7 +279,18 @@
     {/each}
   </div>
 
-  <div class="app-grid {$layoutEditMode ? 'layout-edit-mode' : ''}" onclick={() => { closeContextMenu(); closeStartMenu(); }}>
+  <div
+    class="app-grid {$layoutEditMode ? 'layout-edit-mode' : ''}"
+    role="button"
+    tabindex="-1"
+    onclick={() => { closeContextMenu(); closeStartMenu(); }}
+    onkeydown={(event) => {
+      if (event.key === 'Escape') {
+        closeContextMenu();
+        closeStartMenu();
+      }
+    }}
+  >
     {#if $layoutEditMode}
       <div class="layout-edit-banner">Layout Edit Mode: app launch is temporarily disabled.</div>
     {/if}
@@ -252,7 +301,8 @@
           {#if app.iconType === 'image' && app.iconUrl}
             <img class="app-icon-image" src={app.iconUrl} alt={app.title} loading="lazy" />
           {:else}
-            <svelte:component this={app.iconComponent} size={32} />
+            {@const AppIcon = app.iconComponent}
+            <AppIcon size={32} />
           {/if}
         </div>
         <span>{app.title}</span>
@@ -285,8 +335,18 @@
   {#each visibleWindows as win (win.id)}
     <Window window={win} active={$activeWindowId === win.id}>
       {@const resolvedLaunch = resolveWindowLaunch(win)}
-      {#if resolvedLaunch.component}
-        <svelte:component this={resolvedLaunch.component} data={win.data} />
+      {@const LaunchComponent = getLoadedBuiltinComponent(resolvedLaunch.componentKey)}
+      {#if LaunchComponent}
+        <LaunchComponent data={win.data} />
+      {:else if resolvedLaunch.hasBuiltinComponent}
+        <div class="app-loading-state">
+          {#if getBuiltinComponentError(resolvedLaunch.componentKey)}
+            <h2>{win.title}</h2>
+            <p>{getBuiltinComponentError(resolvedLaunch.componentKey)}</p>
+          {:else}
+            <p>Loading {win.title}...</p>
+          {/if}
+        </div>
       {:else if resolvedLaunch.launch.mode === 'sandbox' || win.runtime === 'sandbox'}
         <SandboxAppFrame app={win} />
       {:else}
@@ -455,85 +515,6 @@
     white-space: nowrap;
   }
   
-  .taskbar { position: absolute; bottom: 0; left: 0; width: 100%; height: 48px; display: flex; align-items: center; padding: 0 10px; border-top: 1px solid var(--glass-border); z-index: 9999; gap: 10px; }
-  
-  .desktop-switcher { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-right: 1px solid rgba(255,255,255,0.1); }
-  .desktop-num { font-size: 11px; font-weight: 600; color: white; opacity: 0.6; margin-right: 2px; }
-  .desktop-btn { 
-    position: relative;
-    width: 6px; 
-    height: 6px; 
-    border-radius: 50%; 
-    background: rgba(255, 255, 255, 0.2); 
-    border: none; 
-    cursor: pointer; 
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); 
-    margin: 0 4px;
-  }
-  /* Increase hit area without changing visual size */
-  .desktop-btn::after {
-    content: '';
-    position: absolute;
-    inset: -6px; /* 1.5x - 2x hit area */
-  }
-  .desktop-btn:hover { 
-    width: 12px; /* Stretch horizontally */
-    border-radius: 10px;
-    background: rgba(255,255,255,0.7); 
-    box-shadow: 0 0 12px rgba(255, 255, 255, 0.6);
-  }
-  .desktop-btn.active { 
-    width: 22px; 
-    height: 8px;
-    border-radius: 10px; 
-    background: white; 
-    box-shadow: 0 0 10px rgba(255, 255, 255, 0.5); 
-  }
-  .desktop-btn.active:hover {
-    width: 26px;
-    box-shadow: 0 0 15px rgba(255, 255, 255, 0.8);
-  }
-
-  .taskbar-search {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 4px 12px;
-    border-radius: 6px;
-    color: var(--text-dim);
-    font-size: 13px;
-    cursor: pointer;
-    width: 150px;
-    transition: all 0.2s;
-  }
-  .taskbar-search:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.3);
-    color: white;
-  }
-
-  .start-menu-btn { 
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    width: 36px; 
-    height: 36px; 
-    border-radius: 8px; 
-    cursor: pointer; 
-    transition: background 0.2s; 
-    color: white;
-  }
-  .start-menu-btn:hover { background: rgba(255,255,255,0.1); }
-
-  .active-apps { flex: 1; display: flex; justify-content: flex-start; gap: 8px; padding-left: 10px; }
-  .task-item { background: transparent; border: none; color: var(--text-dim); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 8px; cursor: pointer; position: relative; }
-  .task-item:hover { background: rgba(255,255,255,0.1); }
-  .task-item.active { background: rgba(255,255,255,0.1); color: var(--accent-blue); }
-  .task-item.active::after { content: ''; position: absolute; bottom: 4px; width: 4px; height: 4px; background: var(--accent-blue); border-radius: 50%; }
-  .system-tray { width: 100px; text-align: right; font-size: 13px; color: var(--text-dim); }
-
   .snap-ghost {
     position: absolute;
     background: rgba(var(--accent-blue-rgb, 0, 120, 215), 0.2);
@@ -543,5 +524,25 @@
     pointer-events: none;
     transition: all 0.15s ease-out;
     box-shadow: 0 0 20px rgba(0, 120, 215, 0.3);
+  }
+  .app-loading-state {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px;
+    color: var(--text-dim);
+    background: rgba(2, 6, 23, 0.35);
+  }
+  .app-loading-state h2 {
+    margin: 0;
+    color: var(--text-main);
+    font-size: 16px;
+  }
+  .app-loading-state p {
+    margin: 0;
+    font-size: 13px;
   }
 </style>

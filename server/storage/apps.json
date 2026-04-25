@@ -2,58 +2,282 @@
   {
     "id": "files",
     "title": "File Station",
-    "icon": "Files"
+    "icon": "Files",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "file-explorer",
+    "runtime": "builtin",
+    "permissions": [
+      "system.info"
+    ]
   },
   {
     "id": "terminal",
     "title": "Terminal",
-    "icon": "TerminalIcon"
+    "icon": "TerminalIcon",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "terminal",
+    "runtime": "builtin",
+    "permissions": [
+      "system.info"
+    ]
   },
   {
     "id": "monitor",
     "title": "Resource Monitor",
     "icon": "Monitor",
-    "singleton": true
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "resource-monitor",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
   },
   {
     "id": "docker",
-    "title": "Docker",
+    "title": "Docker Manager",
     "icon": "Container",
-    "singleton": true
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "docker-manager",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
+  },
+  {
+    "id": "settings",
+    "title": "Settings",
+    "icon": "Settings",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "settings",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
   },
   {
     "id": "control-panel",
-    "title": "Settings",
+    "title": "Control Panel",
     "icon": "Settings",
-    "singleton": true
-  },
-  {
-    "id": "transfer",
-    "title": "Transfer",
-    "icon": "Send",
-    "singleton": true
-  },
-  {
-    "id": "player",
-    "title": "Media",
-    "icon": "Video"
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "control-panel",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
   },
   {
     "id": "logs",
     "title": "Log Viewer",
     "icon": "Shield",
-    "singleton": true
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "log-viewer",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
   },
   {
     "id": "package-center",
     "title": "Package Center",
     "icon": "LayoutGrid",
-    "singleton": true
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "package-center",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
+  },
+  {
+    "id": "transfer",
+    "title": "Transfer",
+    "icon": "Send",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "transfer",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
+  },
+  {
+    "id": "player",
+    "title": "Media Player",
+    "icon": "Video",
+    "appModel": "standard",
+    "type": "app",
+    "version": "1.0.0",
+    "entry": "media-player",
+    "runtime": "builtin",
+    "permissions": [],
+    "fileAssociations": [
+      {
+        "extensions": [
+          "mp4",
+          "webm",
+          "mkv",
+          "mov",
+          "avi",
+          "mp3",
+          "wav",
+          "ogg",
+          "flac",
+          "m4a",
+          "jpg",
+          "jpeg",
+          "png",
+          "gif",
+          "webp",
+          "svg"
+        ],
+        "actions": [
+          "preview",
+          "open"
+        ],
+        "defaultAction": "open"
+      }
+    ]
+  },
+  {
+    "id": "doc-viewer",
+    "title": "Document Viewer",
+    "icon": "FileText",
+    "appModel": "standard",
+    "type": "app",
+    "version": "1.0.0",
+    "entry": "document-viewer",
+    "runtime": "builtin",
+    "permissions": [],
+    "fileAssociations": [
+      {
+        "extensions": [
+          "pdf",
+          "txt",
+          "md",
+          "markdown",
+          "json",
+          "csv",
+          "log"
+        ],
+        "actions": [
+          "preview",
+          "open"
+        ],
+        "defaultAction": "open"
+      }
+    ]
+  },
+  {
+    "id": "model-viewer",
+    "title": "Model Viewer",
+    "icon": "Box",
+    "appModel": "standard",
+    "type": "app",
+    "version": "1.0.0",
+    "entry": "model-viewer",
+    "runtime": "builtin",
+    "permissions": [],
+    "fileAssociations": [
+      {
+        "extensions": [
+          "gltf",
+          "glb",
+          "fbx",
+          "obj"
+        ],
+        "actions": [
+          "preview",
+          "open"
+        ],
+        "defaultAction": "open"
+      }
+    ]
+  },
+  {
+    "id": "editor",
+    "title": "Code Editor",
+    "icon": "Code2",
+    "appModel": "standard",
+    "type": "app",
+    "version": "1.0.0",
+    "entry": "code-editor",
+    "runtime": "builtin",
+    "permissions": [],
+    "fileAssociations": [
+      {
+        "extensions": [
+          "txt",
+          "md",
+          "markdown",
+          "json",
+          "js",
+          "ts",
+          "css",
+          "html",
+          "xml",
+          "yml",
+          "yaml",
+          "csv",
+          "log",
+          "svelte",
+          "sh",
+          "py"
+        ],
+        "actions": [
+          "open",
+          "edit"
+        ],
+        "defaultAction": "edit"
+      }
+    ]
   },
   {
     "id": "widget-store",
-    "title": "Widgets",
+    "title": "Widget Store",
     "icon": "LayoutGrid",
-    "singleton": true
+    "appModel": "standard",
+    "type": "developer",
+    "version": "1.0.0",
+    "entry": "widget-store",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [],
+    "dataBoundary": "inventory-app-data",
+    "fileAssociations": [
+      {
+        "extensions": [
+          "webos-widget",
+          "widget.json"
+        ],
+        "actions": [
+          "import",
+          "open"
+        ],
+        "defaultAction": "import"
+      }
+    ]
   }
 ]

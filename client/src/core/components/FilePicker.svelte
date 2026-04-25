@@ -142,12 +142,31 @@
   };
 </script>
 
-<div class="file-picker-overlay" onclick={onCancel}>
-  <div class="file-picker-modal glass-effect" onclick={e => e.stopPropagation()}>
+<div
+  class="file-picker-overlay"
+  role="button"
+  tabindex="-1"
+  onclick={onCancel}
+  onkeydown={(event) => {
+    if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onCancel();
+    }
+  }}
+>
+  <div
+    class="file-picker-modal glass-effect"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="file-picker-title"
+    tabindex="-1"
+    onclick={e => e.stopPropagation()}
+    onkeydown={e => e.stopPropagation()}
+  >
     <header>
       <div class="title-area">
         <ImageIcon size={18} />
-        <span>Select Media</span>
+        <span id="file-picker-title">Select Media</span>
       </div>
       <button class="close-btn" onclick={onCancel}><X size={18} /></button>
     </header>
@@ -169,7 +188,7 @@
     <div class="body">
       <aside class="sidebar">
         <div class="section">
-          <label>Locations</label>
+          <div class="section-label">Locations</div>
           <button class="side-item {currentPath === '/home/inri' ? 'active' : ''}" onclick={() => loadPath('/home/inri')}>
             <Home size={16} /> <span>Home</span>
           </button>
@@ -177,7 +196,7 @@
         
         {#if userDirs.length > 0}
           <div class="section">
-            <label>Shortcuts</label>
+            <div class="section-label">Shortcuts</div>
             {#each userDirs as dir}
               <button class="side-item" onclick={() => loadPath(dir.path)}>
                 <Folder size={16} />
@@ -205,7 +224,8 @@
                   {#if !item.isDirectory && ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(item.name.split('.').pop().toLowerCase())}
                     <img src="/api/fs/raw?path={encodeURIComponent(item.path)}" alt={item.name} loading="lazy" />
                   {:else}
-                    <svelte:component this={getIcon(item)} size={item.isDirectory ? 32 : 24} />
+                    {@const ItemIcon = getIcon(item)}
+                    <ItemIcon size={item.isDirectory ? 32 : 24} />
                   {/if}
                 </div>
                 <span class="name">{item.name}</span>
@@ -264,7 +284,7 @@
   .body { flex: 1; display: flex; overflow: hidden; }
   .sidebar { width: 180px; border-right: 1px solid rgba(255,255,255,0.05); padding: 15px 10px; display: flex; flex-direction: column; gap: 20px; }
   .section { display: flex; flex-direction: column; gap: 5px; }
-  .section label { font-size: 11px; font-weight: 700; color: #555; text-transform: uppercase; padding-left: 10px; }
+  .section-label { font-size: 11px; font-weight: 700; color: #555; text-transform: uppercase; padding-left: 10px; }
   .side-item { 
     display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: none;
     background: transparent; color: #aaa; border-radius: 6px; cursor: pointer; text-align: left;

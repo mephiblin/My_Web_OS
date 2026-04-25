@@ -73,16 +73,37 @@ function classifyDockerError(err, fallbackCode = 'DOCKER_OPERATION_FAILED') {
 
 function parseDockerJsonLines(output) {
   if (!output) return [];
-  return output
+  const text = String(output).trim();
+  if (!text) return [];
+
+  function normalizeParsed(parsed) {
+    if (!parsed) return [];
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item) => item && typeof item === 'object');
+    }
+    if (typeof parsed === 'object') {
+      return [parsed];
+    }
+    return [];
+  }
+
+  try {
+    return normalizeParsed(JSON.parse(text));
+  } catch (_err) {
+    // Fallback: parse newline-delimited JSON output.
+  }
+
+  return text
     .split('\n')
-    .map((line) => {
+    .flatMap((line) => {
+      const candidate = String(line || '').trim();
+      if (!candidate) return [];
       try {
-        return JSON.parse(line);
-      } catch {
-        return null;
+        return normalizeParsed(JSON.parse(candidate));
+      } catch (_err) {
+        return [];
       }
-    })
-    .filter(Boolean);
+    });
 }
 
 module.exports = {

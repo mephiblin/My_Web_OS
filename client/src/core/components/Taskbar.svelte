@@ -35,6 +35,7 @@
     $agentStore.status === 'terminal' ? '#eab308' :
     'var(--accent-blue)'
   );
+  const agentIcon = $derived(resolveAgentIcon());
 
   function resolveWindowIcon(win) {
     if (win.iconComponent) return win.iconComponent;
@@ -78,7 +79,25 @@
       aria-label="Agent Chat"
       style="--agent-status-color: {agentStatusColor};"
     >
-      <svelte:component this={resolveAgentIcon()} size={iconPixel + 1} class={$agentStore.status === 'thinking' ? 'spin' : ''} />
+      <span class:spin={$agentStore.status === 'thinking'}>
+        {#if agentIcon === Ear}
+          <Ear size={iconPixel + 1} />
+        {:else if agentIcon === Loader}
+          <Loader size={iconPixel + 1} />
+        {:else if agentIcon === Play}
+          <Play size={iconPixel + 1} />
+        {:else if agentIcon === CheckCircle}
+          <CheckCircle size={iconPixel + 1} />
+        {:else if agentIcon === AlertTriangle}
+          <AlertTriangle size={iconPixel + 1} />
+        {:else if agentIcon === XCircle}
+          <XCircle size={iconPixel + 1} />
+        {:else if agentIcon === Terminal}
+          <Terminal size={iconPixel + 1} />
+        {:else}
+          <Bot size={iconPixel + 1} />
+        {/if}
+      </span>
     </button>
   {/if}
 
@@ -104,14 +123,15 @@
   {/if}
 
   {#if $taskbarSettings.showSearch}
-    <div class="taskbar-search" onclick={openSpotlight}>
+    <button class="taskbar-search" type="button" onclick={openSpotlight}>
       <Search size={$taskbarSettings.compactMode ? 13 : 14} />
       <span>Search...</span>
-    </div>
+    </button>
   {/if}
 
   <div class="active-apps">
     {#each visibleWindows as win}
+      {@const WindowIcon = resolveWindowIcon(win)}
       <button
         class="task-item {$activeWindowId === win.id && !win.minimized ? 'active' : ''}"
         onclick={() => {
@@ -125,7 +145,7 @@
         {#if win.iconType === 'image' && win.iconUrl}
           <img class="task-icon-image" style:width={`${iconPixel}px`} style:height={`${iconPixel}px`} src={win.iconUrl} alt={win.title} loading="lazy" />
         {:else}
-          <svelte:component this={resolveWindowIcon(win)} size={iconPixel} />
+          <WindowIcon size={iconPixel} />
         {/if}
       </button>
     {/each}
@@ -147,9 +167,9 @@
       </button>
 
       {#if $taskbarSettings.showClock}
-        <div class="time-container" onclick={onToggleNotifications}>
+        <button class="time-container" type="button" onclick={onToggleNotifications}>
           <span class="time">{time}</span>
-        </div>
+        </button>
       {/if}
     </div>
   {/if}
@@ -264,6 +284,7 @@
     cursor: pointer;
     width: 150px;
     transition: all 0.2s;
+    font: inherit;
   }
   .taskbar-search:hover {
     background: rgba(255, 255, 255, 0.1);
@@ -288,7 +309,7 @@
   .icon-wrapper { position: relative; display: flex; align-items: center; justify-content: center; }
   .badge { position: absolute; top: -6px; right: -6px; background: var(--accent-blue); color: white; font-size: 9px; font-weight: 700; min-width: 14px; height: 14px; border-radius: 7px; display: flex; align-items: center; justify-content: center; border: 1px solid #000; }
 
-  .time-container { padding: 0 10px; cursor: pointer; border-radius: 6px; transition: background 0.2s; }
+  .time-container { padding: 0 10px; cursor: pointer; border-radius: 6px; transition: background 0.2s; border: none; background: transparent; font: inherit; }
   .taskbar.compact .time-container { padding: 0 8px; }
   .time-container:hover { background: rgba(255,255,255,0.1); }
   .time { font-size: 13px; font-weight: 500; color: white; }

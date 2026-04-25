@@ -72,7 +72,7 @@
 <svelte:window onmousedown={handleWindowMouseDown} onkeydown={handleWindowKeydown} />
 
 {#if $startMenuState.isOpen}
-  <section class="start-menu glass-effect {$startMenuState.layout}" bind:this={menuEl} role="dialog" aria-label="Start Menu">
+  <div class="start-menu glass-effect {$startMenuState.layout}" bind:this={menuEl} role="dialog" aria-label="Start Menu">
     <div class="menu-header">
       <div class="menu-title">Start</div>
       <div class="menu-count">{filteredApps.length} apps</div>
@@ -98,11 +98,24 @@
               {#if app.iconType === 'image' && app.iconUrl}
                 <img class="app-icon-image" src={app.iconUrl} alt={app.title} loading="lazy" />
               {:else}
-                <svelte:component this={app.iconComponent || LayoutGrid} size={16} />
+                {@const AppIcon = app.iconComponent || LayoutGrid}
+                <AppIcon size={16} />
               {/if}
             </span>
             <span class="app-title">{app.title}</span>
-            <span class="pin-btn" onclick={(event) => { event.stopPropagation(); togglePinnedApp(app.id); }}>Unpin</span>
+            <span
+              class="pin-btn"
+              role="button"
+              tabindex="0"
+              onclick={(event) => { event.stopPropagation(); togglePinnedApp(app.id); }}
+              onkeydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  togglePinnedApp(app.id);
+                }
+              }}
+            >Unpin</span>
           </button>
         {/each}
         <div class="group-label">All Apps</div>
@@ -116,18 +129,31 @@
               {#if app.iconType === 'image' && app.iconUrl}
                 <img class="app-icon-image" src={app.iconUrl} alt={app.title} loading="lazy" />
               {:else}
-                <svelte:component this={app.iconComponent || LayoutGrid} size={16} />
+                {@const AppIcon = app.iconComponent || LayoutGrid}
+                <AppIcon size={16} />
               {/if}
             </span>
             <span class="app-title">{app.title}</span>
-            <span class="pin-btn" onclick={(event) => { event.stopPropagation(); togglePinnedApp(app.id); }}>
+            <span
+              class="pin-btn"
+              role="button"
+              tabindex="0"
+              onclick={(event) => { event.stopPropagation(); togglePinnedApp(app.id); }}
+              onkeydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  togglePinnedApp(app.id);
+                }
+              }}
+            >
               {isPinned(app) ? 'Unpin' : 'Pin'}
             </span>
           </button>
         {/each}
       {/if}
     </div>
-  </section>
+  </div>
 {/if}
 
 <style>
@@ -188,6 +214,7 @@
     color: var(--text-main);
     border: none;
     background: transparent;
+    font: inherit;
     outline: none;
   }
 
@@ -253,6 +280,17 @@
   .pin-btn {
     font-size: 11px;
     color: var(--text-dim);
+    border: none;
+    background: transparent;
+    padding: 2px 4px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .pin-btn:hover,
+  .pin-btn:focus-visible {
+    color: var(--text-main);
+    background: rgba(255, 255, 255, 0.08);
+    outline: none;
   }
   .group-label {
     font-size: 11px;

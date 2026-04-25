@@ -234,9 +234,28 @@
   {/if}
 
   {#if showAddModal}
-    <div class="modal-overlay" onclick={() => showAddModal = false}>
-      <div class="modal glass-effect" onclick={(e) => e.stopPropagation()}>
-        <h3>Add Cloud Storage</h3>
+    <div
+      class="modal-overlay"
+      role="button"
+      tabindex="-1"
+      onclick={() => showAddModal = false}
+      onkeydown={(event) => {
+        if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          showAddModal = false;
+        }
+      }}
+    >
+      <div
+        class="modal glass-effect"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cloud-add-title"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.stopPropagation()}
+      >
+        <h3 id="cloud-add-title">Add Cloud Storage</h3>
         <p>Select a provider and give it a name to start the connection.</p>
         
         <div class="form-group-inc">
@@ -335,4 +354,3 @@
     .write-fields { grid-template-columns: 1fr; }
   }
 </style>
-

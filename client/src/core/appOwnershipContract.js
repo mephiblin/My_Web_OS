@@ -62,6 +62,11 @@ export function normalizeLaunchContract(app = {}) {
 }
 
 export function normalizeDataBoundary(app = {}, launchOrOwner = null, maybeOwner = null) {
+  const explicitBoundary = normalizeText(app?.dataBoundary);
+  if (explicitBoundary === 'host-shared' || explicitBoundary === 'inventory-app-data' || explicitBoundary === 'none') {
+    return explicitBoundary;
+  }
+
   const launch = launchOrOwner && typeof launchOrOwner === 'object' && !Array.isArray(launchOrOwner)
     ? launchOrOwner
     : normalizeLaunchContract(app);

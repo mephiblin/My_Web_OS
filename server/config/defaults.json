@@ -4,7 +4,8 @@
     "nodeEnv": "development",
     "corsOrigin": "*",
     "rateLimitWindowMs": 900000,
-    "rateLimitMax": 10000
+    "rateLimitMax": 10000,
+    "trustProxyHops": 0
   },
   "auth": {
     "adminUsername": "admin"

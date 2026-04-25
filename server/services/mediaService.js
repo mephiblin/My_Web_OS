@@ -5,12 +5,74 @@ const fsp = require('fs').promises;
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mkv', '.mov', '.avi', '.wmv', '.m4v']);
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp', '.avif', '.heic', '.heif']);
+const PDF_EXTENSION = '.pdf';
+const MAX_PDF_PAGE_SCAN_BYTES = 32 * 1024 * 1024;
 
 function classifyMediaKind(ext) {
   const lower = ext.toLowerCase();
   if (AUDIO_EXTENSIONS.has(lower)) return 'audio';
   if (VIDEO_EXTENSIONS.has(lower)) return 'video';
   return null;
+}
+
+function classifyStationKind(ext) {
+  const lower = String(ext || '').toLowerCase();
+  if (AUDIO_EXTENSIONS.has(lower)) return 'audio';
+  if (VIDEO_EXTENSIONS.has(lower)) return 'video';
+  if (IMAGE_EXTENSIONS.has(lower)) return 'image';
+  if (lower === PDF_EXTENSION) return 'document';
+  return 'file';
+}
+
+function parsePdfPageCountFromText(rawText) {
+  const text = typeof rawText === 'string' ? rawText : '';
+  if (!text) return null;
+  const matches = text.match(/\/Type\s*\/Page\b/g);
+  if (!matches || matches.length === 0) return null;
+  return matches.length;
+}
+
+async function readPdfPageCount(filePath) {
+  let stats;
+  try {
+    stats = await fsp.stat(filePath);
+  } catch (_err) {
+    return null;
+  }
+  if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_PDF_PAGE_SCAN_BYTES) return null;
+  const buffer = await fsp.readFile(filePath);
+  return parsePdfPageCountFromText(buffer.toString('latin1'));
+}
+
+function getMetadata(filePath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) return reject(err);
+
+      const format = metadata.format;
+      const videoStream = metadata.streams.find((s) => s.codec_type === 'video');
+      const audioStream = metadata.streams.find((s) => s.codec_type === 'audio');
+
+      resolve({
+        filename: path.basename(filePath),
+        duration: format.duration,
+        size: format.size,
+        format: format.format_name,
+        video: videoStream ? {
+          codec: videoStream.codec_name,
+          width: videoStream.width,
+          height: videoStream.height,
+          fps: eval(videoStream.r_frame_rate)
+        } : null,
+        audio: audioStream ? {
+          codec: audioStream.codec_name,
+          channels: audioStream.channels,
+          sampleRate: audioStream.sample_rate
+        } : null
+      });
+    });
+  });
 }
 
 /**
@@ -20,34 +82,61 @@ const mediaService = {
   /**
    * Get metadata for a media file.
    */
-  getMetadata(filePath) {
-    return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(filePath, (err, metadata) => {
-        if (err) return reject(err);
-        
-        const format = metadata.format;
-        const videoStream = metadata.streams.find(s => s.codec_type === 'video');
-        const audioStream = metadata.streams.find(s => s.codec_type === 'audio');
+  getMetadata,
 
-        resolve({
-          filename: path.basename(filePath),
-          duration: format.duration,
-          size: format.size,
-          format: format.format_name,
-          video: videoStream ? {
-            codec: videoStream.codec_name,
-            width: videoStream.width,
-            height: videoStream.height,
-            fps: eval(videoStream.r_frame_rate)
-          } : null,
-          audio: audioStream ? {
-            codec: audioStream.codec_name,
-            channels: audioStream.channels,
-            sampleRate: audioStream.sample_rate
-          } : null
-        });
-      });
-    });
+  async getStationMetadata(filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    const kind = classifyStationKind(ext);
+    let stats;
+
+    try {
+      stats = await fsp.stat(filePath);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        const notFound = new Error('Path not found.');
+        notFound.status = 404;
+        notFound.code = 'MEDIA_STATION_PATH_NOT_FOUND';
+        throw notFound;
+      }
+      throw err;
+    }
+
+    if (!stats.isFile()) {
+      const invalid = new Error('Path must be a file.');
+      invalid.status = 400;
+      invalid.code = 'MEDIA_STATION_INVALID_PATH';
+      throw invalid;
+    }
+
+    const summary = {
+      kind,
+      durationSeconds: null,
+      resolution: null,
+      pages: null
+    };
+
+    if (kind === 'document' && ext === PDF_EXTENSION) {
+      summary.pages = await readPdfPageCount(filePath);
+      return summary;
+    }
+
+    if (kind !== 'audio' && kind !== 'video' && kind !== 'image') {
+      return summary;
+    }
+
+    const metadata = await getMetadata(filePath);
+    const duration = Number(metadata?.duration);
+    if (Number.isFinite(duration) && duration > 0) {
+      summary.durationSeconds = duration;
+    }
+
+    const width = Number(metadata?.video?.width);
+    const height = Number(metadata?.video?.height);
+    if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+      summary.resolution = { width, height };
+    }
+
+    return summary;
   },
 
   /**
@@ -142,6 +231,10 @@ const mediaService = {
       items,
     };
   },
+};
+
+mediaService.__internal = {
+  parsePdfPageCountFromText
 };
 
 module.exports = mediaService;

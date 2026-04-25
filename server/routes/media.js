@@ -71,6 +71,36 @@ router.get('/info', async (req, res) => {
   }
 });
 
+// Get station summary metadata (duration/resolution/page count)
+router.get('/station-info', async (req, res) => {
+  const { path: requestedPath } = req.query;
+  if (!requestedPath) {
+    return res.status(400).json({
+      error: true,
+      code: 'MEDIA_STATION_PATH_REQUIRED',
+      message: 'Path is required.',
+      details: null,
+    });
+  }
+
+  const filePath = req.safePath || requestedPath;
+
+  try {
+    const metadata = await mediaService.getStationMetadata(filePath);
+    return res.json({
+      path: filePath,
+      metadata,
+    });
+  } catch (err) {
+    return sendMediaError(
+      res,
+      err,
+      'MEDIA_STATION_INFO_FAILED',
+      'Failed to load station metadata.'
+    );
+  }
+});
+
 // Get or generate thumbnail
 router.get('/thumbnail', async (req, res) => {
   const { path: requestedPath } = req.query;

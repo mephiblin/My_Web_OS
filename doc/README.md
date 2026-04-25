@@ -18,6 +18,7 @@
 - `[ARCHIVED]`: 과거 참고용, 신규 작업 기준 아님
 
 ## Root Docs
+- `[ACTIVE]` `AGENTS.md` (로드맵/작업 규약/검증 계약)
 - `[ACTIVE]` `README.md` (개발/에이전트 기준)
 - `[ACTIVE]` `USER_README.md` (사용자/운영자 기준)
 

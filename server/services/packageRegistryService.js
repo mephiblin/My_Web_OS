@@ -2,6 +2,7 @@ const fs = require('fs-extra');
 
 const inventoryPaths = require('../utils/inventoryPaths');
 const appPaths = require('../utils/appPaths');
+const builtinAppsSeed = require('../config/builtinAppsSeed');
 const { normalizeRuntimeProfile, sanitizeProfileForClient } = require('./runtimeProfiles');
 
 const DEFAULT_WINDOW = {
@@ -333,17 +334,34 @@ function normalizeFileAssociations(input, options = {}) {
 async function readBuiltinRegistry() {
   await inventoryPaths.ensureInventoryStructure();
   const appsFile = await inventoryPaths.getAppsRegistryFile();
-  const currentAppsExists = await fs.pathExists(appsFile);
-  if (!currentAppsExists) {
-    return [];
+  const normalizeRegistryRows = (rows) => {
+    if (!Array.isArray(rows)) {
+      return null;
+    }
+    return rows.filter((app) => app && typeof app === 'object' && typeof app.id === 'string');
+  };
+
+  const writeSeedRegistry = async () => {
+    const seeded = normalizeRegistryRows(builtinAppsSeed) || [];
+    await fs.writeJson(appsFile, seeded, { spaces: 2 });
+    return seeded;
+  };
+
+  if (!(await fs.pathExists(appsFile))) {
+    return writeSeedRegistry();
   }
 
-  const currentApps = await fs.readJson(appsFile);
-  if (!Array.isArray(currentApps)) {
-    return [];
+  try {
+    const currentApps = await fs.readJson(appsFile);
+    const normalized = normalizeRegistryRows(currentApps);
+    if (normalized) {
+      return normalized;
+    }
+  } catch (err) {
+    console.warn(`[PACKAGES] Failed to read builtin registry (${appsFile}): ${err.message}`);
   }
 
-  return currentApps.filter((app) => app && typeof app === 'object' && typeof app.id === 'string');
+  return writeSeedRegistry();
 }
 
 function normalizeWindow(value) {
@@ -370,6 +388,7 @@ function normalizeBuiltinApp(app) {
   const normalizedFileAssociations = normalizeFileAssociations(app.fileAssociations);
   const normalizedWindow = normalizeWindow(app.window);
   const builtinType = appModel === APP_MODELS.SYSTEM ? 'system' : 'app';
+  const normalizedAppType = String(app.appType || app.type || builtinType).trim() || builtinType;
 
   return {
     ...app,
@@ -377,8 +396,8 @@ function normalizeBuiltinApp(app) {
     description: normalizedDescription,
     version: normalizedVersion,
     appModel,
-    type: app.type || builtinType,
-    appType: app.appType || builtinType,
+    type: String(app.type || builtinType).trim() || builtinType,
+    appType: normalizedAppType,
     entry: normalizedEntry,
     runtime: 'builtin',
     runtimeType: 'builtin',
@@ -402,7 +421,7 @@ function normalizeBuiltinApp(app) {
       title: normalizedTitle,
       description: normalizedDescription,
       version: normalizedVersion,
-      type: builtinType,
+      type: normalizedAppType,
       runtime: {
         type: 'builtin',
         entry: normalizedEntry

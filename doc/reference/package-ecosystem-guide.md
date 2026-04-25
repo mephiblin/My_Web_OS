@@ -65,3 +65,28 @@ Before release:
 - verify backup/rollback path for updates
 - verify permissions are minimal
 
+## 6. Backup / Rollback Operations
+
+Key lifecycle endpoints:
+
+- `GET /api/packages/:id/lifecycle`
+- `GET /api/packages/:id/backup-policy`
+- `PUT /api/packages/:id/backup-policy`
+- `POST /api/packages/:id/backup`
+- `GET /api/packages/:id/backup-jobs`
+- `POST /api/packages/:id/backup-jobs`
+- `POST /api/packages/:id/backup-jobs/:jobId/cancel`
+- `POST /api/packages/:id/rollback/preflight`
+
+Policy notes:
+
+- `backupPolicy.maxBackups` controls retention pruning.
+- `backupPolicy.schedule` is metadata today (execution wiring is roadmap scope).
+- nonexistent app requests return `PACKAGE_NOT_FOUND`.
+- cancel is only valid while backup job status is `queued`.
+
+## 7. Test / Verification Notes
+
+- Use root `npm test` as canonical server verification path.
+- Direct parallel multi-file `node --test` can intermittently fail due shared storage state races.
+- For focused file lists, prefer `node --test --test-concurrency=1 ...`.

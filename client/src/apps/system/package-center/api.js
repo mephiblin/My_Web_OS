@@ -51,6 +51,17 @@ export async function fetchPackageLifecycle(appId) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/lifecycle`);
 }
 
+export async function fetchPackageBackupPolicy(appId) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/backup-policy`);
+}
+
+export async function updatePackageBackupPolicy(appId, policy) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/backup-policy`, {
+    method: 'PUT',
+    body: JSON.stringify(policy)
+  });
+}
+
 export async function fetchPackageManifest(appId) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/manifest`);
 }
@@ -96,6 +107,25 @@ export async function createPackageBackup(appId, note) {
   });
 }
 
+export async function fetchPackageBackupJobs(appId, limit = 50) {
+  return apiFetch(
+    `/api/packages/${encodeAppId(appId)}/backup-jobs?limit=${encodeURIComponent(limit)}`
+  );
+}
+
+export async function createPackageBackupJob(appId, note) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/backup-jobs`, {
+    method: 'POST',
+    body: JSON.stringify({ note })
+  });
+}
+
+export async function cancelPackageBackupJob(appId, jobId) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/backup-jobs/${encodeURIComponent(String(jobId || ''))}/cancel`, {
+    method: 'POST'
+  });
+}
+
 export async function rollbackPackageBackup(appId, backupId) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}/rollback`, {
     method: 'POST',
@@ -125,6 +155,16 @@ export async function stopRuntimeApp(appId) {
 export async function removeInstalledPackage(appId) {
   return apiFetch(`/api/packages/${encodeAppId(appId)}`, {
     method: 'DELETE'
+  });
+}
+
+export async function cloneInstalledPackage(appId, targetId, title = '') {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/clone`, {
+    method: 'POST',
+    body: JSON.stringify({
+      targetId: String(targetId || '').trim(),
+      title: String(title || '').trim()
+    })
   });
 }
 
@@ -195,12 +235,12 @@ export async function wizardPreflightPackage(manifest, templateId) {
   });
 }
 
-export async function wizardCreatePackage(manifest) {
+export async function wizardCreatePackage(manifest, templateId = '') {
   return apiFetch('/api/packages/wizard/create', {
     method: 'POST',
     body: JSON.stringify({
-      manifest: manifest || {}
+      manifest: manifest || {},
+      ...(templateId ? { templateId: String(templateId) } : {})
     })
   });
 }
-

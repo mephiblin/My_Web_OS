@@ -22,6 +22,8 @@
   let viewMode = $state('grid');
   let inventoryPath = $state('');
   let allowedRoots = $state([]);
+  let activeFileGrants = $state([]);
+  let showGrantPanel = $state(false);
   let lockedFolders = $state(JSON.parse(localStorage.getItem('web_os_locked_folders') || '[]'));
 
   // Search & Trash State
@@ -34,6 +36,9 @@
   let desktopApps = $state([]);
   let transferJobs = $state([]);
   let transferPolling = $state(null);
+  let cloudUploadPolling = $state(null);
+  let cloudUploadStatusAvailable = $state(true);
+  let cancelingUploadIds = $state(new Set());
 
   // Preview State
   let previewContent = $state(null);
@@ -81,6 +86,127 @@
   }
 
   const transferRunningCount = $derived(transferJobs.filter((item) => isRunningStatus(item.status)).length);
+
+  const canonicalUploadStatus = (item) => {
+    const value = String(item?.status || '').toLowerCase();
+    if (value === 'pending') return 'queued';
+    if (value === 'uploading' || value === 'active' || value === 'working') return 'running';
+    if (value === 'done' || value === 'success' || value === 'complete') return 'completed';
+    if (value === 'error') return 'failed';
+    if (value === 'cancelled') return 'canceled';
+    return value || 'unknown';
+  };
+
+  const activeUploadCount = $derived(uploadQueue.filter((item) => ['queued', 'running'].includes(canonicalUploadStatus(item))).length);
+  const completedUploadCount = $derived(uploadQueue.filter((item) => canonicalUploadStatus(item) === 'completed').length);
+
+  function isTerminalUploadStatus(status) {
+    return ['completed', 'failed', 'canceled'].includes(String(status || '').toLowerCase());
+  }
+
+  function isCloudUpload(item) {
+    return String(item?.path || '').startsWith('cloud://') || Boolean(item?.cloudJobId);
+  }
+
+  function uploadFileName(item) {
+    return item?.file?.name || item?.fileName || 'upload.bin';
+  }
+
+  function uploadStatusLabel(item) {
+    const status = canonicalUploadStatus(item);
+    const labels = {
+      queued: 'Queued',
+      running: 'Running',
+      completed: 'Completed',
+      failed: 'Failed',
+      canceled: 'Canceled'
+    };
+    return labels[status] || 'Unknown';
+  }
+
+  function uploadStatusClass(item) {
+    const status = canonicalUploadStatus(item);
+    if (status === 'completed') return 'success';
+    if (status === 'failed') return 'err';
+    if (status === 'canceled') return 'canceled';
+    if (status === 'running') return 'running';
+    return 'pending';
+  }
+
+  function shouldShowProgress(item) {
+    const status = canonicalUploadStatus(item);
+    return status === 'running' || (status === 'queued' && Number(item?.progress || 0) > 0);
+  }
+
+  function isUploadCancelable(item) {
+    const status = canonicalUploadStatus(item);
+    return ['queued', 'running'].includes(status) && item?.cancelUnavailable !== true;
+  }
+
+  function applyCloudUploadJob(job) {
+    if (!job?.id) return;
+    const existing = uploadQueue.find((item) => item.cloudJobId === job.id || item.id === job.id);
+    const previousStatus = existing ? canonicalUploadStatus(existing) : '';
+    const nextStatus = job.status === 'completed' ? 'done'
+      : job.status === 'failed' ? 'error'
+      : job.status || 'running';
+
+    if (existing) {
+      existing.cloudJobId = job.id;
+      existing.status = nextStatus;
+      existing.progress = job.progress;
+      existing.errorMessage = job.error || '';
+      existing.cancelUnavailable = job.cancelable === false;
+      existing.fileName = job.fileName || existing.fileName || uploadFileName(existing);
+    } else {
+      uploadQueue.push({
+        id: job.id,
+        cloudJobId: job.id,
+        file: null,
+        fileName: job.fileName || job.id,
+        path: job.remote ? `cloud://${job.remote}/${job.path || ''}` : '',
+        progress: job.progress,
+        status: nextStatus,
+        errorMessage: job.error || '',
+        cancelUnavailable: job.cancelable === false
+      });
+    }
+
+    const current = existing || uploadQueue[uploadQueue.length - 1];
+    const currentStatus = canonicalUploadStatus(current);
+    if (previousStatus && previousStatus !== currentStatus && isTerminalUploadStatus(currentStatus) && !current.notified) {
+      current.notified = true;
+      if (currentStatus === 'completed') {
+        addToast(`Uploaded ${uploadFileName(current)}`, 'success');
+        agentStore.notifyUploadComplete();
+        if (current.path === currentPath) fetchItems(currentPath);
+      } else if (currentStatus === 'failed') {
+        agentStore.notifyError(`Upload failed: ${uploadFileName(current)}`);
+      }
+    }
+  }
+
+  async function refreshCloudUploadStatus() {
+    if (!cloudUploadStatusAvailable) return;
+    try {
+      const payload = await fsApi.listCloudUploadJobs();
+      const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+      for (const job of jobs) applyCloudUploadJob(job);
+      uploadQueue = [...uploadQueue];
+      const hasActiveCloudUpload = uploadQueue.some((item) => isCloudUpload(item) && ['queued', 'running'].includes(canonicalUploadStatus(item)));
+      if (!hasActiveCloudUpload && cloudUploadPolling) {
+        clearInterval(cloudUploadPolling);
+        cloudUploadPolling = null;
+      }
+    } catch (_err) {
+      cloudUploadStatusAvailable = false;
+    }
+  }
+
+  function startCloudUploadPolling() {
+    if (cloudUploadPolling || !cloudUploadStatusAvailable) return;
+    cloudUploadPolling = setInterval(() => refreshCloudUploadStatus(), 2500);
+  }
 
   function getFileExtension(fileName = '') {
     const segments = String(fileName || '').split('.');
@@ -151,6 +277,9 @@
     const mode = action === 'edit' ? 'readwrite' : 'read';
     const grantResponse = await fsApi.createFileGrant(item.path, mode, appId, 'file-station').catch(() => null);
     const grant = grantResponse?.grant || null;
+    if (grant?.id) {
+      loadActiveFileGrants().catch(() => {});
+    }
     const fileContext = {
       source: 'file-station',
       file: {
@@ -203,12 +332,28 @@
     
     // Add Cloud Remotes
     cloudRemotes.forEach(remote => {
-      links.push({ id: `cloud-${remote.name}`, label: remote.name, icon: Cloud, path: `cloud://${remote.name}/` });
+      links.push({
+        id: `cloud-${remote.name}`,
+        label: remote.name,
+        icon: Cloud,
+        path: `cloud://${remote.name}/`,
+        mountStatus: String(remote?.mountStatus || 'unmounted').toLowerCase(),
+        mountUrl: String(remote?.mountUrl || '')
+      });
     });
 
     links.push({ id: 'trash', label: 'Trash', icon: Trash2, path: 'trash' });
 
     return links;
+  }
+
+  async function loadActiveFileGrants() {
+    try {
+      const response = await fsApi.fetchActiveFileGrants('file-station');
+      activeFileGrants = Array.isArray(response?.grants) ? response.grants : [];
+    } catch (_err) {
+      activeFileGrants = [];
+    }
   }
 
   function handleContextMenu(e, item) {
@@ -281,6 +426,19 @@
         const parts = path.replace('cloud://', '').split('/');
         const remote = parts[0];
         const remotePath = parts.slice(1).join('/');
+        const remoteMeta = cloudRemotes.find((item) => item?.name === remote) || null;
+        const mountStatus = String(remoteMeta?.mountStatus || '').toLowerCase();
+        if (!remoteMeta || mountStatus !== 'mounted') {
+          notifications.add({
+            title: 'Cloud',
+            message: `Mounting ${remote}...`,
+            type: 'info'
+          });
+          await fsApi.mountCloudRemote(remote);
+          cloudRemotes = await fsApi.fetchCloudRemotes();
+          const userDirs = await fsApi.fetchUserDirs();
+          sidebarLinks = buildSidebarLinks(userDirs.home || initialPath, userDirs);
+        }
         const data = await fsApi.listCloudDir(remote, remotePath);
         items = data.map(item => ({
           ...item,
@@ -501,6 +659,20 @@
 
   function generateId() { return Math.random().toString(36).substr(2, 9); }
 
+  function createUploadCanceledError() {
+    const err = new Error('Upload canceled.');
+    err.code = 'UPLOAD_CANCELED';
+    return err;
+  }
+
+  function resolveCloudPathParts(path) {
+    const normalized = String(path || '').replace(/^cloud:\/\//, '');
+    const segments = normalized.split('/');
+    const remote = String(segments.shift() || '').trim();
+    const remotePath = segments.join('/');
+    return { remote, remotePath };
+  }
+
   function handleDragOver(e) {
     e.preventDefault();
     isDragging = true;
@@ -513,11 +685,6 @@
     e.preventDefault();
     isDragging = false;
     
-    if (currentPath.startsWith('cloud://')) {
-       addToast('Uploading directly to cloud via UI not supported yet.', 'warning');
-       return;
-    }
-
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       for (const file of e.dataTransfer.files) {
          uploadQueue.push({ file, path: currentPath, progress: 0, status: 'pending', id: generateId() });
@@ -533,31 +700,80 @@
     if (!next) return;
 
     currentUpload = next;
-    currentUpload.status = 'uploading';
+    currentUpload.status = isCloudUpload(currentUpload) ? 'running' : 'uploading';
     uploadQueue = [...uploadQueue];
 
-    const chunkSize = 1024 * 1024 * 5; // 5MB
-    const totalChunks = Math.max(1, Math.ceil(currentUpload.file.size / chunkSize));
-    const uploadId = currentUpload.id;
-
+    let deferredCloudJob = false;
     try {
-      for (let i = 0; i < totalChunks; i++) {
-         const start = i * chunkSize;
-         const end = Math.min(start + chunkSize, currentUpload.file.size);
-         const chunk = currentUpload.file.slice(start, end);
+      if (String(currentUpload.path || '').startsWith('cloud://')) {
+        const { remote, remotePath } = resolveCloudPathParts(currentUpload.path);
+        if (!remote) {
+          throw new Error('Invalid cloud remote path.');
+        }
+        if (currentUpload.status === 'canceled') {
+          throw createUploadCanceledError();
+        }
+        const result = await fsApi.uploadCloudFile(remote, remotePath, currentUpload.file);
+        const job = result?.cloudUploadJob || null;
+        if (job?.id) {
+          currentUpload.cloudJobId = job.id;
+          currentUpload.status = job.status || 'running';
+          currentUpload.progress = job.progress || 0;
+          currentUpload.errorMessage = job.error || '';
+          currentUpload.cancelUnavailable = job.cancelable === false;
+          uploadQueue = [...uploadQueue];
 
-         await fsApi.uploadChunk(currentUpload.path, chunk, uploadId, i, totalChunks, currentUpload.file.name);
-         currentUpload.progress = Math.round(((i + 1) / totalChunks) * 100);
-         uploadQueue = [...uploadQueue];
+          if (!isTerminalUploadStatus(canonicalUploadStatus(currentUpload))) {
+            cloudUploadStatusAvailable = true;
+            startCloudUploadPolling();
+            deferredCloudJob = true;
+          }
+        }
+        const cloudStatus = canonicalUploadStatus(currentUpload);
+        if (!deferredCloudJob && cloudStatus === 'canceled') {
+          throw createUploadCanceledError();
+        }
+        if (!deferredCloudJob && cloudStatus === 'failed') {
+          throw new Error(currentUpload.errorMessage || 'Cloud upload failed.');
+        }
+        if (!deferredCloudJob && cloudStatus === 'completed') {
+          currentUpload.progress = 100;
+          uploadQueue = [...uploadQueue];
+        }
+      } else {
+        const chunkSize = 1024 * 1024 * 5; // 5MB
+        const totalChunks = Math.max(1, Math.ceil(currentUpload.file.size / chunkSize));
+        const uploadId = currentUpload.id;
+
+        for (let i = 0; i < totalChunks; i++) {
+           if (currentUpload.status === 'canceled') {
+             throw createUploadCanceledError();
+           }
+           const start = i * chunkSize;
+           const end = Math.min(start + chunkSize, currentUpload.file.size);
+           const chunk = currentUpload.file.slice(start, end);
+
+           await fsApi.uploadChunk(currentUpload.path, chunk, uploadId, i, totalChunks, currentUpload.file.name);
+           currentUpload.progress = Math.round(((i + 1) / totalChunks) * 100);
+           uploadQueue = [...uploadQueue];
+        }
       }
-      currentUpload.status = 'done';
-      addToast(`Uploaded ${currentUpload.file.name}`, 'success');
-      agentStore.notifyUploadComplete();
-      if (currentUpload.path === currentPath) fetchItems(currentPath);
+      if (!deferredCloudJob) {
+        currentUpload.status = 'done';
+        addToast(`Uploaded ${uploadFileName(currentUpload)}`, 'success');
+        agentStore.notifyUploadComplete();
+        if (currentUpload.path === currentPath) fetchItems(currentPath);
+      }
     } catch (e) {
-      currentUpload.status = 'error';
-      notifyApiError(e, 'Upload Failed');
-      agentStore.notifyError(`Upload failed: ${currentUpload.file.name}`);
+      if (e?.code === 'UPLOAD_CANCELED') {
+        currentUpload.status = 'canceled';
+        currentUpload.errorMessage = '';
+      } else {
+        currentUpload.status = 'error';
+        currentUpload.errorMessage = e?.message || 'Upload failed.';
+        notifyApiError(e, 'Upload Failed');
+        agentStore.notifyError(`Upload failed: ${uploadFileName(currentUpload)}`);
+      }
     }
 
     currentUpload = null;
@@ -566,7 +782,67 @@
   }
 
   function clearUploads() {
-    uploadQueue = uploadQueue.filter(u => u.status === 'pending' || u.status === 'uploading');
+    uploadQueue = uploadQueue.filter((u) => ['queued', 'running'].includes(canonicalUploadStatus(u)));
+  }
+
+  async function cancelUpload(uploadId) {
+    const target = uploadQueue.find((item) => item.id === uploadId);
+    if (!target) return;
+
+    if (!isUploadCancelable(target)) return;
+
+    if (target.cloudJobId) {
+      const nextSet = new Set(cancelingUploadIds);
+      nextSet.add(uploadId);
+      cancelingUploadIds = nextSet;
+      try {
+        await fsApi.cancelCloudUploadJob(target.cloudJobId);
+        target.status = 'canceled';
+        target.errorMessage = '';
+        addToast(`Cancel accepted for ${uploadFileName(target)}`, 'info');
+      } catch (err) {
+        target.cancelUnavailable = true;
+        target.errorMessage = err?.message || 'Cancel unavailable for this upload.';
+        notifyApiError(err, 'Cloud Upload Cancel Failed');
+      } finally {
+        const doneSet = new Set(cancelingUploadIds);
+        doneSet.delete(uploadId);
+        cancelingUploadIds = doneSet;
+        uploadQueue = [...uploadQueue];
+      }
+      return;
+    }
+
+    if (isCloudUpload(target) && canonicalUploadStatus(target) === 'running') {
+      target.cancelUnavailable = true;
+      target.errorMessage = 'Cancel unavailable until the backend exposes this upload as a job.';
+      addToast('Cancel is unavailable for this cloud upload.', 'warning');
+      uploadQueue = [...uploadQueue];
+      return;
+    }
+
+    if (['queued', 'running'].includes(canonicalUploadStatus(target))) {
+      target.status = 'canceled';
+      target.errorMessage = '';
+      uploadQueue = [...uploadQueue];
+      addToast(`Cancel accepted for ${uploadFileName(target)}`, 'info');
+    }
+  }
+
+  function retryUpload(uploadId) {
+    const target = uploadQueue.find((item) => item.id === uploadId);
+    if (!target) return;
+    const status = canonicalUploadStatus(target);
+    if (status === 'failed' || status === 'canceled') {
+      target.status = 'pending';
+      target.progress = 0;
+      target.errorMessage = '';
+      target.cloudJobId = '';
+      target.cancelUnavailable = false;
+      target.notified = false;
+      uploadQueue = [...uploadQueue];
+      processUploadQueue();
+    }
   }
 
   async function createFile() {
@@ -634,11 +910,12 @@
 
   onMount(async () => {
     try {
-      const [config, userDirs, remotes, apps] = await Promise.all([
+      const [config, userDirs, remotes, apps, grants] = await Promise.all([
         fsApi.fetchConfig(),
         fsApi.fetchUserDirs(),
         fsApi.fetchCloudRemotes(),
-        fsApi.fetchDesktopApps()
+        fsApi.fetchDesktopApps(),
+        fsApi.fetchActiveFileGrants('file-station').catch(() => ({ grants: [] }))
       ]);
 
       if (config.initialPath) {
@@ -649,6 +926,7 @@
 
       cloudRemotes = remotes || [];
       desktopApps = Array.isArray(apps) ? apps : [];
+      activeFileGrants = Array.isArray(grants?.grants) ? grants.grants : [];
       inventoryPath = userDirs._inventoryPath || '';
       sidebarLinks = buildSidebarLinks(userDirs.home || initialPath, userDirs);
     } catch (e) {
@@ -657,8 +935,10 @@
     fetchItems(currentPath);
     refreshTransferStatus();
     transferPolling = setInterval(() => refreshTransferStatus(), 3000);
+    refreshCloudUploadStatus();
     return () => {
       if (transferPolling) clearInterval(transferPolling);
+      if (cloudUploadPolling) clearInterval(cloudUploadPolling);
     };
   });
 
@@ -692,7 +972,17 @@
   }
 </script>
 
-<div class="file-explorer" oncontextmenu={(e) => handleContextMenu(e, null)} onclick={() => selectedItem = null}>
+<div
+  class="file-explorer"
+  role="button"
+  aria-label="File Station workspace"
+  tabindex="-1"
+  oncontextmenu={(e) => handleContextMenu(e, null)}
+  onclick={() => selectedItem = null}
+  onkeydown={(event) => {
+    if (event.key === 'Escape') selectedItem = null;
+  }}
+>
   <div class="toolbar">
     <div class="nav-controls">
       <button onclick={goBack} disabled={currentPath === '/'}><ChevronLeft size={16} /></button>
@@ -757,15 +1047,50 @@
       <div class="sidebar-section">
         <h3>Places</h3>
         {#if allowedRoots.length > 0}
-          <div class="allowed-roots-hint">Allowed roots: {allowedRoots.length}</div>
+          <button
+            class="allowed-roots-hint"
+            onclick={() => (showGrantPanel = !showGrantPanel)}
+            title="Show allowed roots and active file grants"
+          >
+            Allowed roots: {allowedRoots.length} | Active grants: {activeFileGrants.length}
+          </button>
+          {#if showGrantPanel}
+            <div class="grants-panel">
+              <div class="grants-label">Allowed Roots</div>
+              <div class="grants-list">
+                {#each allowedRoots as root}
+                  <code>{root}</code>
+                {/each}
+              </div>
+              <div class="grants-label">Active File Grants (file-station)</div>
+              {#if activeFileGrants.length === 0}
+                <div class="runtime-log-empty">No active grants.</div>
+              {:else}
+                <div class="grants-list">
+                  {#each activeFileGrants as grant}
+                    <div class="grant-row">
+                      <span>{grant.mode}</span>
+                      <code>{grant.path}</code>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
         {/if}
         {#each sidebarLinks as link}
-          <button 
+          {@const LinkIcon = link.icon}
+          <button
             class="sidebar-item {currentPath === link.path ? 'active' : ''}" 
             onclick={() => fetchItems(link.path)}
           >
-            <svelte:component this={link.icon} size={16} />
+            <LinkIcon size={16} />
             <span>{link.label}</span>
+            {#if link.id.startsWith('cloud-')}
+              <span class="cloud-status {link.mountStatus || 'unmounted'}" title={link.mountUrl || (link.mountStatus || 'unmounted')}>
+                {link.mountStatus === 'mounted' ? 'mounted' : (link.mountStatus || 'unmounted')}
+              </span>
+            {/if}
           </button>
         {/each}
         <div style="height: 12px;"></div>
@@ -788,9 +1113,20 @@
           {#each filteredItems as item}
             <div
               class="item {selectedItem?.path === item.path ? 'selected' : ''}"
+              role="button"
+              tabindex="0"
               onclick={(e) => handleItemClick(e, item)}
               ondblclick={() => handleDblClick(item)}
               oncontextmenu={(e) => handleContextMenu(e, item)}
+              onkeydown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleDblClick(item);
+                } else if (event.key === ' ') {
+                  event.preventDefault();
+                  handleItemClick(event, item);
+                }
+              }}
             >
               <div class="icon">
                 {#if item.isDirectory}
@@ -840,25 +1176,36 @@
   {#if uploadQueue.length > 0}
   <div class="upload-popover glass-effect">
     <div class="popover-header">
-       <span>Transfers ({uploadQueue.filter(u => u.status === 'done').length}/{uploadQueue.length})</span>
+       <span>Transfers ({completedUploadCount}/{uploadQueue.length}){#if activeUploadCount > 0} <em>{activeUploadCount} active</em>{/if}</span>
        <button onclick={clearUploads}>X</button>
     </div>
     <div class="upload-list">
        {#each uploadQueue as u}
          <div class="upload-item">
-           <span class="u-name" title={u.file.name}>{u.file.name}</span>
-           {#if u.status === 'uploading'}
+           <span class="u-name" title={uploadFileName(u)}>{uploadFileName(u)}</span>
+           {#if shouldShowProgress(u)}
              <div class="u-progress-bg">
                <div class="u-progress-bar" style="width: {u.progress}%"></div>
              </div>
-           {:else if u.status === 'done'}
-             <span class="u-status success">Done</span>
-           {:else if u.status === 'error'}
-             <span class="u-status err">Failed</span>
            {:else}
-             <span class="u-status pending">Pending</span>
+             <span class="u-status {uploadStatusClass(u)}">{uploadStatusLabel(u)}</span>
+           {/if}
+           {#if isUploadCancelable(u)}
+             <button
+               class="u-action danger"
+               onclick={() => cancelUpload(u.id)}
+               disabled={cancelingUploadIds.has(u.id)}
+               title="Cancel upload"
+             >
+               {cancelingUploadIds.has(u.id) ? 'Canceling' : 'Cancel'}
+             </button>
+           {:else if canonicalUploadStatus(u) === 'failed' || canonicalUploadStatus(u) === 'canceled'}
+             <button class="u-action" onclick={() => retryUpload(u.id)} title="Retry upload">Retry</button>
            {/if}
          </div>
+         {#if u.errorMessage}
+           <div class="u-error">{u.errorMessage}</div>
+         {/if}
        {/each}
     </div>
   </div>
@@ -903,17 +1250,17 @@
       <div class="share-dialog glass-effect" onclick={(e) => e.stopPropagation()} role="presentation">
          <div class="share-header">Add Network Drive (WebDAV)</div>
          <div class="share-body" style="gap: 8px;">
-           <label class="share-label" style="text-align: left;">Name (Alias)</label>
-           <input class="link-input" type="text" placeholder="e.g. MyNAS" bind:value={cloudName} />
+           <label class="share-label" style="text-align: left;" for="cloudName">Name (Alias)</label>
+           <input id="cloudName" class="link-input" type="text" placeholder="e.g. MyNAS" bind:value={cloudName} />
            
-           <label class="share-label" style="text-align: left;">WebDAV URL</label>
-           <input class="link-input" type="text" placeholder="http://192.168.1.100:5005/webdav" bind:value={cloudUrl} />
+           <label class="share-label" style="text-align: left;" for="cloudUrl">WebDAV URL</label>
+           <input id="cloudUrl" class="link-input" type="text" placeholder="http://192.168.1.100:5005/webdav" bind:value={cloudUrl} />
            
-           <label class="share-label" style="text-align: left;">Username (Optional)</label>
-           <input class="link-input" type="text" placeholder="admin" bind:value={cloudUser} />
+           <label class="share-label" style="text-align: left;" for="cloudUser">Username (Optional)</label>
+           <input id="cloudUser" class="link-input" type="text" placeholder="admin" bind:value={cloudUser} />
            
-           <label class="share-label" style="text-align: left;">Password (Optional)</label>
-           <input class="link-input" type="password" placeholder="password123" bind:value={cloudPass} />
+           <label class="share-label" style="text-align: left;" for="cloudPass">Password (Optional)</label>
+           <input id="cloudPass" class="link-input" type="password" placeholder="password123" bind:value={cloudPass} />
          </div>
          <div class="share-footer">
            <button class="share-btn cancel" onclick={() => showAddCloudDialog = false}>Cancel</button>
@@ -967,10 +1314,86 @@
   .layout-body { flex: 1; display: flex; overflow: hidden; }
   .sidebar { width: 180px; background: rgba(0,0,0,0.15); border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; padding: 12px 8px; flex-shrink: 0; }
   .sidebar-section h3 { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin: 0 0 8px 8px; letter-spacing: 0.5px; }
-  .allowed-roots-hint { font-size: 11px; color: var(--text-dim); margin: 0 0 8px 8px; opacity: 0.85; }
+  .allowed-roots-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin: 0 0 8px 8px;
+    opacity: 0.9;
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.04);
+    padding: 6px 8px;
+    width: calc(100% - 16px);
+    text-align: left;
+    cursor: pointer;
+  }
+  .allowed-roots-hint:hover {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-main);
+  }
+  .grants-panel {
+    margin: 0 0 10px 8px;
+    padding: 8px;
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    background: rgba(0,0,0,0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .grants-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+  .grants-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 120px;
+    overflow: auto;
+  }
+  .grants-list code {
+    font-size: 10px;
+    color: #dbeafe;
+    word-break: break-all;
+  }
+  .grant-row {
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 4px;
+    padding: 4px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .grant-row span {
+    font-size: 10px;
+    color: #9fb3cc;
+    text-transform: uppercase;
+  }
   .sidebar-item { background: transparent; border: none; color: var(--text-main); display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; cursor: pointer; width: 100%; text-align: left; font-size: 13px; transition: all 0.2s; }
   .sidebar-item:hover { background: rgba(255,255,255,0.08); }
   .sidebar-item.active { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); font-weight: 500; }
+  .cloud-status {
+    margin-left: auto;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: var(--text-dim);
+  }
+  .cloud-status.mounted {
+    color: #7ee787;
+    border-color: rgba(126, 231, 135, 0.45);
+    background: rgba(126, 231, 135, 0.14);
+  }
+  .cloud-status.unmounted {
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.35);
+    background: rgba(245, 158, 11, 0.12);
+  }
 
   .content-area { flex: 1; overflow: auto; padding: 20px; }
   .view-container.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 20px; }
@@ -1037,6 +1460,7 @@
     z-index: 100;
   }
   .popover-header { padding: 8px 12px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--glass-border); font-size: 12px; font-weight: bold; }
+  .popover-header em { margin-left: 4px; color: var(--text-dim); font-style: normal; font-weight: 500; }
   .popover-header button { background: none; border: none; color: var(--text-dim); cursor: pointer; }
   .popover-header button:hover { color: white; }
   .upload-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
@@ -1047,6 +1471,21 @@
   .u-status { font-weight: 500; font-size: 10px; }
   .u-status.success { color: #4CAF50; }
   .u-status.err { color: #F44336; }
+  .u-status.canceled { color: #fbbf24; }
+  .u-status.running { color: var(--accent-blue); }
+  .u-status.pending { color: var(--text-dim); }
+  .u-action {
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.6);
+    color: #e2e8f0;
+    font-size: 10px;
+    padding: 2px 6px;
+    cursor: pointer;
+  }
+  .u-action.danger { color: #fecaca; border-color: rgba(248, 113, 113, 0.45); }
+  .u-action:disabled { opacity: 0.55; cursor: wait; }
+  .u-error { font-size: 10px; color: #fca5a5; margin-top: -4px; }
 
   /* Share Dialog */
   .share-dialog-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }

@@ -24,8 +24,8 @@
   let { data = {} } = $props();
   
   // Synchronized state for navigation
-  let currentPath = $state(data?.path || '');
-  let lastPropPath = $state(data?.path || '');
+  let currentPath = $state('');
+  let lastPropPath = $state('');
   let mediaPath = $derived(currentPath);
   
   let isVideo = $derived(mediaPath.match(/\.(mp4|webm|mkv|mov|avi)$/i));
@@ -340,7 +340,7 @@
   });
 </script>
 
-<div class="media-player-app" oncontextmenu={(e) => e.preventDefault()} tabindex="-1">
+<div class="media-player-app" role="button" aria-label="Media player" oncontextmenu={(e) => e.preventDefault()} tabindex="-1">
   <div class="player-container glass-effect">
     {#if isVideo}
       <!-- svelte-ignore a11y_media_has_caption -->
@@ -361,7 +361,7 @@
       </video>
     {:else if isAudio}
       <div class="audio-visual">
-        <Music size={120} class="music-icon" />
+        <span class="music-icon"><Music size={120} /></span>
         <audio 
           bind:this={audioEl}
           src={mediaUrl}
@@ -373,7 +373,20 @@
         ></audio>
       </div>
     {:else if isImage}
-      <div class="image-viewer" ontouchstart={() => zoomed = !zoomed} ondblclick={() => zoomed = !zoomed} tabindex="0">
+      <div
+        class="image-viewer"
+        role="button"
+        aria-label="Toggle image zoom"
+        ontouchstart={() => zoomed = !zoomed}
+        ondblclick={() => zoomed = !zoomed}
+        tabindex="0"
+        onkeydown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            zoomed = !zoomed;
+          }
+        }}
+      >
         <img 
           src={mediaUrl} 
           alt={mediaPath} 
@@ -455,7 +468,7 @@
       <Info size={16} /> <span>File Information</span>
     </div>
     {#if loadingMeta}
-      <div class="loading"><RefreshCw size={16} class="spin" /> Reading info...</div>
+      <div class="loading"><span class="spin"><RefreshCw size={16} /></span> Reading info...</div>
     {:else if metadata}
       <div class="meta-grid">
         <div class="meta-item"><span class="label">Format:</span> {metadata.format}</div>
@@ -476,7 +489,7 @@
       <div class="playlist-panel">
         <div class="meta-header">Playlist</div>
         {#if playlistLoading}
-          <div class="loading"><RefreshCw size={16} class="spin" /> Loading playlist...</div>
+          <div class="loading"><span class="spin"><RefreshCw size={16} /></span> Loading playlist...</div>
         {:else if playlist.length > 0}
           <div class="playlist-list">
             {#each playlist as item, index (item.path)}
@@ -616,4 +629,3 @@
   
   .error-state { text-align: center; color: var(--text-dim); }
 </style>
-

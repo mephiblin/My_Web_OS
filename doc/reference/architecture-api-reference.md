@@ -25,8 +25,23 @@ Svelte 기반 웹 데스크톱과 Express/Socket.io 백엔드를 통해 파일, 
 - Services: `/api/services/*`
 - Logs: `/api/logs/*`
 - Docker: `/api/docker/*`
+- Cloud: `/api/cloud/remotes`, `/api/cloud/upload`, `/api/cloud/upload-jobs/:id`, `/api/cloud/upload-jobs/:id/cancel`
+- Transfer: `/api/transfer/jobs`, `/api/transfer/jobs/download`, `/api/transfer/jobs/copy`,
+  `/api/transfer/jobs/:id/retry`, `/api/transfer/jobs/:id/cancel`, `DELETE /api/transfer/jobs?statuses=...`
+- Package backup/lifecycle:
+  - `/api/packages/:id/lifecycle`
+  - `/api/packages/:id/backup-policy` (GET/PUT)
+  - `/api/packages/:id/backup` (manual snapshot)
+  - `/api/packages/:id/backup-jobs` (GET/POST)
+  - `/api/packages/:id/backup-jobs/:jobId/cancel`
+  - `/api/packages/:id/rollback/preflight`
+- Media: `/api/media/info`, `/api/media/playlist`, `/api/media/station-info`
+- AI assist/audit: `/api/ai/assist`, `/api/ai/audit`
 
 ## Notes
 - 인증은 JWT 기반(`Authorization: Bearer <token>`)
 - 파일 경로 보호는 `pathGuard`와 `ALLOWED_ROOTS` 정책을 따른다.
 - 삭제 동작은 기본적으로 휴지통 이동을 우선한다.
+- 위험 동작은 `code`/`message`를 포함한 명시적 오류 계약을 유지한다.
+- 샌드박스 `postMessage` bridge는 clone-safe payload 경로를 사용한다.
+- 테스트 실행은 기본적으로 `npm test`(serial) 경로를 사용한다.

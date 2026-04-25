@@ -3,6 +3,7 @@
   import { Play, Square, RotateCcw, Trash2, Container, AlertCircle, FileText, HardDrive, Layers, Boxes } from 'lucide-svelte';
   import { addToast } from '../../../core/stores/toastStore.js';
   import * as dockerApi from './api.js';
+  import { normalizeOpsStatus } from '../../../utils/opsStatus.js';
 
   let containers = $state([]);
   let volumes = $state([]);
@@ -99,16 +100,23 @@
   }
 
   function getStatusColor(status) {
-    if (status?.includes('Up')) return 'var(--accent-green)';
-    if (status?.includes('Exited')) return 'var(--accent-red)';
+    const raw = String(status || '').toLowerCase();
+    const normalized = normalizeOpsStatus(raw.includes('up') ? 'running' : raw.includes('exited') ? 'stopped' : raw);
+    if (normalized === 'running') return 'var(--accent-green)';
+    if (normalized === 'failed' || normalized === 'stopped') return 'var(--accent-red)';
     return 'var(--text-dim)';
   }
 
   function parseHealth(statusText) {
-    const text = String(statusText || '').toLowerCase();
-    if (text.includes('healthy')) return 'healthy';
-    if (text.includes('unhealthy')) return 'unhealthy';
-    if (text.includes('starting')) return 'starting';
+    const raw = String(statusText || '').toLowerCase();
+    const normalized = normalizeOpsStatus(
+      raw.includes('healthy') ? 'healthy' :
+      raw.includes('unhealthy') ? 'unhealthy' :
+      raw.includes('starting') ? 'starting' : raw
+    );
+    if (normalized === 'completed') return 'healthy';
+    if (normalized === 'failed') return 'unhealthy';
+    if (normalized === 'running') return 'starting';
     return 'none';
   }
 

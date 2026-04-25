@@ -1,0 +1,42 @@
+{
+  admin off
+}
+
+:80 {
+  redir {$WEBOS_PUBLIC_ORIGIN:https://localhost:8443}{uri}
+}
+
+https://{$WEBOS_TLS_HOST:localhost} {
+  tls internal
+  encode zstd gzip
+
+  header {
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+
+  handle /api* {
+    reverse_proxy backend:3000
+  }
+
+  handle /socket.io* {
+    reverse_proxy backend:3000
+  }
+
+  handle /health {
+    reverse_proxy backend:3000
+  }
+
+  handle {
+    @static path *.js *.css *.svg *.png *.jpg *.jpeg *.gif *.webp *.ico *.woff *.woff2
+    header @static Cache-Control "public, max-age=604800, immutable"
+
+    root * /srv
+    try_files {path} /index.html
+    file_server
+  }
+}

@@ -1,12 +1,12 @@
 <script>
   import { onMount } from 'svelte';
-  import { Search, Command, AppWindow, File, Folder, Settings, LogOut, Power, RefreshCw } from 'lucide-svelte';
+  import { Search, Command, AppWindow, File, Folder, Settings, LogOut, Power, RefreshCw, ArrowDownToLine, Image, Music, FileText, Video } from 'lucide-svelte';
   import { spotlightVisible, spotlightQuery, closeSpotlight } from './stores/spotlightStore.js';
   import { openWindow } from './stores/windowStore.js';
   import { addToast } from './stores/toastStore.js';
   import * as fsApi from '../apps/system/file-explorer/api.js';
 
-  let inputEl;
+  let inputEl = $state(null);
   let results = $state([]);
   let selectedIndex = $state(0);
 
@@ -16,6 +16,11 @@
     { id: 'terminal', title: 'Terminal', icon: Command },
     { id: 'monitor', title: 'Resource Monitor', icon: Settings, singleton: true },
     { id: 'docker', title: 'Docker', icon: AppWindow, singleton: true },
+    { id: 'download-station', title: 'Download Station', icon: ArrowDownToLine, singleton: true },
+    { id: 'photo-station', title: 'Photo Station', icon: Image, singleton: true },
+    { id: 'music-station', title: 'Music Station', icon: Music, singleton: true },
+    { id: 'document-station', title: 'Document Station', icon: FileText, singleton: true },
+    { id: 'video-station', title: 'Video Station', icon: Video, singleton: true },
     { id: 'control-panel', title: 'Settings', icon: Settings, singleton: true }
   ];
 
@@ -98,9 +103,17 @@
 
 {#if $spotlightVisible}
   <div class="spotlight-overlay" onclick={closeSpotlight} onkeydown={handleKeydown} role="button" tabindex="-1">
-    <div class="spotlight-box glass-effect" onclick={(e) => e.stopPropagation()}>
+    <div
+      class="spotlight-box glass-effect"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Spotlight Search"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
+    >
       <div class="search-input">
-        <Search size={24} class="search-icon" />
+        <span class="search-icon"><Search size={24} /></span>
         <input 
           bind:this={inputEl}
           bind:value={$spotlightQuery}
@@ -115,13 +128,14 @@
       {#if results.length > 0}
         <div class="results">
           {#each results as result, i}
+            {@const ResultIcon = result.icon}
             <button 
               class="result-item {i === selectedIndex ? 'selected' : ''}"
               onclick={() => executeResult(result)}
               onmouseenter={() => selectedIndex = i}
             >
               <div class="icon-box">
-                <svelte:component this={result.icon} size={20} />
+                <ResultIcon size={20} />
               </div>
               <span class="title">{result.title}</span>
               <span class="type">{result.type || 'App'}</span>
@@ -170,7 +184,7 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   }
 
-  .search-icon { color: var(--accent-blue); }
+  .search-icon { color: var(--accent-blue); display: flex; }
 
   input {
     flex: 1;

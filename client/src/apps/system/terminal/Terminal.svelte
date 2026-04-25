@@ -68,6 +68,10 @@
         const command = commandBuffer.trim();
         if (command && isRiskyCommand(command)) {
           const approved = globalThis.confirm(`Run risky command?\n\n${command}`);
+          socket.emit('terminal:approval', {
+            command,
+            approved
+          });
           if (!approved) {
             term.write('\r\n\x1b[33m[approval] command canceled by user\x1b[0m\r\n');
             socket.emit('terminal:input', '\u0003');

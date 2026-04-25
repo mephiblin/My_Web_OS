@@ -2,10 +2,15 @@
   import { get } from 'svelte/store';
   import { onMount } from 'svelte';
   import { LayoutGrid, Store, Link2, RefreshCw, Download, Play, Square, RotateCcw, Trash2 } from 'lucide-svelte';
+  import { API_BASE } from '../../../utils/constants.js';
   import { apiFetch } from '../../../utils/api.js';
   import {
+    cancelPackageBackupJob,
     createPackageBackup,
+    createPackageBackupJob,
+    cloneInstalledPackage as cloneInstalledPackageRequest,
     controlRuntimeApp,
+    fetchPackageBackupJobs,
     fetchInstalledOpsSummary,
     fetchPackageFileEntries,
     fetchPackageManifest,
@@ -24,6 +29,7 @@
     runPackageHealth,
     stopRuntimeApp,
     updatePackageManifest,
+    updatePackageBackupPolicy,
     updatePackageChannel,
     wizardCreatePackage,
     wizardPreflightPackage
@@ -34,6 +40,18 @@
     STORE: 'store',
     INSTALLED: 'installed'
   };
+  const PERSONAL_STARTER_APPS = [
+    { title: 'Memo', templateId: 'memo-app' },
+    { title: 'Todo', templateId: 'todo-app' },
+    { title: 'Bookmark Manager', templateId: 'bookmark-manager' },
+    { title: 'Calculator', templateId: 'calculator' },
+    { title: 'Clipboard History', templateId: 'clipboard-history' }
+  ];
+  const DEVELOPER_STARTER_APPS = [
+    { title: 'JSON Formatter', templateId: 'json-formatter' },
+    { title: 'API Tester', templateId: 'api-tester' },
+    { title: 'Snippet Vault', templateId: 'snippet-vault' }
+  ];
 
   let activeCategory = $state(CATEGORY.STORE);
   let loadingStore = $state(true);
@@ -75,6 +93,10 @@
   let packageFilesErrorByApp = $state({});
   let scaffoldingTemplateId = $state('');
   let backupNotesByApp = $state({});
+  let backupPolicyDraftByApp = $state({});
+  let backupJobsByApp = $state({});
+  let backupJobsLoadingByApp = $state({});
+  let backupJobActioningByApp = $state({});
   let selectedBackupByApp = $state({});
   let installReview = $state(null);
   let wizardPhase = $state('draft');
@@ -94,6 +116,18 @@
     templateId: ''
   });
 
+  function normalizeTemplateDefaults(template) {
+    if (!template || typeof template !== 'object') return null;
+    const defaults = template.defaults && typeof template.defaults === 'object' ? template.defaults : {};
+    return {
+      id: String(template.id || '').trim(),
+      appType: String(defaults.appType || 'app').trim(),
+      runtimeType: String(defaults.runtimeType || 'sandbox-html').trim(),
+      entry: String(defaults.entry || 'index.html').trim(),
+      permissions: Array.isArray(defaults.permissions) ? defaults.permissions.join(', ') : ''
+    };
+  }
+
   let sourceForm = $state({
     id: '',
     title: '',
@@ -108,6 +142,31 @@
   }
 
   function updateWizardDraft(field, value) {
+    if (field === 'templateId') {
+      const selected = ecosystemTemplates.find((item) => item.id === String(value || '').trim());
+      const normalized = normalizeTemplateDefaults(selected);
+      if (normalized) {
+        wizardDraft = {
+          ...wizardDraft,
+          templateId: normalized.id,
+          appType: normalized.appType,
+          runtimeType: normalized.runtimeType,
+          entry: normalized.entry,
+          permissions: normalized.permissions
+        };
+      } else {
+        wizardDraft = {
+          ...wizardDraft,
+          templateId: String(value || '').trim()
+        };
+      }
+      if (wizardPhase === 'review') {
+        wizardPhase = 'draft';
+        wizardReview = null;
+      }
+      return;
+    }
+
     wizardDraft = {
       ...wizardDraft,
       [field]: value
@@ -203,7 +262,7 @@
     clearFeedback();
     try {
       const manifest = buildWizardManifest();
-      const response = await wizardCreatePackage(manifest);
+      const response = await wizardCreatePackage(manifest, wizardDraft.templateId);
       const createdId = String(response?.package?.id || response?.appId || manifest.id || '').trim();
       message = createdId
         ? `Package "${createdId}" created successfully.`
@@ -363,6 +422,37 @@
     return [...backups].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
   }
 
+  function getBackupPolicyMax(pkg) {
+    const raw = Number(getLifecycle(pkg)?.backupPolicy?.maxBackups);
+    return Number.isFinite(raw) ? Math.max(1, Math.min(100, Math.floor(raw))) : 20;
+  }
+
+  const BACKUP_SCHEDULE_OPTIONS = ['manual', 'daily', 'weekly', 'monthly'];
+
+  function getBackupPolicySchedule(pkg) {
+    const schedule = getLifecycle(pkg)?.backupPolicy?.schedule;
+    const interval = String(schedule?.interval || 'manual').trim().toLowerCase();
+    return {
+      enabled: Boolean(schedule?.enabled),
+      interval: BACKUP_SCHEDULE_OPTIONS.includes(interval) ? interval : 'manual',
+      timeOfDay: String(schedule?.timeOfDay || '00:00').trim() || '00:00',
+      timezone: String(schedule?.timezone || 'local').trim() || 'local'
+    };
+  }
+
+  function normalizeBackupPolicyDraft(appId, lifecycle = null) {
+    const currentPolicy = lifecycle?.backupPolicy || getLifecycle({ id: appId })?.backupPolicy || {};
+    const currentMax = Number(currentPolicy?.maxBackups);
+    const schedule = getBackupPolicySchedule({ id: appId, ...lifecycle });
+
+    setBackupPolicyDraft(appId, {
+      maxBackups: Number.isFinite(currentMax) ? String(Math.max(1, Math.min(100, Math.floor(currentMax)))) : '20',
+      enabled: schedule.enabled ? 'true' : 'false',
+      interval: schedule.interval,
+      timeOfDay: schedule.timeOfDay
+    });
+  }
+
   function formatDateTime(value) {
     if (!value) return '-';
     const parsed = new Date(value);
@@ -386,11 +476,136 @@
     };
   }
 
+  function setBackupPolicyDraft(appId, draft = {}) {
+    backupPolicyDraftByApp = {
+      ...backupPolicyDraftByApp,
+      [appId]: {
+        ...backupPolicyDraftByApp[appId],
+        ...draft
+      }
+    };
+  }
+
+  function getBackupPolicyDraft(appId, pkg = null) {
+    const schedule = getBackupPolicySchedule(pkg || { id: appId });
+    const raw = backupPolicyDraftByApp[appId] || {};
+    return {
+      maxBackups: typeof raw.maxBackups === 'string' && raw.maxBackups !== ''
+        ? raw.maxBackups
+        : String(pkg ? getBackupPolicyMax(pkg) : 20),
+      enabled: String(raw.enabled || (schedule.enabled ? 'true' : 'false')).trim(),
+      interval: BACKUP_SCHEDULE_OPTIONS.includes(raw.interval)
+        ? raw.interval
+        : schedule.interval,
+      timeOfDay: String(raw.timeOfDay || schedule.timeOfDay || '00:00').trim() || '00:00',
+      timezone: String(raw.timezone || schedule.timezone || 'local').trim() || 'local'
+    };
+  }
+
+  function setBackupPolicyDraftField(appId, field, value) {
+    setBackupPolicyDraft(appId, { [field]: String(value || '') });
+  }
+
+  function buildBackupPolicyPayloadFromDraft(appId, pkg) {
+    const draft = getBackupPolicyDraft(appId, pkg);
+    const maxBackupsRaw = Number(draft.maxBackups);
+    if (!Number.isFinite(maxBackupsRaw)) {
+      const err = new Error('Backup policy maxBackups must be a number.');
+      err.code = 'PACKAGE_BACKUP_POLICY_INVALID_MAX_BACKUPS';
+      throw err;
+    }
+
+    const maxBackups = Math.max(1, Math.min(100, Math.floor(maxBackupsRaw)));
+    const interval = BACKUP_SCHEDULE_OPTIONS.includes(draft.interval)
+      ? draft.interval
+      : 'manual';
+
+    const timeCandidate = String(draft.timeOfDay || '').trim() || '00:00';
+    if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(timeCandidate)) {
+      const err = new Error('schedule.timeOfDay must be in HH:mm format.');
+      err.code = 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE_TIME';
+      throw err;
+    }
+
+    return {
+      maxBackups,
+      schedule: {
+        enabled: interval === 'manual' ? false : draft.enabled === 'true',
+        interval,
+        timeOfDay: timeCandidate,
+        timezone: String(draft.timezone || 'local').trim() || 'local'
+      }
+    };
+  }
+
   function setSelectedBackup(appId, backupId) {
     selectedBackupByApp = {
       ...selectedBackupByApp,
       [appId]: String(backupId || '')
     };
+  }
+
+  function getBackupJobs(appId) {
+    return Array.isArray(backupJobsByApp[appId]) ? backupJobsByApp[appId] : [];
+  }
+
+  function getBackupJobStatusClass(status) {
+    const value = String(status || 'unknown').toLowerCase();
+    if (value === 'completed') return 'completed';
+    if (value === 'failed') return 'error';
+    if (value === 'running') return 'running';
+    if (value === 'canceled') return 'cancelled';
+    if (value === 'queued') return 'queued';
+    return 'unknown';
+  }
+
+  function isBackupJobCancelable(job) {
+    return String(job?.status || '').toLowerCase() === 'queued';
+  }
+
+  function isBackupJobsLoading(appId) {
+    return Boolean(backupJobsLoadingByApp[appId]);
+  }
+
+  function getBackupJobActioningKey(appId, jobId, action) {
+    return `${appId}:${jobId}:${action}`;
+  }
+
+  function isBackupJobActioning(appId, jobId, action) {
+    return Boolean(backupJobActioningByApp[getBackupJobActioningKey(appId, jobId, action)]);
+  }
+
+  async function loadBackupJobs(appId, options = {}) {
+    const silent = options.silent === true;
+    backupJobsLoadingByApp = {
+      ...backupJobsLoadingByApp,
+      [appId]: true
+    };
+
+    try {
+      const response = await withTimeout(
+        fetchPackageBackupJobs(appId, 50),
+        10000,
+        'Backup jobs request timed out.'
+      );
+      backupJobsByApp = {
+        ...backupJobsByApp,
+        [appId]: Array.isArray(response.jobs) ? response.jobs : []
+      };
+    } catch (err) {
+      backupJobsByApp = {
+        ...backupJobsByApp,
+        [appId]: []
+      };
+      if (!silent) {
+        error = err.message || 'Failed to load backup jobs.';
+      }
+    } finally {
+      backupJobsLoadingByApp = {
+        ...backupJobsLoadingByApp,
+        [appId]: false
+      };
+    }
   }
 
   function getManifestEditorState(appId) {
@@ -1237,6 +1452,47 @@
     }
   }
 
+  function getStarterTemplate(templateId) {
+    return ecosystemTemplates.find((template) => String(template?.id || '').trim() === templateId) || null;
+  }
+
+  async function scaffoldPersonalStarter(templateId) {
+    const template = getStarterTemplate(templateId);
+    if (!template || scaffoldingTemplateId) return;
+    await scaffoldTemplate(template);
+  }
+
+  function downloadInstalledPackage(pkg) {
+    const token = localStorage.getItem('web_os_token') || '';
+    if (!token) {
+      error = 'Authentication required for export.';
+      return;
+    }
+    const href = `${API_BASE}/api/packages/${encodeURIComponent(pkg.id)}/export?token=${encodeURIComponent(token)}`;
+    const anchor = document.createElement('a');
+    anchor.href = href;
+    anchor.download = '';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    message = `Export started: ${pkg.title}`;
+  }
+
+  async function cloneInstalledPackage(pkg) {
+    clearFeedback();
+    const targetId = prompt('Clone target id:', `${pkg.id}-copy`);
+    if (!targetId) return;
+    const title = prompt('Clone title (optional):', `${pkg.title} (Copy)`) || '';
+
+    try {
+      await cloneInstalledPackageRequest(pkg.id, targetId, title);
+      message = `Package "${pkg.title}" cloned to "${targetId}".`;
+      await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
+    } catch (err) {
+      error = err.message || 'Failed to clone package.';
+    }
+  }
+
   async function installPackage(pkg, options = {}) {
     installingPackageId = pkg.id;
     clearFeedback();
@@ -1365,6 +1621,7 @@
         ...lifecycleByApp,
         [appId]: response.lifecycle || null
       };
+      normalizeBackupPolicyDraft(appId, response.lifecycle || null);
     } catch (err) {
       lifecycleByApp = {
         ...lifecycleByApp,
@@ -1424,6 +1681,59 @@
       error = err.message || 'Failed to create backup.';
     } finally {
       lifecycleActioning = '';
+    }
+  }
+
+  async function createBackupJob(pkg) {
+    lifecycleActioning = `${pkg.id}:backup-job:create`;
+    clearFeedback();
+    try {
+      const note = getBackupNote(pkg.id) || 'Backup job requested from Package Center';
+      await createPackageBackupJob(pkg.id, note);
+      setBackupNote(pkg.id, '');
+      await loadBackupJobs(pkg.id);
+      message = `"${pkg.title}" backup job queued.`;
+    } catch (err) {
+      error = err.message || 'Failed to queue backup job.';
+    } finally {
+      lifecycleActioning = '';
+    }
+  }
+
+  async function saveBackupPolicy(pkg) {
+    lifecycleActioning = `${pkg.id}:backup-policy`;
+    clearFeedback();
+    try {
+      const payload = buildBackupPolicyPayloadFromDraft(pkg.id, pkg);
+      await updatePackageBackupPolicy(pkg.id, payload);
+      await loadLifecycle(pkg.id);
+      message = `"${pkg.title}" backup policy updated.`;
+    } catch (err) {
+      error = err.message || 'Failed to update backup policy.';
+    } finally {
+      lifecycleActioning = '';
+    }
+  }
+
+  async function cancelBackupJob(pkg, job) {
+    if (!job?.id) return;
+    const actionKey = getBackupJobActioningKey(pkg.id, job.id, 'cancel');
+    backupJobActioningByApp = {
+      ...backupJobActioningByApp,
+      [actionKey]: true
+    };
+    clearFeedback();
+
+    try {
+      await cancelPackageBackupJob(pkg.id, job.id);
+      await loadBackupJobs(pkg.id);
+      message = `"${pkg.title}" backup job canceled.`;
+    } catch (err) {
+      error = err.message || 'Failed to cancel backup job.';
+    } finally {
+      const nextActioning = { ...backupJobActioningByApp };
+      delete nextActioning[actionKey];
+      backupJobActioningByApp = nextActioning;
     }
   }
 
@@ -1737,6 +2047,7 @@
       ...lifecycleByApp,
       [appId]: summary.lifecycle || null
     };
+    normalizeBackupPolicyDraft(appId, summary.lifecycle || null);
     runtimeEventsByApp = {
       ...runtimeEventsByApp,
       [appId]: Array.isArray(summary.events) ? summary.events : []
@@ -1802,7 +2113,8 @@
 
     await Promise.all([
       hydrateOpsConsole(pkg.id, { withLoading: true }),
-      loadPackageFiles(pkg.id, getPackageFilesState(pkg.id).path || '')
+      loadPackageFiles(pkg.id, getPackageFilesState(pkg.id).path || ''),
+      loadBackupJobs(pkg.id, { silent: true })
     ]);
   }
 
@@ -1824,6 +2136,13 @@
       healthByApp = { ...healthByApp, [pkg.id]: null };
       consoleOpenByApp = { ...consoleOpenByApp, [pkg.id]: false };
       selectedBackupByApp = { ...selectedBackupByApp, [pkg.id]: '' };
+      backupJobsByApp = { ...backupJobsByApp, [pkg.id]: [] };
+      backupJobsLoadingByApp = { ...backupJobsLoadingByApp, [pkg.id]: false };
+      {
+        const nextBackupPolicyDraftByApp = { ...backupPolicyDraftByApp };
+        delete nextBackupPolicyDraftByApp[pkg.id];
+        backupPolicyDraftByApp = nextBackupPolicyDraftByApp;
+      }
       {
         const nextManifestEditorByApp = { ...manifestEditorByApp };
         delete nextManifestEditorByApp[pkg.id];
@@ -1867,6 +2186,7 @@
           .map(([appId]) => appId);
         for (const appId of openIds) {
           hydrateOpsConsole(appId, { silent: true }).catch(() => {});
+          loadBackupJobs(appId, { silent: true }).catch(() => {});
         }
       }
     }, 5000);
@@ -1932,6 +2252,46 @@
           <h3>Store Packages</h3>
         </div>
 
+        <div class="starter-apps">
+          <div class="section-title">Personal Starter Apps</div>
+          <div class="starter-apps-list">
+            {#each PERSONAL_STARTER_APPS as starter}
+              {@const starterTemplate = getStarterTemplate(starter.templateId)}
+              <button
+                class="btn tiny"
+                disabled={!starterTemplate || scaffoldingTemplateId === starter.templateId}
+                onclick={() => scaffoldPersonalStarter(starter.templateId)}
+              >
+                {#if starterTemplate}
+                  {scaffoldingTemplateId === starter.templateId ? `Creating ${starter.title}...` : `Create ${starter.title}`}
+                {:else}
+                  {starter.title} (template unavailable)
+                {/if}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="starter-apps">
+          <div class="section-title">Developer Tool Starters</div>
+          <div class="starter-apps-list">
+            {#each DEVELOPER_STARTER_APPS as starter}
+              {@const starterTemplate = getStarterTemplate(starter.templateId)}
+              <button
+                class="btn tiny"
+                disabled={!starterTemplate || scaffoldingTemplateId === starter.templateId}
+                onclick={() => scaffoldPersonalStarter(starter.templateId)}
+              >
+                {#if starterTemplate}
+                  {scaffoldingTemplateId === starter.templateId ? `Creating ${starter.title}...` : `Create ${starter.title}`}
+                {:else}
+                  {starter.title} (template unavailable)
+                {/if}
+              </button>
+            {/each}
+          </div>
+        </div>
+
         {#if ecosystemTemplates.length > 0}
           <div class="ecosystem-templates">
             <div class="section-title">Official Ecosystem Templates</div>
@@ -1968,6 +2328,12 @@
             </div>
           </div>
           <div class="wizard-form-grid">
+            <select value={wizardDraft.templateId} onchange={(event) => updateWizardDraft('templateId', event.currentTarget.value)}>
+              <option value="">custom (no template)</option>
+              {#each ecosystemTemplates as template}
+                <option value={template.id}>{template.title}</option>
+              {/each}
+            </select>
             <input
               type="text"
               placeholder="id (e.g. demo-notes)"
@@ -2057,7 +2423,7 @@
               {/if}
               {#if wizardReview.lifecycleSafeguards?.checks?.length > 0}
                 <div class="preflight-group">
-                  <label>Lifecycle Safeguards</label>
+                  <div class="preflight-label">Lifecycle Safeguards</div>
                   <div class="preflight-summary-inline">{wizardReview.lifecycleSafeguards.summary}</div>
                   <div class="preflight-list">
                     {#each wizardReview.lifecycleSafeguards.checks as item}
@@ -2074,7 +2440,7 @@
               {/if}
               {#if wizardReview.onboarding?.steps?.length > 0 || wizardReview.onboarding?.commands?.length > 0}
                 <div class="preflight-group">
-                  <label>Third-Party Onboarding</label>
+                  <div class="preflight-label">Third-Party Onboarding</div>
                   <div class="preflight-summary-inline">{wizardReview.onboarding.summary}</div>
                   {#if wizardReview.onboarding.steps.length > 0}
                     <div class="preflight-list">
@@ -2189,7 +2555,7 @@
 
                       <div class="preflight-grid">
                         <div class="preflight-group">
-                          <label>Permissions</label>
+                          <div class="preflight-label">Permissions</div>
                           {#if installReview.permissions.length === 0}
                             <div class="runtime-log-empty">No permission data.</div>
                           {:else}
@@ -2208,7 +2574,7 @@
                         </div>
 
                         <div class="preflight-group">
-                          <label>Quality Gate</label>
+                          <div class="preflight-label">Quality Gate</div>
                           <div class="preflight-summary-inline">{installReview.qualitySummary || 'No quality summary.'}</div>
                           {#if installReview.qualityChecks.length === 0}
                             <div class="runtime-log-empty">No quality checks.</div>
@@ -2228,7 +2594,7 @@
                         </div>
 
                         <div class="preflight-group">
-                          <label>Dependency / Compatibility</label>
+                          <div class="preflight-label">Dependency / Compatibility</div>
                           {#if installReview.dependencyChecks.length === 0 && installReview.compatibilityChecks.length === 0 && (!installReview.blockerItems || installReview.blockerItems.length === 0)}
                             <div class="runtime-log-empty">No dependency or compatibility checks.</div>
                           {:else}
@@ -2256,7 +2622,7 @@
                         </div>
 
                         <div class="preflight-group">
-                          <label>Backup Plan</label>
+                          <div class="preflight-label">Backup Plan</div>
                           <div class="preflight-summary-inline">{installReview.backupSummary || 'No backup plan details.'}</div>
                           {#if installReview.backupChecks.length === 0}
                             <div class="runtime-log-empty">No backup checks.</div>
@@ -2276,7 +2642,7 @@
                         </div>
 
                         <div class="preflight-group">
-                          <label>Lifecycle Safeguards</label>
+                          <div class="preflight-label">Lifecycle Safeguards</div>
                           <div class="preflight-summary-inline">{installReview.lifecycleSafeguards?.summary || 'No lifecycle safeguards.'}</div>
                           {#if installReview.lifecycleSafeguards?.checks?.length > 0}
                             <div class="preflight-list">
@@ -2296,7 +2662,7 @@
                         </div>
 
                         <div class="preflight-group">
-                          <label>Third-Party Onboarding</label>
+                          <div class="preflight-label">Third-Party Onboarding</div>
                           <div class="preflight-summary-inline">{installReview.onboarding?.summary || 'No onboarding guide.'}</div>
                           {#if installReview.onboarding?.steps?.length > 0}
                             <div class="preflight-list">
@@ -2435,6 +2801,7 @@
                 <div class="chips">
                   <span>v{pkg.version}</span>
                   <span>{pkg.runtime}</span>
+                  <span>cap:{pkg.appType || pkg.type || 'app'}</span>
                   <span>channel:{getLifecycleCurrentChannel(pkg)}</span>
                   <span class="health {getHealthStatus(pkg)}">health:{String(getHealthStatus(pkg)).toUpperCase()}</span>
                   {#if isServicePackage(pkg)}
@@ -2475,6 +2842,13 @@
                   <button class="btn ghost" onclick={() => toggleOpsConsole(pkg)} disabled={lifecycleLoading === pkg.id || runtimeEventsLoading === pkg.id}>
                     {isConsoleOpen(pkg) ? 'Ops Close' : 'Ops Console'}
                   </button>
+                  <button class="btn ghost" onclick={() => cloneInstalledPackage(pkg)}>
+                    Clone
+                  </button>
+                  <button class="btn ghost" onclick={() => downloadInstalledPackage(pkg)}>
+                    <Download size={14} />
+                    Export
+                  </button>
                   <button class="btn danger" onclick={() => removeInstalledPackage(pkg)}>
                     <Trash2 size={14} />
                     Remove
@@ -2484,7 +2858,7 @@
                   <div class="ops-console">
                     <div class="ops-row">
                       <div class="ops-group">
-                        <label>Release Channel</label>
+                        <div class="ops-label">Release Channel</div>
                         <div class="ops-inline">
                           {#each ['stable', 'beta', 'alpha', 'canary'] as channel}
                             <button
@@ -2498,7 +2872,7 @@
                         </div>
                       </div>
                       <div class="ops-group">
-                        <label>Recover Flow</label>
+                        <div class="ops-label">Recover Flow</div>
                         <div class="ops-inline">
                           <button class="btn tiny ghost" onclick={() => recoverRuntime(pkg)} disabled={lifecycleActioning === `${pkg.id}:recover`}>
                             {lifecycleActioning === `${pkg.id}:recover` ? 'Recovering...' : 'Recover'}
@@ -2512,7 +2886,7 @@
 
                     <div class="ops-row">
                       <div class="ops-group">
-                        <label>Create Backup</label>
+                        <div class="ops-label">Create Backup</div>
                         <div class="ops-inline">
                           <input
                             type="text"
@@ -2523,13 +2897,113 @@
                           <button class="btn tiny ghost" onclick={() => createLifecycleBackup(pkg)} disabled={lifecycleActioning === `${pkg.id}:backup`}>
                             {lifecycleActioning === `${pkg.id}:backup` ? 'Backing up...' : 'Backup'}
                           </button>
+                          <button class="btn tiny ghost" onclick={() => createBackupJob(pkg)} disabled={lifecycleActioning === `${pkg.id}:backup-job:create`}>
+                            {lifecycleActioning === `${pkg.id}:backup-job:create` ? 'Queueing...' : 'Queue Job'}
+                          </button>
+                          <button class="btn tiny ghost" onclick={() => loadBackupJobs(pkg.id)} disabled={isBackupJobsLoading(pkg.id)}>
+                            {isBackupJobsLoading(pkg.id) ? 'Loading jobs...' : 'Reload Jobs'}
+                          </button>
+                        </div>
+                        {#if getBackupJobs(pkg.id).length === 0}
+                          <div class="runtime-log-empty">No backup jobs.</div>
+                        {:else}
+                          <div class="backup-jobs-list">
+                            {#each getBackupJobs(pkg.id) as job (job.id)}
+                              <div class="backup-job-row">
+                                <div class="backup-job-head">
+                                  <span class="job-id">{job.id}</span>
+                                  <span class="status {getBackupJobStatusClass(job.status)}">{job.status || 'unknown'}</span>
+                                </div>
+                                <div class="backup-job-meta">
+                                  <span>created {formatDateTime(job.createdAt)}</span>
+                                  <span>started {formatDateTime(job.startedAt)}</span>
+                                  <span>finished {formatDateTime(job.finishedAt)}</span>
+                                  <span>backup {job.backupId || '-'}</span>
+                                </div>
+                                {#if job.note}
+                                  <div class="backup-job-note">{job.note}</div>
+                                {/if}
+                                {#if job.error?.message}
+                                  <div class="runtime-event error">{job.error.message}</div>
+                                {/if}
+                                {#if isBackupJobCancelable(job)}
+                                  <div class="ops-inline">
+                                    <button
+                                      class="btn tiny danger"
+                                      onclick={() => cancelBackupJob(pkg, job)}
+                                      disabled={isBackupJobActioning(pkg.id, job.id, 'cancel')}
+                                    >
+                                      {isBackupJobActioning(pkg.id, job.id, 'cancel') ? 'Canceling...' : 'Cancel Job'}
+                                    </button>
+                                  </div>
+                                {/if}
+                              </div>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+
+                    <div class="ops-row">
+                      <div class="ops-group">
+                        <div class="ops-label">Backup Retention</div>
+                        <div class="ops-inline">
+                          <input
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={getBackupPolicyDraft(pkg.id, pkg).maxBackups}
+                            oninput={(event) => setBackupPolicyDraftField(pkg.id, 'maxBackups', event.currentTarget.value)}
+                          />
+                          <button class="btn tiny ghost" onclick={() => saveBackupPolicy(pkg)} disabled={lifecycleActioning === `${pkg.id}:backup-policy`}>
+                            {lifecycleActioning === `${pkg.id}:backup-policy` ? 'Saving...' : 'Save Policy'}
+                          </button>
+                          <span class="runtime-event">
+                            current max: {getBackupPolicyMax(pkg)}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="ops-group">
+                        <div class="ops-label">Backup Schedule</div>
+                        <div class="ops-inline">
+                          <label class="preflight-bypass">
+                            <input
+                              type="checkbox"
+                              checked={getBackupPolicyDraft(pkg.id, pkg).enabled === 'true'}
+                              disabled={getBackupPolicyDraft(pkg.id, pkg).interval === 'manual'}
+                              onchange={(event) => setBackupPolicyDraftField(pkg.id, 'enabled', event.currentTarget.checked ? 'true' : 'false')}
+                            />
+                            <span>Enable</span>
+                          </label>
+                          <select
+                            value={getBackupPolicyDraft(pkg.id, pkg).interval}
+                            onchange={(event) => {
+                              const value = String(event.currentTarget.value || 'manual').trim().toLowerCase();
+                              setBackupPolicyDraftField(pkg.id, 'interval', BACKUP_SCHEDULE_OPTIONS.includes(value) ? value : 'manual');
+                              if (value === 'manual') {
+                                setBackupPolicyDraftField(pkg.id, 'enabled', 'false');
+                              }
+                            }}
+                          >
+                            {#each BACKUP_SCHEDULE_OPTIONS as option}
+                              <option value={option}>{option}</option>
+                            {/each}
+                          </select>
+                          <input
+                            type="time"
+                            value={getBackupPolicyDraft(pkg.id, pkg).timeOfDay}
+                            oninput={(event) => setBackupPolicyDraftField(pkg.id, 'timeOfDay', event.currentTarget.value)}
+                          />
+                          <span class="runtime-event">
+                            current interval: {getBackupPolicySchedule(pkg).interval}
+                          </span>
                         </div>
                       </div>
                     </div>
 
                     <div class="ops-row">
                       <div class="ops-group">
-                        <label>Rollback</label>
+                        <div class="ops-label">Rollback</div>
                         <div class="ops-inline">
                           <select
                             onchange={(event) => setSelectedBackup(pkg.id, event.currentTarget.value)}
@@ -2551,7 +3025,7 @@
 
                     <div class="ops-row">
                       <div class="ops-group">
-                        <label>Manifest Editor</label>
+                        <div class="ops-label">Manifest Editor</div>
                         <div class="ops-inline">
                           <button class="btn tiny ghost" onclick={() => toggleManifestEditor(pkg)}>
                             {isManifestEditorOpen(pkg.id) ? 'Close Editor' : 'Open Editor'}
@@ -2591,7 +3065,7 @@
                                 </div>
                                 {#if getManifestMediaScopeReview(getManifestEditorState(pkg.id))}
                                   <div class="preflight-group">
-                                    <label>Media Scope Review</label>
+                                    <div class="preflight-label">Media Scope Review</div>
                                     <div class="preflight-summary-inline">
                                       {getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.summary}
                                     </div>
@@ -2684,7 +3158,7 @@
 
                     <div class="ops-row">
                       <div class="ops-group">
-                        <label>Package Files</label>
+                        <div class="ops-label">Package Files</div>
                         <div class="ops-inline">
                           <button
                             class="btn tiny ghost"
@@ -2768,7 +3242,7 @@
 
                     <div class="ops-row">
                       <div class="ops-group">
-                        <label>Last Health/QA</label>
+                        <div class="ops-label">Last Health/QA</div>
                         {#if getHealthReport(pkg)}
                           <div class="ops-meta-list">
                             <div>Status: {String(getHealthStatus(pkg)).toUpperCase()}</div>
@@ -3066,6 +3540,21 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 10px;
+  }
+
+  .starter-apps {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    padding: 10px;
+    background: rgba(2, 6, 23, 0.35);
+    display: grid;
+    gap: 10px;
+  }
+
+  .starter-apps-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .template-card {
@@ -3387,7 +3876,8 @@
     gap: 6px;
   }
 
-  .ops-group label {
+  .ops-group label,
+  .ops-label {
     font-size: 11px;
     color: #93c5fd;
     letter-spacing: 0.04em;
@@ -3410,6 +3900,97 @@
     color: #e2e8f0;
     padding: 6px 8px;
     font-size: 12px;
+  }
+
+  .backup-jobs-list {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.62);
+    max-height: 220px;
+    overflow: auto;
+    padding: 6px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .backup-job-row {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    padding: 6px 8px;
+    display: grid;
+    gap: 4px;
+    background: rgba(15, 23, 42, 0.35);
+  }
+
+  .backup-job-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .backup-job-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .backup-job-note {
+    font-size: 12px;
+    color: #cbd5e1;
+  }
+
+  .backup-job-head .status {
+    border-radius: 999px;
+    padding: 2px 7px;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    background: rgba(51, 65, 85, 0.25);
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  .backup-job-head .status.completed {
+    color: #bbf7d0;
+    border-color: rgba(22, 163, 74, 0.4);
+    background: rgba(22, 163, 74, 0.2);
+  }
+
+  .backup-job-head .status.failed {
+    color: #fecaca;
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(185, 28, 28, 0.2);
+  }
+
+  .backup-job-head .status.error {
+    color: #fecaca;
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(185, 28, 28, 0.2);
+  }
+
+  .backup-job-head .status.running {
+    color: #93c5fd;
+    border-color: rgba(96, 165, 250, 0.45);
+    background: rgba(37, 99, 235, 0.2);
+  }
+
+  .backup-job-head .status.queued {
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.45);
+    background: rgba(51, 65, 85, 0.35);
+  }
+
+  .backup-job-head .status.cancelled {
+    color: #fde68a;
+    border-color: rgba(217, 119, 6, 0.45);
+    background: rgba(180, 83, 9, 0.18);
+  }
+
+  .backup-job-head .status.unknown {
+    color: #cbd5e1;
+    border-color: rgba(148, 163, 184, 0.3);
+    background: rgba(51, 65, 85, 0.3);
   }
 
   .package-files-path {
@@ -3583,7 +4164,8 @@
     gap: 6px;
   }
 
-  .preflight-group label {
+  .preflight-group label,
+  .preflight-label {
     font-size: 11px;
     color: #93c5fd;
     letter-spacing: 0.04em;

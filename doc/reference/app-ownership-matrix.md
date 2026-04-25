@@ -17,6 +17,7 @@ This document locks the ownership model and launch contract for `P5-1`.
 - `core-system`: `host-shared`
 - `core-addon`: `host-shared`
 - `package-addon`: `inventory-app-data`
+- explicit app metadata override: `dataBoundary` can force `inventory-app-data` for trusted built-in addons when app-owned data isolation is required.
 - Fallback/unknown: `none`
 
 ## Built-in App Matrix
@@ -36,7 +37,7 @@ This document locks the ownership model and launch contract for `P5-1`.
 | `doc-viewer` | `standard` | `core-addon` | `component` | `host-shared` | Document viewer |
 | `model-viewer` | `standard` | `core-addon` | `component` | `host-shared` | Model viewer |
 | `editor` | `standard` | `core-addon` | `component` | `host-shared` | Code editor |
-| `widget-store` | `standard` | `core-addon` | `component` | `host-shared` | Widget catalog |
+| `widget-store` | `standard` | `core-addon` | `component` | `inventory-app-data` | Widget catalog and widget package workflow tool |
 
 ## Package App Contract
 

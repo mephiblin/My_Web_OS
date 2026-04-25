@@ -1,0 +1,45 @@
+{
+  admin off
+  email {$WEBOS_ACME_EMAIL}
+}
+
+:80 {
+  redir {$WEBOS_PUBLIC_ORIGIN:https://example.com}{uri}
+}
+
+https://{$WEBOS_TLS_HOST} {
+  tls {$WEBOS_ACME_EMAIL} {
+    ca {$WEBOS_ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+  }
+  encode zstd gzip
+
+  header {
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+
+  handle /api* {
+    reverse_proxy backend:3000
+  }
+
+  handle /socket.io* {
+    reverse_proxy backend:3000
+  }
+
+  handle /health {
+    reverse_proxy backend:3000
+  }
+
+  handle {
+    @static path *.js *.css *.svg *.png *.jpg *.jpeg *.gif *.webp *.ico *.woff *.woff2
+    header @static Cache-Control "public, max-age=604800, immutable"
+
+    root * /srv
+    try_files {path} /index.html
+    file_server
+  }
+}

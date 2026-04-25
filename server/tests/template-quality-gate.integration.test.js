@@ -12,6 +12,7 @@ const packagesRouter = require('../routes/packages');
 const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
 const serverConfig = require('../config/serverConfig');
+const packageLifecycleService = require('../services/packageLifecycleService');
 
 function signToken(username) {
   return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -72,22 +73,7 @@ async function cleanupAppArtifacts(appId) {
 
   const backupRoot = path.join(roots.systemDir, 'package-backups', appId);
   await fs.remove(backupRoot).catch(() => {});
-
-  const lifecyclePath = path.join(roots.systemDir, 'package-lifecycle.json');
-  if (!(await fs.pathExists(lifecyclePath))) {
-    return;
-  }
-
-  const lifecycle = await fs.readJson(lifecyclePath).catch(() => null);
-  if (!lifecycle || typeof lifecycle !== 'object' || !lifecycle.apps || typeof lifecycle.apps !== 'object') {
-    return;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(lifecycle.apps, appId)) {
-    delete lifecycle.apps[appId];
-    lifecycle.updatedAt = new Date().toISOString();
-    await fs.writeJson(lifecyclePath, lifecycle, { spaces: 2 });
-  }
+  await packageLifecycleService.deleteLifecycle(appId).catch(() => {});
 }
 
 async function createSandboxPackage(appId, options = {}) {
@@ -134,6 +120,7 @@ test('template quality gate scaffold blocking integration flow', async () => {
   const warnId = `it-warn-${suffix}`;
   const depId = `it-dep-${suffix}`;
   const mismatchId = `it-mismatch-${suffix}`;
+  const templateId = 'markdown-editor';
 
   const failBody = {
     appId: failId,
@@ -184,7 +171,7 @@ test('template quality gate scaffold blocking integration flow', async () => {
 
     const failCheck = await postJson(
       server.baseUrl,
-      '/api/packages/ecosystem/templates/markdown-workspace/quality-check',
+      `/api/packages/ecosystem/templates/${templateId}/quality-check`,
       signToken(adminUsername),
       failBody
     );
@@ -193,7 +180,7 @@ test('template quality gate scaffold blocking integration flow', async () => {
 
     const failScaffold = await postJson(
       server.baseUrl,
-      '/api/packages/ecosystem/templates/markdown-workspace/scaffold',
+      `/api/packages/ecosystem/templates/${templateId}/scaffold`,
       signToken(adminUsername),
       failBody
     );
@@ -202,7 +189,7 @@ test('template quality gate scaffold blocking integration flow', async () => {
 
     const warnCheck = await postJson(
       server.baseUrl,
-      '/api/packages/ecosystem/templates/markdown-workspace/quality-check',
+      `/api/packages/ecosystem/templates/${templateId}/quality-check`,
       signToken(adminUsername),
       warnBody
     );
@@ -211,7 +198,7 @@ test('template quality gate scaffold blocking integration flow', async () => {
 
     const warnBlocked = await postJson(
       server.baseUrl,
-      '/api/packages/ecosystem/templates/markdown-workspace/scaffold',
+      `/api/packages/ecosystem/templates/${templateId}/scaffold`,
       signToken(adminUsername),
       warnBody
     );
@@ -220,7 +207,7 @@ test('template quality gate scaffold blocking integration flow', async () => {
 
     const warnForceDenied = await postJson(
       server.baseUrl,
-      '/api/packages/ecosystem/templates/markdown-workspace/scaffold',
+      `/api/packages/ecosystem/templates/${templateId}/scaffold`,
       signToken('integration-user'),
       { ...warnBody, force: true }
     );
@@ -229,7 +216,7 @@ test('template quality gate scaffold blocking integration flow', async () => {
 
     const warnForceAllowed = await postJson(
       server.baseUrl,
-      '/api/packages/ecosystem/templates/markdown-workspace/scaffold',
+      `/api/packages/ecosystem/templates/${templateId}/scaffold`,
       signToken(adminUsername),
       { ...warnBody, force: true }
     );
@@ -238,7 +225,7 @@ test('template quality gate scaffold blocking integration flow', async () => {
 
     const mismatchCheck = await postJson(
       server.baseUrl,
-      '/api/packages/ecosystem/templates/markdown-workspace/quality-check',
+      `/api/packages/ecosystem/templates/${templateId}/quality-check`,
       signToken(adminUsername),
       mismatchBody
     );

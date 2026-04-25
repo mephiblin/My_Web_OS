@@ -2,9 +2,11 @@
   import { onMount, onDestroy } from 'svelte';
   import { Line } from 'svelte-chartjs';
   import { Chart as ChartJS, Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler } from 'chart.js';
-  import { RotateCcw } from 'lucide-svelte';
+  import { ArrowDownToLine, Container, FileText, Package, RotateCcw } from 'lucide-svelte';
   import { fetchSystemOverview, fetchServiceStatus, fetchRuntimeApps, fetchInstalledPackages, fetchOpsSummary } from './api.js';
   import { apiFetch } from '../../../utils/api.js';
+  import { normalizeOpsStatus } from '../../../utils/opsStatus.js';
+  import { openWindow } from '../../../core/stores/windowStore.js';
 
   ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler);
 
@@ -36,6 +38,12 @@
     { id: 'gpu', label: 'GPU' },
     { id: 'processes', label: 'Processes' },
     { id: 'ops', label: 'Ops' },
+  ];
+  const opsQuickActions = [
+    { id: 'logs', title: 'Logs', icon: FileText },
+    { id: 'docker', title: 'Docker', icon: Container },
+    { id: 'transfer', title: 'Transfer', icon: ArrowDownToLine },
+    { id: 'package-center', title: 'Package Center', icon: Package }
   ];
 
   let storageDiagnostics = $state([]);
@@ -133,19 +141,30 @@
 
   function summarizeServiceStatus() {
     const values = Object.values(serviceSnapshot || {});
+    const statuses = values.map((item) => normalizeOpsStatus(item?.status));
     return {
       total: values.length,
-      running: values.filter((item) => item?.status === 'running').length,
-      error: values.filter((item) => item?.status === 'error').length
+      running: statuses.filter((status) => status === 'running').length,
+      error: statuses.filter((status) => status === 'failed').length
     };
   }
 
   function summarizeRuntimeStatus() {
+    const statuses = runtimeApps.map((item) => normalizeOpsStatus(item?.status));
     return {
       total: runtimeApps.length,
-      running: runtimeApps.filter((item) => item?.status === 'running').length,
-      error: runtimeApps.filter((item) => item?.status === 'error').length
+      running: statuses.filter((status) => status === 'running').length,
+      error: statuses.filter((status) => status === 'failed').length
     };
+  }
+
+  function openOpsApp(app) {
+    openWindow({
+      id: app.id,
+      title: app.title,
+      icon: app.icon,
+      singleton: true
+    });
   }
 
   onMount(() => {
@@ -500,6 +519,15 @@
           <span>Refresh Ops</span>
         </button>
       </div>
+      <div class="ops-quick-actions">
+        {#each opsQuickActions as app}
+          {@const ActionIcon = app.icon}
+          <button class="ops-action-btn" onclick={() => openOpsApp(app)} title={`Open ${app.title}`}>
+            <ActionIcon size={14} />
+            <span>{app.title}</span>
+          </button>
+        {/each}
+      </div>
 
       {@const serviceSummary = summarizeServiceStatus()}
       {@const runtimeSummary = summarizeRuntimeStatus()}
@@ -539,7 +567,7 @@
             {#each Object.entries(serviceSnapshot) as [name, svc]}
               <tr>
                 <td class="name">{name}</td>
-                <td><span class="status-badge {svc?.status || 'unknown'}">{svc?.status || 'unknown'}</span></td>
+                <td><span class="status-badge {normalizeOpsStatus(svc?.status)}">{normalizeOpsStatus(svc?.status)}</span></td>
                 <td class="num">{Math.floor((svc?.uptimeMs || 0) / 1000)}s</td>
               </tr>
             {:else}
@@ -562,7 +590,7 @@
             {#each runtimeApps as app}
               <tr>
                 <td class="name">{app?.appId || '-'}</td>
-                <td><span class="status-badge {app?.status || 'unknown'}">{app?.status || 'unknown'}</span></td>
+                <td><span class="status-badge {normalizeOpsStatus(app?.status)}">{normalizeOpsStatus(app?.status)}</span></td>
                 <td class="num">{app?.pid || '-'}</td>
               </tr>
             {:else}
@@ -624,6 +652,22 @@
   .header-with-action { display: flex; justify-content: space-between; align-items: center; }
   .refresh-btn { background: rgba(88, 166, 255, 0.15); border: 1px solid var(--glass-border); color: var(--accent-blue); padding: 6px 12px; border-radius: 6px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
   .refresh-btn:hover { background: rgba(88, 166, 255, 0.25); color: white; }
+  .ops-quick-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ops-action-btn {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--glass-border);
+    color: var(--text-main);
+    padding: 6px 10px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+  .ops-action-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.25); }
   
   .diagnostics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-top: 12px; }
   .diag-card { border-left: 4px solid var(--glass-border); }
@@ -637,7 +681,7 @@
   .healthy .status-badge { background: rgba(46, 160, 67, 0.2); color: #7ee787; }
   .warning .status-badge { background: rgba(219, 109, 40, 0.2); color: #ffa657; }
   .status-badge.running { background: rgba(46, 160, 67, 0.2); color: #7ee787; }
-  .status-badge.error { background: rgba(219, 109, 40, 0.2); color: #ffa657; }
+  .status-badge.failed { background: rgba(219, 109, 40, 0.2); color: #ffa657; }
   .status-badge.stopped { background: rgba(255,255,255,0.1); color: var(--text-dim); }
   
   .diag-metrics { display: flex; flex-direction: column; gap: 6px; }

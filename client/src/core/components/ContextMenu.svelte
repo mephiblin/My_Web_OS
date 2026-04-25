@@ -3,16 +3,17 @@
   import { contextMenuSettings } from '../stores/contextMenuStore.js';
 
   let { x = 0, y = 0, items = [], close = () => {} } = $props();
-  let menuEl;
-
-  let adjustedX = $state(x);
-  let adjustedY = $state(y);
+  let menuEl = $state(null);
+  let adjustedX = $state(0);
+  let adjustedY = $state(0);
 
   onMount(() => {
     const handleClick = () => close();
     document.addEventListener('click', handleClick);
 
     // Adjust position to stay within viewport
+    adjustedX = x;
+    adjustedY = y;
     if (menuEl) {
       const rect = menuEl.getBoundingClientRect();
       if (x + rect.width > window.innerWidth) {
@@ -41,7 +42,8 @@
   {#each items as item}
     <button class={item.danger ? 'danger' : ''} onclick={() => runItem(item)}>
       {#if $contextMenuSettings.showIcons && item.icon}
-        <svelte:component this={item.icon} size={14} />
+        {@const ItemIcon = item.icon}
+        <ItemIcon size={14} />
       {/if}
       <span>{item.label}</span>
     </button>

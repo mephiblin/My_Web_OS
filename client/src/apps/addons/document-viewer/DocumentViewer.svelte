@@ -5,7 +5,7 @@
 
   let { data = {} } = $props();
 
-  let docPath = $derived(data.path || '');
+  let docPath = $derived(data?.path || '');
   let fileName = $derived(docPath.split('/').pop() || 'Document');
   let extension = $derived(fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '');
   let isPdf = $derived(extension === 'pdf');
@@ -418,4 +418,3 @@
     }
   }
 </style>
-

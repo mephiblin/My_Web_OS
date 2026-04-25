@@ -96,7 +96,15 @@
   class:unlocked={!widget.locked}
   class:dragging={isDragging}
   style="left:{widget.x}px; top:{widget.y}px; width:{widget.w}px; height:{widget.h}px;"
+  role="button"
+  tabindex="-1"
   onmousedown={startDrag}
+  onkeydown={(event) => {
+    if (event.key === 'Escape') {
+      stopDrag();
+      stopResize();
+    }
+  }}
 >
   <!-- Remove button (only when unlocked) -->
   {#if !widget.locked}
@@ -198,7 +206,18 @@
 
   <!-- Resize Handle (only when unlocked) -->
   {#if !widget.locked}
-    <div class="resize-handle" onmousedown={startResize}>
+    <div
+      class="resize-handle"
+      role="button"
+      tabindex="-1"
+      aria-label="Resize widget"
+      onmousedown={startResize}
+      onkeydown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+        }
+      }}
+    >
       <GripVertical size={12} />
     </div>
   {/if}
@@ -264,17 +283,6 @@
     margin: 0;
   }
 
-  .monitor-widget .header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.7);
-    margin-bottom: 14px;
-  }
-  .stats { display: flex; flex-direction: column; gap: 12px; }
-  .stat label { font-size: 10px; color: rgba(255,255,255,0.4); margin-bottom: 4px; display: block; }
   .bar-bg { width: 100%; height: 5px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
   .bar-fg { height: 100%; background: var(--accent-blue); border-radius: 3px; transition: width 0.5s; }
   .bar-fg.green { background: #34d399; }

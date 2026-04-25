@@ -1,156 +1,80 @@
-# My Web OS
+# My Web OS - User Guide
 
-> 이 문서는 일반 사용자/운영자 기준 안내서입니다. 개발/에이전트 작업 기준은 `README.md`를 참고하세요.
+> 이 문서는 사용자/운영자용 안내서입니다. 개발/에이전트 기준은 `README.md`를 보세요.
 
-My Web OS는 로컬 PC를 브라우저에서 운영하기 위한 Web OS 계층입니다. 커널,
-가상머신, OS 대체물이 아니라 로컬 파일, 터미널, 시스템 상태, Docker, 패키지
-앱을 웹 데스크톱 안에서 다루는 운영 환경입니다.
+My Web OS는 내 PC/홈서버를 브라우저에서 운영하기 위한 Web OS입니다.
 
 > [!WARNING]
-> 이 프로젝트는 개발 중입니다. 로컬 파일, 터미널, Docker 상태, 패키지 데이터를
-> 직접 다룰 수 있으므로 신뢰 가능한 개발 환경에서만 실행하세요. `ALLOWED_ROOTS`는
-> 필요한 경로로 좁게 설정해야 합니다. 사용 중 발생하는 데이터 손실, 장비 문제,
-> 기타 직간접 손해에 대해 프로젝트 작성자는 책임지지 않습니다.
+> 이 프로젝트는 로컬 파일/터미널/Docker를 직접 다룹니다. 신뢰 가능한 개인 환경에서만 사용하세요.
+> `ALLOWED_ROOTS`는 꼭 필요한 경로만 최소로 설정하세요.
 
-## 제품 모델
+## 한 줄 모델
 
-```text
-File Station = 파일 의도와 선택
-Apps = 집중된 작업 흐름
-Web OS = 권한, 승인, 감사, 수명주기, 복구
-Package Center = 설치, 업데이트, 제거, 런타임 상태, 백업, 롤백
-```
+- File Station: 파일을 안전하게 보고 열고 옮기고 공유하는 기본 허브
+- Apps: 문서/미디어/코드 같은 작업별 전용 도구
+- Web OS: 승인, 권한, 감사, 복구를 관리하는 운영 레이어
+- Package Center: 앱 설치/업데이트/실행/백업/롤백을 관리하는 콘솔
 
-핵심 경계:
+## 기능 요약 (기능: 설명)
 
-- 파일 접근은 명시적이고, 권한 기반이며, 감사 가능하고, 복구 가능해야 합니다.
-- Package Center는 단순 스토어가 아니라 설치 앱 운영 콘솔입니다.
-- System app은 privileged app입니다. addon/package는 Host 경계를 조용히 우회하면 안 됩니다.
-- overwrite, delete, rollback, command execution 같은 위험 동작은 승인/감사/복구 흐름을 가져야 합니다.
+### 1) 데스크톱
 
-## 현재 상태
+- 윈도우 관리: 앱 창 열기/이동/리사이즈/최소화/최대화/포커스.
+- 작업 표시줄: 실행 앱과 빠른 전환 상태를 한 눈에 확인.
+- 시작 메뉴/스포트라이트: 앱 검색과 실행을 빠르게 수행.
+- 컨텍스트 메뉴: 파일/앱에 맞는 동작을 바로 선택.
 
-현재 검증된 working-tree 상태는 [`AGENTS.md`](AGENTS.md)에 있고, 완료 이력은
-[`doc/operations/completed-backlog-log.md`](doc/operations/completed-backlog-log.md)에
-누적합니다.
+### 2) 파일 작업
 
-구현 확인됨:
+- File Station: `ALLOWED_ROOTS` 범위 안에서 탐색/생성/수정/삭제.
+- Open With: 파일 확장자에 맞는 앱으로 바로 열기.
+- 업로드/휴지통/공유: 파일 이동과 복구, 링크 공유를 운영형으로 처리.
+- 권한 경계: 앱이 필요한 파일만 다루도록 경로/권한을 제한.
 
-- Media Player playlist, repeat, shuffle, background audio.
-- Document Viewer PDF page, zoom, search, metadata controls.
-- Model Viewer wireframe, axes, material info, screenshot.
-- WebDAV/cloud write, upload, mount status, async cloud upload job, retry/cancel UI.
-- Transfer Manager retry, finished history clear, status summary, filtered UI.
-- Package backup job queued/running/completed/failed/canceled 상태, Package Center 운영 UI, retention policy, schedule metadata.
-- Docker Compose healthcheck, backend/frontend reachability, storage volume/Host binding guide, container log check path.
-- Lazy-loaded app launch registry. Monaco Code Editor와 Three.js Model Viewer는 초기 desktop bundle에서 분리되어 첫 실행 시 로드됩니다.
-- `/api/ai/assist` 기반 AI assist route와 Docker host-inspection intent/audit gate.
+### 3) 원격 컴퓨터 작업
 
-남은 리스크:
+- Terminal: 브라우저에서 실시간 터미널 세션 사용.
+- Resource Monitor: CPU/메모리/시스템 상태를 확인.
+- Log Viewer: 운영 로그/오류 흐름을 추적.
+- Docker Manager: 이미지/컨테이너/로그/포트/볼륨 상태를 점검.
 
-- Cloud upload progress는 local stream-to-`rclone` 진행률이며 provider-side commit confirmation은 아닙니다.
-- Monaco와 Three.js의 큰 deferred vendor chunk는 남아 있습니다. 초기 desktop payload에서는 제거된 상태입니다.
-- 직접 multi-file `node --test` 호출에서 package backup integration test isolation/timing flakiness가 있었습니다. 루트 `npm test`는 serial 실행으로 통과합니다.
+### 4) 패키지/앱 운영
 
-다음 활성 backlog는 [`AGENTS.md`](AGENTS.md)의
-`A11. Test Isolation And Regression Coverage`입니다.
+- Package Center: 앱 설치/업데이트/삭제를 중앙에서 관리.
+- Runtime/Health: 앱 실행 상태와 오류를 확인.
+- Manifest/Quality Gate: 설치 전 유효성 점검으로 문제를 사전 차단.
+- Backup/Rollback: 앱 상태를 백업하고 필요 시 롤백.
 
-## 기능 영역
+### 5) 클라우드/전송
 
-### Web Desktop
+- Cloud 연동: `rclone` 기반으로 마운트/업로드/경로 상태를 확인.
+- Transfer Manager: 진행/완료/실패 상태를 분리해서 관리.
+- 재시도/정리: 실패 작업 재시도, 완료 이력 정리 지원.
 
-- Svelte 5 기반 desktop shell: window, taskbar, start menu, spotlight search, context menu, widget, persisted layout.
-- built-in system app과 trusted addon을 `client/src/apps/system/*`, `client/src/apps/addons/*`로 분리.
-- 무거운 앱은 app launch registry에서 첫 실행 시 lazy-load.
+### 6) 스테이션 앱 (NAS 스타일)
 
-### File Station / Local Files
+- Download Station: 다운로드 작업 큐/재시도/취소/필터.
+- Photo Station: 사진 라이브러리 검색/그룹/최근 항목.
+- Music Station: 오디오 라이브러리 중심 탐색.
+- Document Station: 문서 목록/검색/최근 작업 중심 탐색.
+- Video Station: 비디오 라이브러리 관리 및 재사용 흐름.
 
-- allowed-root browsing, create/read/update/delete, upload, trash, share link, indexed search, Open With flow.
-- built-in addon과 package app을 위한 file association 및 launch-context 모델.
-- read/readwrite single-file grant 방향과 overwrite approval policy.
-- wallpaper/media reference를 위한 Media Library import flow.
+### 7) 보안/하드닝
 
-### Terminal / System / Logs / Docker
-
-- Socket.io와 `node-pty` 기반 real terminal session.
-- backend service route 기반 system resource 및 operation summary.
-- Log Viewer와 audit/event log 저장.
-- Docker Manager image, log, port, volume, health, Compose portability validation.
-
-### Package Center / Sandbox Runtime
-
-- registry source management, remote package install, import/export, preflight, manifest editing, quality check, package doctor.
-- installed app runtime, lifecycle, health, permission, file association, app data boundary, backup, retention, rollback direction.
-- `/api/sandbox/:appId/*` 기반 sandbox HTML runtime.
-- manifest permission으로 보호되는 sandbox SDK와 app-owned data API.
-
-### Cloud / Transfer Operations
-
-- `rclone` 기반 cloud listing, mount status, write/upload path, async upload job tracking.
-- Transfer Manager active/completed/failed/canceled job 표시, retry, cleanup operation.
-- Download Station + Photo/Music/Document/Video Station 기본 워크플로(라이브러리 검색/그룹핑/최근 항목/실패 상태 표시).
-
-### Agent / Automation
-
-- Agent UI와 `/api/ai/assist` backend route.
-- Host/Docker inspection은 사용자 intent와 audit logging으로 제한.
-- 권장 흐름은 explanation -> summary -> approval -> execution -> result reporting입니다.
-
-## 기술 스택
-
-Frontend:
-
-- Svelte 5, Vite
-- Monaco Editor
-- Xterm.js
-- Chart.js / svelte-chartjs
-- Three.js
-- Lucide Svelte
-
-Backend:
-
-- Node.js, Express 5
-- Socket.io
-- node-pty
-- systeminformation
-- chokidar
-- JWT / bcryptjs
-- multer
-- fs-extra
-- rclone service integration
-
-Storage:
-
-- `server/storage/*` 아래 JSON/log 중심 file-based storage.
-- built-in app registry source of truth:
-  `server/storage/inventory/system/apps.json`.
-- package app path:
-  `server/storage/inventory/apps/<app-id>/`.
+- Reverse Proxy + TLS: 외부 노출 시 HTTPS 종료 지점 구성.
+- Admin Bootstrap: 초기 계정/비밀번호/JWT 설정 경로 제공.
+- Allowed Roots 최소권한: 호스트 파일 접근 범위를 최소화.
+- Backup/Restore 리허설: 운영 전 복구 절차를 실제로 검증.
 
 ## 빠른 실행
 
-요구 사항:
+필수 권장:
 
-- Node.js 18 이상, Node.js 20+ 권장.
-- cloud 기능 사용 시 `rclone`.
-- media metadata/thumbnail workflow 사용 시 `ffmpeg`.
-- storage health check 사용 시 `smartmontools`.
-- Docker portability profile 사용 시 Docker와 Docker Compose.
+- Node.js 20+ (최소 18)
+- cloud 기능 사용 시 `rclone`
+- Docker 프로필 사용 시 Docker/Compose
 
-루트 `.env` 예시:
-
-```env
-PORT=3000
-JWT_SECRET=replace_me
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=replace_me
-NODE_ENV=development
-ALLOWED_ROOTS=["/home/user/Documents","/path/to/data"]
-INITIAL_PATH=/home/user
-INDEX_DEPTH=5
-```
-
-Backend:
+기본 실행:
 
 ```bash
 npm install
@@ -158,7 +82,7 @@ npm run apps:registry:migrate
 node server/index.js
 ```
 
-Frontend:
+프론트 개발 서버:
 
 ```bash
 cd client
@@ -168,205 +92,26 @@ npm run dev
 
 접속:
 
-```text
-http://localhost:5173
-```
+- `http://localhost:5173`
 
-로그인은 `.env`의 `ADMIN_USERNAME`, `ADMIN_PASSWORD`를 사용합니다.
+로그인:
 
-## Docker Portability Profile
+- `.env`의 `ADMIN_USERNAME`, `ADMIN_PASSWORD`
 
-Docker Compose는 production hardening이 아니라 반복 가능한 local validation 용도입니다.
+## 원격접속 하드닝 시작점
 
-```bash
-docker compose config
-docker compose up -d --build
-docker compose ps
-```
+- 가이드: `doc/operations/remote-access-hardening-guide.md`
+- 리허설 기록: `doc/operations/backup-restore-rehearsal-2026-04-25.md`
 
-기본 포트:
+## 현재 알려진 제한
 
-- Backend: `3000`
-- Frontend: `5173`
+- Cloud 업로드 진행률: provider 최종 반영이 아니라 local stream 기준입니다.
+- 대형 번들 로딩: Monaco/Three는 초기 번들에서 분리됐지만 첫 실행 로딩이 큽니다.
+- 테스트 실행 방식: 멀티 파일 직접 실행보다 루트 `npm test` 경로가 더 안정적입니다.
 
-Storage / Host binding:
+## 문서 빠른 길찾기
 
-- `webos_storage` named volume -> `/app/server/storage`
-- `./data` -> `/workspace/data`
-- `./media` -> `/workspace/media`
-- Compose의 `ALLOWED_ROOTS`는 `/workspace/data`, `/workspace/media` 같은 container path를 기준으로 설정합니다.
-
-Smoke check:
-
-```bash
-node -e "fetch('http://127.0.0.1:3000/health').then(r=>{console.log('backend',r.status);process.exit(r.status===200?0:1)}).catch(()=>process.exit(1))"
-node -e "fetch('http://127.0.0.1:5173').then(r=>{console.log('frontend',r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
-```
-
-Logs / shutdown:
-
-```bash
-docker compose logs --tail=80 backend
-docker compose logs --tail=80 frontend
-docker compose down
-```
-
-상세 가이드:
-[`doc/operations/local-run-guide.md`](doc/operations/local-run-guide.md).
-
-## Remote Access Hardening (R8 Starter)
-
-`docker-compose.hardened.yml`은 reverse proxy + TLS 종료 + backend 비직노출 구성을 제공하는 하드닝 프로필입니다.
-
-부트스트랩:
-
-```bash
-npm run hardening:env
-```
-
-`hardening:env`는 랜덤 `JWT_SECRET`/`ADMIN_PASSWORD`를 포함한 `.env.hardened` 템플릿을 생성합니다.
-
-실행:
-
-```bash
-docker compose --env-file .env.hardened -f docker-compose.hardened.yml config
-docker compose --env-file .env.hardened -f docker-compose.hardened.yml up -d --build
-docker compose --env-file .env.hardened -f docker-compose.hardened.yml ps
-```
-
-공인 도메인 ACME 전환:
-
-```bash
-docker compose --env-file .env.hardened -f docker-compose.hardened.yml -f docker-compose.hardened-acme.yml config
-docker compose --env-file .env.hardened -f docker-compose.hardened.yml -f docker-compose.hardened-acme.yml up -d --build
-```
-
-운영 백업/복구 리허설:
-
-```bash
-npm run rehearsal:backup-restore
-```
-
-기본 접속:
-
-- `https://localhost:8443` (`Caddy tls internal` 기본)
-
-세부 절차(관리자 비밀번호 회전, allowed roots 최소권한, 백업/복구, 외부 노출 do/don't):
-
-- [`doc/operations/remote-access-hardening-guide.md`](doc/operations/remote-access-hardening-guide.md)
-
-## Package App 기본 구조
-
-Sandbox/package app 위치:
-
-```text
-server/storage/inventory/apps/<app-id>/
-```
-
-최소 manifest 예시:
-
-```json
-{
-  "id": "hello-sandbox",
-  "title": "Hello Sandbox",
-  "version": "1.0.0",
-  "type": "app",
-  "runtime": {
-    "type": "sandbox-html",
-    "entry": "index.html"
-  },
-  "permissions": ["app.data.list", "app.data.read", "app.data.write"],
-  "fileAssociations": [
-    {
-      "extensions": ["txt", "md"],
-      "actions": ["open", "edit"],
-      "defaultAction": "open"
-    }
-  ]
-}
-```
-
-검증:
-
-```bash
-npm run package:doctor -- --manifest=server/storage/inventory/apps/<app-id>/manifest.json
-npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json
-```
-
-상세 문서:
-[`doc/reference/package-ecosystem-guide.md`](doc/reference/package-ecosystem-guide.md).
-
-## 검증 명령
-
-Backend syntax:
-
-```bash
-node --check server/routes/packages.js
-node --check server/routes/runtime.js
-node --check server/routes/fs.js
-node --check server/routes/cloud.js
-node --check server/routes/ai.js
-node --check server/services/packageLifecycleService.js
-node --check server/services/runtimeManager.js
-node --check server/services/cloudService.js
-node --check server/services/aiActionService.js
-```
-
-Server tests:
-
-```bash
-npm test
-```
-
-Frontend build:
-
-```bash
-cd client
-npm run build
-```
-
-Registry/package checks:
-
-```bash
-npm run apps:registry:migrate
-npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json
-```
-
-## 문서 지도
-
-Planning:
-
-- [`doc/planning/product-brief-home-server-remote-computer.md`](doc/planning/product-brief-home-server-remote-computer.md)
-- [`doc/planning/feature-inventory-home-server-remote-computer.md`](doc/planning/feature-inventory-home-server-remote-computer.md)
-- [`doc/planning/roadmap-home-server-remote-computer.md`](doc/planning/roadmap-home-server-remote-computer.md)
-- [`doc/planning/project-identity-boundaries.md`](doc/planning/project-identity-boundaries.md)
-- [`doc/planning/feature-scope-priorities.md`](doc/planning/feature-scope-priorities.md)
-- [`doc/planning/app-install-file-workflow-direction.md`](doc/planning/app-install-file-workflow-direction.md)
-- [`doc/planning/ui-ux-customization-agent.md`](doc/planning/ui-ux-customization-agent.md)
-
-Operations:
-
-- [`doc/operations/local-run-guide.md`](doc/operations/local-run-guide.md)
-- [`doc/operations/remote-access-hardening-guide.md`](doc/operations/remote-access-hardening-guide.md)
-- [`doc/operations/backup-restore-rehearsal-2026-04-25.md`](doc/operations/backup-restore-rehearsal-2026-04-25.md)
-- [`doc/operations/completed-backlog-log.md`](doc/operations/completed-backlog-log.md)
-- [`doc/operations/next-tasks-2026-04-25.md`](doc/operations/next-tasks-2026-04-25.md)
-- [`doc/operations/package-troubleshooting.md`](doc/operations/package-troubleshooting.md)
-
-Reference:
-
-- [`doc/reference/architecture-api-reference.md`](doc/reference/architecture-api-reference.md)
-- [`doc/reference/app-development-model.md`](doc/reference/app-development-model.md)
-- [`doc/reference/package-ecosystem-guide.md`](doc/reference/package-ecosystem-guide.md)
-- [`doc/reference/app-ownership-matrix.md`](doc/reference/app-ownership-matrix.md)
-
-Policies / migrations:
-
-- [`doc/policies/file-station-places-policy.md`](doc/policies/file-station-places-policy.md)
-- [`doc/migrations/media-library-path-migration.md`](doc/migrations/media-library-path-migration.md)
-
-## 문서 작업 필요 항목
-
-- 실도메인 환경에서 ACME 발급 성공 로그/스크린샷을 `doc/operations`에 추가해야 합니다.
-- R5 Station 실사용(대용량 allowed root) 수동 검증 증적을 `doc/operations`에 추가해야 합니다.
-- generated storage 파일(`server/storage/index.json`)의 커밋 제외 정책은 계속 유지하고, 예외 포함 시 근거를 로그에 남겨야 합니다.
+- 전체 문서 인덱스/상태: `doc/README.md`
+- 완료 작업 기록: `doc/operations/completed-backlog-log.md`
+- 다음 운영 작업: `doc/operations/next-tasks-2026-04-25.md`
+- 개발자/에이전트 기준: `README.md`

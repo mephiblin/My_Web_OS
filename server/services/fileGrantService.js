@@ -89,8 +89,27 @@ function consumeGrant(grantId, options = {}) {
   return grant;
 }
 
+function listActiveGrants(options = {}) {
+  pruneExpiredGrants();
+  const expectedUser = String(options.user || '').trim();
+  const expectedSource = String(options.source || '').trim();
+  const now = Date.now();
+  const items = [];
+
+  for (const grant of grantStore.values()) {
+    if (!grant || grant.expiresAt <= now) continue;
+    if (expectedUser && grant.user && grant.user !== expectedUser) continue;
+    if (expectedSource && grant.source !== expectedSource) continue;
+    items.push({ ...grant });
+  }
+
+  items.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  return items;
+}
+
 module.exports = {
   createGrant,
   consumeGrant,
-  normalizeGrantMode
+  normalizeGrantMode,
+  listActiveGrants
 };

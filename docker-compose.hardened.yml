@@ -1,0 +1,76 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: webos-backend
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      NODE_ENV: "production"
+      JWT_SECRET: "${JWT_SECRET:?Set JWT_SECRET in .env.hardened}"
+      ADMIN_USERNAME: "${ADMIN_USERNAME:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env.hardened}"
+      ALLOWED_ROOTS: "${ALLOWED_ROOTS:?Set ALLOWED_ROOTS (JSON array) in .env.hardened}"
+      INITIAL_PATH: "${INITIAL_PATH:-/workspace/data}"
+      INDEX_DEPTH: "${INDEX_DEPTH:-5}"
+      CORS_ORIGIN: "${WEBOS_PUBLIC_ORIGIN:?Set WEBOS_PUBLIC_ORIGIN in .env.hardened}"
+      RATE_LIMIT_WINDOW_MS: "${RATE_LIMIT_WINDOW_MS:-900000}"
+      RATE_LIMIT_MAX: "${RATE_LIMIT_MAX:-3000}"
+      TRUST_PROXY_HOPS: "${TRUST_PROXY_HOPS:-1}"
+    volumes:
+      - webos_storage:/app/server/storage
+      - ./data:/workspace/data
+      - ./media:/workspace/media
+    expose:
+      - "3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          const http = require('http');
+          const req = http.get('http://127.0.0.1:3000/health', (res) => {
+            process.exit(res.statusCode === 200 ? 0 : 1);
+          });
+          req.on('error', () => process.exit(1));
+          req.setTimeout(2000, () => { req.destroy(); process.exit(1); });
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+
+  proxy:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.proxy
+    container_name: webos-proxy
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      WEBOS_PUBLIC_ORIGIN: "${WEBOS_PUBLIC_ORIGIN:?Set WEBOS_PUBLIC_ORIGIN in .env.hardened}"
+      WEBOS_TLS_HOST: "${WEBOS_TLS_HOST:-localhost}"
+    ports:
+      - "${WEBOS_HTTP_PORT:-8080}:80"
+      - "${WEBOS_HTTPS_PORT:-8443}:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  webos_storage:
+  caddy_data:
+  caddy_config:

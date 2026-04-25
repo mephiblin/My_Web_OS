@@ -54,7 +54,22 @@
                 {#if message.approval.summary}
                   <div class="approval-summary">{message.approval.summary}</div>
                 {/if}
-                <div class="approval-meta">Risk: {String(message.approval.risk || 'medium').toUpperCase()}</div>
+                {#if message.approval.target}
+                  <div class="approval-meta">Target: {message.approval.target}</div>
+                {/if}
+                {#if message.approval.impact}
+                  <div class="approval-meta">Impact: {message.approval.impact}</div>
+                {/if}
+                {#if message.approval.reversibility}
+                  <div class="approval-meta">Reversibility: {message.approval.reversibility}</div>
+                {/if}
+                {#if message.approval.recovery}
+                  <div class="approval-meta">Recovery: {message.approval.recovery}</div>
+                {/if}
+                <div class="approval-meta">Risk Level: {String(message.approval.risk || 'medium').toUpperCase()}</div>
+                {#if message.approval.runId}
+                  <div class="approval-meta">Run: {message.approval.runId}</div>
+                {/if}
                 <div class="approval-status {message.approval.status}">
                   {String(message.approval.status || 'pending').toUpperCase()}
                 </div>
@@ -66,6 +81,62 @@
                     <button class="icon-btn" type="button" onclick={() => agentStore.resolveApproval(message.id, 'reject')}>
                       Reject
                     </button>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+
+            {#if message.kind === 'result'}
+              <div class="approval-card">
+                <div class="approval-title">{message.meta?.resultTitle || 'Result'}</div>
+                <div class="approval-summary">{message.meta?.note || message.content || ''}</div>
+                <div class="approval-status {String(message.meta?.resultStatus || 'pending').toLowerCase()}">
+                  {String(message.meta?.resultStatus || 'ok').toUpperCase()}
+                </div>
+
+                {#if Array.isArray(message.meta?.resultActions) && message.meta.resultActions.length > 0}
+                  <div class="approval-actions">
+                    {#each message.meta.resultActions as action}
+                      <button
+                        class="icon-btn send"
+                        type="button"
+                        disabled={action.status === 'running' || action.status === 'completed'}
+                        onclick={() => agentStore.executeResultAction(message.id, action.id)}
+                      >
+                        {action.status === 'running'
+                          ? 'Running...'
+                          : action.status === 'completed'
+                            ? 'Done'
+                            : action.status === 'failed'
+                              ? `${action.label} (Retry)`
+                            : action.label}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+
+                {#if message.meta?.rawOutput}
+                  <details>
+                    <summary>Raw Output</summary>
+                    <pre class="raw-output">{message.meta.rawOutput}</pre>
+                  </details>
+                {/if}
+
+                {#if message.meta?.repeatableTask?.id}
+                  <div class="approval-meta">
+                    Task: {message.meta.repeatableTask.id} ({Array.isArray(message.meta.repeatableTask.steps) ? message.meta.repeatableTask.steps.length : 0} steps)
+                  </div>
+                {/if}
+
+                {#if message.meta?.auditTrace?.actionId}
+                  <div class="approval-meta">
+                    Audit: {message.meta.auditTrace.actionId}
+                    {#if message.meta.auditTrace.runId}
+                      · Run {message.meta.auditTrace.runId}
+                    {/if}
+                    {#if message.meta.auditTrace.risk}
+                      · {String(message.meta.auditTrace.risk || '').toUpperCase()}
+                    {/if}
                   </div>
                 {/if}
               </div>
@@ -245,9 +316,41 @@
     border-color: rgba(252, 165, 165, 0.4);
     background: rgba(252, 165, 165, 0.12);
   }
+  .approval-status.ok,
+  .approval-status.completed {
+    color: #4ade80;
+    border-color: rgba(74, 222, 128, 0.45);
+    background: rgba(74, 222, 128, 0.14);
+  }
+  .approval-status.warning,
+  .approval-status.running {
+    color: #facc15;
+    border-color: rgba(250, 204, 21, 0.45);
+    background: rgba(250, 204, 21, 0.14);
+  }
+  .approval-status.error,
+  .approval-status.failed {
+    color: #fca5a5;
+    border-color: rgba(252, 165, 165, 0.4);
+    background: rgba(252, 165, 165, 0.12);
+  }
   .approval-actions {
     display: inline-flex;
+    flex-wrap: wrap;
     gap: 8px;
+  }
+  .raw-output {
+    margin: 6px 0 0;
+    max-height: 140px;
+    overflow: auto;
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 6px;
+    background: rgba(0, 0, 0, 0.3);
   }
 
   .message-row.user .message-bubble {

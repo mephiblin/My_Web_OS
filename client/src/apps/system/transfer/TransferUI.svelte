@@ -1,9 +1,30 @@
 <script>
   import { onDestroy } from 'svelte';
-  import { Download, Copy, Loader2, RefreshCw, CircleX, AlertTriangle, ArrowDownToLine, FolderInput, Clock3 } from 'lucide-svelte';
+  import {
+    Download,
+    Copy,
+    Loader2,
+    RefreshCw,
+    CircleX,
+    AlertTriangle,
+    ArrowDownToLine,
+    FolderInput,
+    Clock3,
+    RotateCcw,
+    Trash2
+  } from 'lucide-svelte';
   import { addToast } from '../../../core/stores/toastStore.js';
   import { notifications } from '../../../core/stores/notificationStore.js';
-  import { cancelTransferJob, createLocalCopyJob, createUrlDownloadJob, isRunningStatus, listTransferJobs } from './api.js';
+  import {
+    cancelTransferJob,
+    clearTransferJobs,
+    createLocalCopyJob,
+    createUrlDownloadJob,
+    isRunningStatus,
+    listTransferJobs,
+    retryTransferJob
+  } from './api.js';
+  import { normalizeOpsStatus } from '../../../utils/opsStatus.js';
 
   const POLL_INTERVAL_MS = 2000;
 
@@ -11,7 +32,18 @@
   let creating = $state(false);
   let refreshing = $state(false);
   let jobs = $state([]);
+  let summary = $state({
+    total: 0,
+    queued: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    canceled: 0
+  });
+  let activeFilter = $state('all');
   let cancelingIds = $state(new Set());
+  let retryingIds = $state(new Set());
+  let clearing = $state(false);
   let operationError = $state('');
   let lastSyncAt = $state(null);
   let pollTimer = null;
@@ -29,7 +61,13 @@
   });
 
   const runningJobs = $derived(jobs.filter((job) => isRunningStatus(job.status)));
-  const failedJobs = $derived(jobs.filter((job) => job.status === 'error' || job.status === 'failed'));
+  const failedJobs = $derived(jobs.filter((job) => normalizeOpsStatus(job.status) === 'failed'));
+  const filteredJobs = $derived(jobs.filter((job) => {
+    if (activeFilter === 'all') return true;
+    const status = normalizeOpsStatus(job.status);
+    if (activeFilter === 'running') return isRunningStatus(status);
+    return status === activeFilter;
+  }));
 
   function showError(message, code = 'TRANSFER_UI_ERROR') {
     const text = message || 'Transfer operation failed.';
@@ -50,12 +88,38 @@
   }
 
   function statusClass(status) {
-    const value = String(status || '').toLowerCase();
-    if (value === 'completed' || value === 'success') return 'completed';
-    if (value === 'error' || value === 'failed') return 'error';
-    if (value === 'cancelled' || value === 'canceled') return 'cancelled';
+    const value = normalizeOpsStatus(status);
+    if (value === 'completed') return 'completed';
+    if (value === 'failed') return 'error';
+    if (value === 'canceled') return 'cancelled';
     if (isRunningStatus(value)) return 'running';
     return 'unknown';
+  }
+
+  function formatBytes(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes < 0) return '-';
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let current = bytes / 1024;
+    let unitIndex = 0;
+    while (current >= 1024 && unitIndex < units.length - 1) {
+      current /= 1024;
+      unitIndex += 1;
+    }
+    return `${current.toFixed(current >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+  }
+
+  function progressBytesLabel(job) {
+    const transferred = Number(job?.raw?.progress?.transferredBytes);
+    const total = Number(job?.raw?.progress?.totalBytes);
+    if (Number.isFinite(transferred) && Number.isFinite(total) && total > 0) {
+      return `${formatBytes(transferred)} / ${formatBytes(total)}`;
+    }
+    if (Number.isFinite(transferred) && transferred > 0) {
+      return formatBytes(transferred);
+    }
+    return '-';
   }
 
   async function refreshJobs(silent = false) {
@@ -63,6 +127,7 @@
     try {
       const result = await listTransferJobs();
       jobs = Array.isArray(result.jobs) ? result.jobs : [];
+      summary = result?.summary || summary;
       lastSyncAt = Date.now();
       if (!silent) addToast('Transfer jobs refreshed', 'success');
     } catch (err) {
@@ -140,6 +205,48 @@
     }
   }
 
+  async function handleRetryJob(job) {
+    if (!job?.id) {
+      showError('Invalid transfer job id.', 'TRANSFER_RETRY_INVALID_ID');
+      return;
+    }
+    const nextSet = new Set(retryingIds);
+    nextSet.add(job.id);
+    retryingIds = nextSet;
+    operationError = '';
+
+    try {
+      await retryTransferJob(job.id);
+      addToast(`Retry queued for ${job.id}`, 'success');
+      notifications.add({
+        title: 'Transfer',
+        message: `Retry queued for job ${job.id}.`,
+        type: 'success'
+      });
+      await refreshJobs(true);
+    } catch (err) {
+      showError(err?.message, err?.code);
+    } finally {
+      const doneSet = new Set(retryingIds);
+      doneSet.delete(job.id);
+      retryingIds = doneSet;
+    }
+  }
+
+  async function handleClearHistory() {
+    clearing = true;
+    operationError = '';
+    try {
+      const result = await clearTransferJobs(['completed', 'failed', 'canceled']);
+      addToast(`Cleared ${Number(result?.removed || 0)} transfer jobs`, 'success');
+      await refreshJobs(true);
+    } catch (err) {
+      showError(err?.message, err?.code);
+    } finally {
+      clearing = false;
+    }
+  }
+
   function startPolling() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => {
@@ -160,7 +267,7 @@
     <div class="title-wrap">
       <ArrowDownToLine size={17} />
       <h2>Transfer Manager</h2>
-      <span class="meta">Running {runningJobs.length} / Failed {failedJobs.length}</span>
+      <span class="meta">Queued {summary.queued} / Running {runningJobs.length} / Failed {failedJobs.length}</span>
     </div>
 
     <div class="head-actions">
@@ -245,13 +352,33 @@
   </section>
 
   <section class="jobs-panel glass-effect">
-    <div class="jobs-title">Jobs</div>
+    <div class="jobs-head">
+      <div class="jobs-title">Jobs</div>
+      <div class="jobs-tools">
+        <div class="status-filter">
+          <button class:active={activeFilter === 'all'} onclick={() => (activeFilter = 'all')}>All</button>
+          <button class:active={activeFilter === 'running'} onclick={() => (activeFilter = 'running')}>Running</button>
+          <button class:active={activeFilter === 'failed'} onclick={() => (activeFilter = 'failed')}>Failed</button>
+          <button class:active={activeFilter === 'completed'} onclick={() => (activeFilter = 'completed')}>Completed</button>
+          <button class:active={activeFilter === 'canceled'} onclick={() => (activeFilter = 'canceled')}>Canceled</button>
+        </div>
+        <button class="ghost-btn clear-btn" onclick={handleClearHistory} disabled={clearing}>
+          {#if clearing}
+            <Loader2 size={13} class="spin" />
+            Clearing...
+          {:else}
+            <Trash2 size={13} />
+            Clear Finished
+          {/if}
+        </button>
+      </div>
+    </div>
 
-    {#if jobs.length === 0}
+    {#if filteredJobs.length === 0}
       <div class="empty">No transfer jobs found.</div>
     {:else}
       <div class="job-list">
-        {#each jobs as job}
+        {#each filteredJobs as job}
           <article class="job-card">
             <div class="job-top">
               <div class="job-main">
@@ -267,21 +394,38 @@
                 {/if}
               </div>
 
-              {#if isRunningStatus(job.status)}
-                <button
-                  class="cancel-btn"
-                  onclick={() => handleCancelJob(job)}
-                  disabled={cancelingIds.has(job.id)}
-                >
-                  {#if cancelingIds.has(job.id)}
-                    <Loader2 size={13} class="spin" />
-                    Canceling...
-                  {:else}
-                    <CircleX size={13} />
-                    Cancel
-                  {/if}
-                </button>
-              {/if}
+              <div class="job-actions">
+                {#if isRunningStatus(job.status)}
+                  <button
+                    class="cancel-btn"
+                    onclick={() => handleCancelJob(job)}
+                    disabled={cancelingIds.has(job.id)}
+                  >
+                    {#if cancelingIds.has(job.id)}
+                      <Loader2 size={13} class="spin" />
+                      Canceling...
+                    {:else}
+                      <CircleX size={13} />
+                      Cancel
+                    {/if}
+                  </button>
+                {/if}
+                {#if job.status === 'failed' || job.status === 'canceled'}
+                  <button
+                    class="retry-btn"
+                    onclick={() => handleRetryJob(job)}
+                    disabled={retryingIds.has(job.id)}
+                  >
+                    {#if retryingIds.has(job.id)}
+                      <Loader2 size={13} class="spin" />
+                      Retrying...
+                    {:else}
+                      <RotateCcw size={13} />
+                      Retry
+                    {/if}
+                  </button>
+                {/if}
+              </div>
             </div>
 
             <div class="progress-wrap">
@@ -289,6 +433,7 @@
                 <span style="width: {job.progress}%"></span>
               </div>
               <span class="progress-text">{job.progress}%</span>
+              <span class="progress-bytes">{progressBytesLabel(job)}</span>
             </div>
 
             {#if job.error}
@@ -489,6 +634,46 @@
     font-weight: 600;
   }
 
+  .jobs-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .jobs-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .status-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .status-filter button {
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+
+  .status-filter button.active {
+    color: white;
+    border-color: rgba(88, 166, 255, 0.6);
+    background: rgba(88, 166, 255, 0.16);
+  }
+
+  .clear-btn {
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+
   .empty {
     border: 1px dashed var(--glass-border);
     border-radius: 10px;
@@ -609,6 +794,30 @@
     cursor: pointer;
   }
 
+  .retry-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid rgba(96, 165, 250, 0.4);
+    border-radius: 8px;
+    background: rgba(59, 130, 246, 0.14);
+    color: #bfdbfe;
+    padding: 5px 8px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .retry-btn:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+  }
+
+  .job-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .cancel-btn:disabled {
     opacity: 0.65;
     cursor: not-allowed;
@@ -639,6 +848,13 @@
     font-size: 11px;
     color: var(--text-dim);
     min-width: 36px;
+    text-align: right;
+  }
+
+  .progress-bytes {
+    font-size: 10px;
+    color: var(--text-dim);
+    min-width: 90px;
     text-align: right;
   }
 
@@ -681,6 +897,20 @@
       flex-direction: column;
       align-items: flex-start;
     }
+
+    .jobs-head {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .jobs-tools {
+      width: 100%;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .status-filter {
+      flex-wrap: wrap;
+    }
   }
 </style>
-

@@ -10,6 +10,13 @@ const BACKUPS_DIR_NAME = 'package-backups';
 const CHANNELS = new Set(['stable', 'beta', 'alpha', 'canary']);
 const MAX_HISTORY = 50;
 const MAX_BACKUPS = 20;
+const MAX_BACKUPS_LIMIT = 100;
+const MAX_BACKUP_JOBS = 60;
+const BACKUP_SCHEDULE_INTERVALS = new Set(['manual', 'daily', 'weekly', 'monthly']);
+const DEFAULT_BACKUP_TIME = '00:00';
+const SCHEDULE_TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const runningBackupJobs = new Set();
+let lifecycleMutationQueue = Promise.resolve();
 
 function nowIso() {
   return new Date().toISOString();
@@ -109,7 +116,195 @@ function normalizeBackupItem(item = {}) {
   };
 }
 
+function normalizeBackupPolicy(value = {}) {
+  const rawSchedule = value?.schedule;
+  return {
+    maxBackups: normalizeBackupMaxBackups(value),
+    schedule: normalizeBackupSchedule(rawSchedule, value)
+  };
+}
+
+function normalizeBackupMaxBackups(value = {}) {
+  const raw = Number(value?.maxBackups);
+  const maxBackups = Number.isFinite(raw)
+    ? Math.max(1, Math.min(MAX_BACKUPS_LIMIT, Math.floor(raw)))
+    : MAX_BACKUPS;
+
+  return maxBackups;
+}
+
+function normalizeBackupTime(value) {
+  const normalized = String(value || '').trim();
+  if (SCHEDULE_TIME_RE.test(normalized)) {
+    return normalized;
+  }
+  return DEFAULT_BACKUP_TIME;
+}
+
+function normalizeBackupSchedule(value = {}, fallback = {}) {
+  const fallbackSchedule = normalizeBackupScheduleDefaults(fallback);
+  const source = value && typeof value === 'object'
+    ? value
+    : {};
+
+  const intervalRaw = String(
+    Object.prototype.hasOwnProperty.call(source, 'interval')
+      ? source.interval
+      : fallbackSchedule.interval
+  ).trim().toLowerCase();
+
+  const interval = BACKUP_SCHEDULE_INTERVALS.has(intervalRaw)
+    ? intervalRaw
+    : fallbackSchedule.interval;
+
+  const enabledSource = Object.prototype.hasOwnProperty.call(source, 'enabled')
+    ? Boolean(source.enabled)
+    : fallbackSchedule.enabled;
+
+  const timeOfDaySource = Object.prototype.hasOwnProperty.call(source, 'timeOfDay')
+    ? source.timeOfDay
+    : fallbackSchedule.timeOfDay;
+
+  const timezoneSource = Object.prototype.hasOwnProperty.call(source, 'timezone')
+    ? String(source.timezone || '').trim()
+    : fallbackSchedule.timezone;
+
+  return {
+    enabled: interval === 'manual'
+      ? false
+      : enabledSource,
+    interval,
+    timeOfDay: normalizeBackupTime(timeOfDaySource),
+    timezone: timezoneSource || 'local',
+    lastRunAt: fallbackSchedule.lastRunAt ? String(fallbackSchedule.lastRunAt) : null,
+    nextRunAt: fallbackSchedule.nextRunAt ? String(fallbackSchedule.nextRunAt) : null
+  };
+}
+
+function normalizeBackupScheduleDefaults(value = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const intervalRaw = String(source.interval || 'manual').trim().toLowerCase();
+  return {
+    enabled: Boolean(source.enabled),
+    interval: BACKUP_SCHEDULE_INTERVALS.has(intervalRaw) ? intervalRaw : 'manual',
+    timeOfDay: normalizeBackupTime(source.timeOfDay || DEFAULT_BACKUP_TIME),
+    timezone: String(source.timezone || 'local').trim() || 'local',
+    lastRunAt: typeof source.lastRunAt === 'string' ? source.lastRunAt : null,
+    nextRunAt: typeof source.nextRunAt === 'string' ? source.nextRunAt : null
+  };
+}
+
+function parseBackupPolicyPatch(input = {}, currentPolicy = {}) {
+  const payload = input && typeof input === 'object' ? input : {};
+  const hasMaxBackups = Object.prototype.hasOwnProperty.call(payload, 'maxBackups');
+  const hasSchedule = Object.prototype.hasOwnProperty.call(payload, 'schedule');
+
+  if (!hasMaxBackups && !hasSchedule) {
+    const err = new Error('Either "maxBackups" or "schedule" is required.');
+    err.code = 'PACKAGE_BACKUP_POLICY_REQUIRED_FIELD';
+    throw err;
+  }
+
+  const current = normalizeBackupPolicy(currentPolicy);
+  const next = {
+    maxBackups: current.maxBackups,
+    schedule: current.schedule
+  };
+
+  if (hasMaxBackups) {
+    const raw = Number(payload.maxBackups);
+    if (!Number.isFinite(raw)) {
+      const err = new Error('Body "maxBackups" must be a number.');
+      err.code = 'PACKAGE_BACKUP_POLICY_INVALID_MAX_BACKUPS';
+      throw err;
+    }
+
+    next.maxBackups = Math.max(1, Math.min(MAX_BACKUPS_LIMIT, Math.floor(raw)));
+  }
+
+  if (hasSchedule) {
+    if (!payload.schedule || typeof payload.schedule !== 'object') {
+      const err = new Error('Body "schedule" must be an object.');
+      err.code = 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE';
+      throw err;
+    }
+
+    if (Object.keys(payload.schedule).length === 0) {
+      const err = new Error('Body "schedule" must define at least one field.');
+      err.code = 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE';
+      throw err;
+    }
+
+    const hasInterval = Object.prototype.hasOwnProperty.call(payload.schedule, 'interval');
+    const hasEnabled = Object.prototype.hasOwnProperty.call(payload.schedule, 'enabled');
+    const hasTime = Object.prototype.hasOwnProperty.call(payload.schedule, 'timeOfDay');
+
+    if (hasInterval) {
+      const interval = String(payload.schedule.interval || '').trim().toLowerCase();
+      if (!BACKUP_SCHEDULE_INTERVALS.has(interval)) {
+        const err = new Error('Body "schedule.interval" must be one of "manual", "daily", "weekly", "monthly".');
+        err.code = 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE_INTERVAL';
+        throw err;
+      }
+    }
+
+    if (hasTime) {
+      const candidate = String(payload.schedule.timeOfDay || '').trim();
+      if (candidate && !SCHEDULE_TIME_RE.test(candidate)) {
+        const err = new Error('Body "schedule.timeOfDay" must be "HH:mm".');
+        err.code = 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE_TIME';
+        throw err;
+      }
+    }
+
+    if (!hasInterval && !hasEnabled && !hasTime && !Object.prototype.hasOwnProperty.call(payload.schedule, 'timezone')) {
+      const err = new Error('Body "schedule" must define at least one supported field.');
+      err.code = 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE';
+      throw err;
+    }
+
+    next.schedule = normalizeBackupSchedule(payload.schedule, current.schedule);
+  }
+
+  return next;
+}
+
+function normalizeBackupJobItem(item = {}) {
+  const status = String(item.status || 'queued').trim().toLowerCase();
+  const allowed = new Set(['queued', 'running', 'completed', 'failed', 'canceled']);
+  const normalizedStatus = allowed.has(status) ? status : 'queued';
+  const error =
+    item.error && typeof item.error === 'object'
+      ? {
+        code: String(item.error.code || '').trim(),
+        message: String(item.error.message || '').trim()
+      }
+      : null;
+
+  return {
+    id: String(item.id || '').trim(),
+    status: normalizedStatus,
+    note: String(item.note || '').trim(),
+    createdAt: typeof item.createdAt === 'string' ? item.createdAt : nowIso(),
+    startedAt: typeof item.startedAt === 'string' ? item.startedAt : null,
+    finishedAt: typeof item.finishedAt === 'string' ? item.finishedAt : null,
+    backupId: item.backupId ? String(item.backupId).trim() : null,
+    error: error && error.code && error.message ? error : null
+  };
+}
+
+function createLifecycleError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+function createBackupJobId() {
+  return `backupjob-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function normalizeLifecycleEntry(item = {}) {
+  const backupPolicy = normalizeBackupPolicy(item.backupPolicy);
   const history = Array.isArray(item.history)
     ? item.history.map((entry) => normalizeHistoryItem(entry)).slice(-MAX_HISTORY)
     : [];
@@ -117,7 +312,13 @@ function normalizeLifecycleEntry(item = {}) {
     ? item.backups
       .map((entry) => normalizeBackupItem(entry))
       .filter((entry) => entry.id && entry.fileName)
-      .slice(-MAX_BACKUPS)
+      .slice(-backupPolicy.maxBackups)
+    : [];
+  const backupJobs = Array.isArray(item.backupJobs)
+    ? item.backupJobs
+      .map((entry) => normalizeBackupJobItem(entry))
+      .filter((entry) => entry.id)
+      .slice(-MAX_BACKUP_JOBS)
     : [];
 
   return {
@@ -133,6 +334,8 @@ function normalizeLifecycleEntry(item = {}) {
       : null,
     history,
     backups,
+    backupPolicy,
+    backupJobs,
     lastQaReport: item.lastQaReport && typeof item.lastQaReport === 'object'
       ? {
         checkedAt: typeof item.lastQaReport.checkedAt === 'string' ? item.lastQaReport.checkedAt : nowIso(),
@@ -207,16 +410,29 @@ async function writeAll(snapshot) {
   return normalized;
 }
 
+async function updateLifecycleSnapshot(updater) {
+  const operation = async () => {
+    const snapshot = await readAll();
+    const result = updater(snapshot);
+    await writeAll(snapshot);
+    return result;
+  };
+
+  const task = lifecycleMutationQueue.then(operation, operation);
+  lifecycleMutationQueue = task.catch(() => {});
+  return task;
+}
+
 async function updateAppLifecycle(appId, updater) {
   const safeAppId = appPaths.assertSafeAppId(appId);
-  const snapshot = await readAll();
-  const current = normalizeLifecycleEntry(snapshot.apps[safeAppId] || {});
-  const next = updater(current) || current;
-  const normalized = normalizeLifecycleEntry(next);
-  normalized.updatedAt = nowIso();
-  snapshot.apps[safeAppId] = normalized;
-  await writeAll(snapshot);
-  return normalized;
+  return updateLifecycleSnapshot((snapshot) => {
+    const current = normalizeLifecycleEntry(snapshot.apps[safeAppId] || {});
+    const next = updater(current) || current;
+    const normalized = normalizeLifecycleEntry(next);
+    normalized.updatedAt = nowIso();
+    snapshot.apps[safeAppId] = normalized;
+    return normalized;
+  });
 }
 
 async function addDirectoryToZip(zip, rootPath, relativePath = '') {
@@ -476,6 +692,224 @@ const packageLifecycleService = {
     };
   },
 
+  async getBackupPolicy(appId) {
+    const safeAppId = appPaths.assertSafeAppId(appId);
+    const lifecycle = await this.getLifecycle(safeAppId);
+    return {
+      appId: safeAppId,
+      backupPolicy: normalizeBackupPolicy(lifecycle.backupPolicy)
+    };
+  },
+
+  async deleteLifecycle(appId) {
+    const safeAppId = appPaths.assertSafeAppId(appId);
+    await updateLifecycleSnapshot((snapshot) => {
+      if (snapshot.apps && typeof snapshot.apps === 'object') {
+        delete snapshot.apps[safeAppId];
+      }
+    });
+    return {
+      appId: safeAppId,
+      removed: true
+    };
+  },
+
+  async setBackupPolicy(appId, policy = {}) {
+    const safeAppId = appPaths.assertSafeAppId(appId);
+    const current = await this.getLifecycle(safeAppId);
+    const nextPolicy = parseBackupPolicyPatch(policy, current.backupPolicy);
+    return updateAppLifecycle(safeAppId, (current) => {
+      const merged = Array.isArray(current.backups) ? current.backups : [];
+      const limited = merged.slice(-nextPolicy.maxBackups);
+      return {
+        ...current,
+        backupPolicy: nextPolicy,
+        backups: limited
+      };
+    });
+  },
+
+  async listBackupJobs(appId, options = {}) {
+    const safeAppId = appPaths.assertSafeAppId(appId);
+    const lifecycle = await this.getLifecycle(safeAppId);
+    const limit = Number.isFinite(Number(options.limit))
+      ? Math.max(1, Math.min(100, Number(options.limit)))
+      : 50;
+    const items = [...(Array.isArray(lifecycle.backupJobs) ? lifecycle.backupJobs : [])]
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+      .slice(0, limit);
+    return {
+      appId: safeAppId,
+      jobs: items
+    };
+  },
+
+  async createBackupJob(appId, options = {}) {
+    const safeAppId = appPaths.assertSafeAppId(appId);
+    const appRoot = await appPaths.getAppRoot(safeAppId);
+    if (!(await fs.pathExists(appRoot))) {
+      throw createLifecycleError('PACKAGE_NOT_FOUND', 'Package not found.');
+    }
+
+    const job = normalizeBackupJobItem({
+      id: createBackupJobId(),
+      status: 'queued',
+      note: String(options.note || '').trim(),
+      createdAt: nowIso(),
+      startedAt: null,
+      finishedAt: null
+    });
+
+    await updateAppLifecycle(safeAppId, (current) => ({
+      ...current,
+      backupJobs: [...current.backupJobs, job].slice(-MAX_BACKUP_JOBS)
+    }));
+
+    setTimeout(() => {
+      this.processBackupJobs(safeAppId).catch(() => {});
+    }, 0);
+
+    return {
+      appId: safeAppId,
+      job
+    };
+  },
+
+  async cancelBackupJob(appId, jobId) {
+    const safeAppId = appPaths.assertSafeAppId(appId);
+    const safeJobId = String(jobId || '').trim();
+    if (!safeJobId) {
+      throw createLifecycleError('PACKAGE_BACKUP_JOB_ID_REQUIRED', 'Backup job id is required.');
+    }
+
+    let canceled = null;
+    await updateAppLifecycle(safeAppId, (current) => {
+      const jobs = Array.isArray(current.backupJobs) ? [...current.backupJobs] : [];
+      const index = jobs.findIndex((item) => item.id === safeJobId);
+      if (index < 0) {
+        throw createLifecycleError('PACKAGE_BACKUP_JOB_NOT_FOUND', 'Backup job not found.');
+      }
+
+      const target = normalizeBackupJobItem(jobs[index]);
+      if (target.status !== 'queued') {
+        throw createLifecycleError(
+          'PACKAGE_BACKUP_JOB_NOT_CANCELABLE',
+          `Backup job cannot be canceled in "${target.status}" status.`
+        );
+      }
+
+      canceled = normalizeBackupJobItem({
+        ...target,
+        status: 'canceled',
+        finishedAt: nowIso(),
+        error: {
+          code: 'PACKAGE_BACKUP_JOB_CANCELED',
+          message: 'Backup job was canceled before execution.'
+        }
+      });
+      jobs[index] = canceled;
+      return {
+        ...current,
+        backupJobs: jobs
+      };
+    });
+
+    return {
+      appId: safeAppId,
+      job: canceled
+    };
+  },
+
+  async processBackupJobs(appId) {
+    const safeAppId = appPaths.assertSafeAppId(appId);
+    if (runningBackupJobs.has(safeAppId)) {
+      return;
+    }
+
+    const { jobs } = await this.listBackupJobs(safeAppId, { limit: MAX_BACKUP_JOBS });
+    const queued = [...jobs]
+      .filter((item) => item.status === 'queued')
+      .sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime())[0];
+    if (!queued) {
+      return;
+    }
+
+    runningBackupJobs.add(safeAppId);
+    const queuedId = queued.id;
+    try {
+      await updateAppLifecycle(safeAppId, (current) => {
+        const nextJobs = (Array.isArray(current.backupJobs) ? current.backupJobs : []).map((item) => (
+          item.id === queuedId && item.status === 'queued'
+            ? normalizeBackupJobItem({
+              ...item,
+              status: 'running',
+              startedAt: nowIso(),
+              finishedAt: null,
+              error: null
+            })
+            : item
+        ));
+        return {
+          ...current,
+          backupJobs: nextJobs
+        };
+      });
+
+      const latestJobs = await this.listBackupJobs(safeAppId, { limit: MAX_BACKUP_JOBS });
+      const latestJob = latestJobs.jobs.find((item) => item.id === queuedId);
+      if (!latestJob || latestJob.status !== 'running') {
+        return;
+      }
+
+      const backup = await this.createBackup(safeAppId, {
+        note: queued.note || `Backup job ${queuedId}`
+      });
+
+      await updateAppLifecycle(safeAppId, (current) => {
+        const nextJobs = (Array.isArray(current.backupJobs) ? current.backupJobs : []).map((item) => (
+          item.id === queuedId
+            ? normalizeBackupJobItem({
+              ...item,
+              status: 'completed',
+              finishedAt: nowIso(),
+              backupId: backup.id,
+              error: null
+            })
+            : item
+        ));
+        return {
+          ...current,
+          backupJobs: nextJobs
+        };
+      });
+    } catch (err) {
+      await updateAppLifecycle(safeAppId, (current) => {
+        const nextJobs = (Array.isArray(current.backupJobs) ? current.backupJobs : []).map((item) => (
+          item.id === queuedId
+            ? normalizeBackupJobItem({
+              ...item,
+              status: 'failed',
+              finishedAt: nowIso(),
+              error: {
+                code: String(err?.code || 'PACKAGE_BACKUP_JOB_FAILED'),
+                message: String(err?.message || 'Backup job failed.')
+              }
+            })
+            : item
+        ));
+        return {
+          ...current,
+          backupJobs: nextJobs
+        };
+      }).catch(() => {});
+    } finally {
+      runningBackupJobs.delete(safeAppId);
+      setTimeout(() => {
+        this.processBackupJobs(safeAppId).catch(() => {});
+      }, 0);
+    }
+  },
+
   async setChannel(appId, channel) {
     const nextChannel = normalizeChannel(channel, 'stable');
     return updateAppLifecycle(appId, (current) => ({
@@ -586,10 +1020,23 @@ const packageLifecycleService = {
       note: String(options.note || '').trim()
     });
 
+    let removedBackups = [];
     await updateAppLifecycle(safeAppId, (current) => ({
       ...current,
-      backups: [...current.backups, backupEntry].slice(-MAX_BACKUPS)
+      backupPolicy: normalizeBackupPolicy(current.backupPolicy),
+      backups: (() => {
+        const merged = [...current.backups, backupEntry];
+        const keepCount = normalizeBackupPolicy(current.backupPolicy).maxBackups;
+        const kept = merged.slice(-keepCount);
+        removedBackups = merged.slice(0, Math.max(0, merged.length - kept.length));
+        return kept;
+      })()
     }));
+
+    for (const stale of removedBackups) {
+      const stalePath = path.join(appBackupsDir, stale.fileName || '');
+      await fs.remove(stalePath).catch(() => {});
+    }
 
     return backupEntry;
   },

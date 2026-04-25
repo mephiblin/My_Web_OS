@@ -417,11 +417,6 @@
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   }
 
-  .spinner {
-    animation: spin 2s linear infinite;
-    color: var(--accent-blue, #3b82f6);
-  }
-
   .status-text {
     font-size: 14px;
     font-weight: 500;
@@ -587,4 +582,3 @@
     to { transform: rotate(360deg); }
   }
 </style>
-

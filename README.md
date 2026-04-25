@@ -1,17 +1,14 @@
 # My Web OS - Developer README
 
-이 문서는 개발자/에이전트(Codex) 작업 기준 문서다.
-일반 사용자용 안내는 `USER_README.md`를 본다.
+This is the developer and agent-facing guide.
+For end users/operators, read `USER_README.md`.
 
-## 1) Project Positioning
+## 1) Project Scope
 
-My Web OS는 개인 PC/홈서버를 브라우저에서 운영하기 위한 Web OS 계층이다.
+My Web OS is a browser-based operations layer for a personally owned PC/home server.
+It is not a kernel replacement, VM platform, or public multi-tenant SaaS.
 
-- 커널 OS 대체물 아님
-- 공개 멀티테넌트 서비스 아님
-- Host 권한 동작은 승인/감사/복구 가능성이 우선
-
-핵심 모델:
+Core model:
 
 ```text
 Home Server = files, media, backup, services, Docker, logs
@@ -20,54 +17,50 @@ Web OS = permissions, approval, audit, lifecycle, recovery
 Package Center = install/create/run/update/backup/rollback
 ```
 
-## 2) Canonical Docs Matrix
+## 2) Canonical Docs
 
-우선순위:
+Priority:
 
-1. `AGENTS.md` + roadmap/product brief
+1. `AGENTS.md` + product/roadmap docs
 2. active planning/reference docs
-3. dated operations snapshot
-4. archive/legacy docs
+3. dated operations snapshots
+4. archived/legacy docs
 
-문서 상태 인덱스는 `doc/README.md`를 사용한다.
+Document index and status labels live in `doc/README.md`.
 
-핵심 문서:
+Primary docs:
 
-- `AGENTS.md` (작업 규약/로드맵/검증 기준)
+- `AGENTS.md`
 - `doc/planning/product-brief-home-server-remote-computer.md`
-- `doc/planning/roadmap-home-server-remote-computer.md`
 - `doc/planning/feature-inventory-home-server-remote-computer.md`
+- `doc/planning/roadmap-home-server-remote-computer.md`
 - `doc/reference/architecture-api-reference.md`
 - `doc/reference/package-ecosystem-guide.md`
 - `doc/operations/completed-backlog-log.md`
 - `doc/operations/local-run-guide.md`
 - `doc/operations/remote-access-hardening-guide.md`
 
-사용자 문서:
+## 3) Development Contract
 
-- `USER_README.md`
+Implementation order:
 
-## 3) Development Workflow
+1. contract/API
+2. service/helper/store
+3. minimal UI
+4. verification
+5. docs sync
 
-기본 순서:
+Rules:
 
-1. `contract/API`
-2. `service/helper/store`
-3. `minimal UI`
-4. `verification`
-5. `docs sync`
-
-원칙:
-
-- 경계(approval/audit/recovery) 먼저, UI 폴리시 나중
-- route는 얇게, 서비스에 상태 전이 집중
-- 위험 동작(delete/overwrite/rollback/exec)은 절대 silent 금지
-- `Desktop.svelte`, `Window.svelte`에 앱별 기능 로직 직접 추가 금지
-- dirty worktree의 unrelated 변경은 절대 되돌리지 않기
+- Keep route handlers thin; put state transitions in services.
+- Validate risky state changes on backend (path, appId, runtime, manifest, grants).
+- Never make risky operations silent (delete/overwrite/rollback/command execution).
+- Do not move feature logic into `client/src/core/Desktop.svelte` or `Window.svelte`.
+- Do not revert unrelated dirty workspace changes.
 
 ## 4) Layer Ownership
 
-### Host
+Host:
 
 - `server/routes/fs.js`
 - `server/routes/system.js`
@@ -78,14 +71,14 @@ Package Center = install/create/run/update/backup/rollback
 - `server/routes/transfer.js`
 - `server/services/*`
 
-### Web Desktop
+Web Desktop:
 
 - `client/src/core/Desktop.svelte`
 - `client/src/core/Window.svelte`
 - `client/src/core/components/*`
 - `client/src/core/stores/*`
 
-### App Install / File Workflow
+App Install / File Workflow:
 
 - `client/src/apps/system/file-explorer/*`
 - `client/src/apps/system/transfer/*`
@@ -93,7 +86,7 @@ Package Center = install/create/run/update/backup/rollback
 - `server/services/fileGrantService.js`
 - `server/services/cloudService.js`
 
-### Sandbox / Package
+Sandbox / Package:
 
 - `client/src/apps/system/package-center/*`
 - `server/routes/packages.js`
@@ -144,29 +137,34 @@ docker compose logs --tail=80 frontend
 docker compose down
 ```
 
-## 6) Runtime File Tracking
+## 6) Commit Safety
 
-커밋 전 확인:
+Before committing:
 
-- `server/index.js`가 import하는 route/service 누락 여부
-  - 특히 `server/routes/ai.js`, `server/services/aiActionService.js`
-- generated storage churn (`server/storage/index.json`) 포함 의도 여부
-- `git status --short` 기준으로 의도한 파일만 stage 되었는지
+- check `git status --short`
+- verify runtime imports from `server/index.js` are present
+  - especially `server/routes/ai.js`, `server/services/aiActionService.js`
+- avoid accidental generated storage churn (`server/storage/index.json`) unless intentional
 
-## 7) Roadmap Execution Rule
+## 7) Roadmap Execution
 
-`AGENTS.md`의 backlog를 기준으로 첫 미완 항목부터 수행한다.
+Use `AGENTS.md` roadmap and pick the first unfinished item unless the user requests chaining.
 
-- 기본은 한 아이템씩
-- 체인 요청이 있을 때만 연속 수행
-- 각 아이템 종료 시 변경/검증/남은 리스크/다음 아이템을 보고
+For each completed item report:
 
-## 8) Doc Lifecycle Rule
+- changed files
+- behavior change
+- verification results
+- skipped checks (with reason)
+- remaining risks
+- next recommended item
 
-- active 문서: 현재 구현 판단 기준
-- snapshot 문서: 특정 날짜 시점 기록
-- completed 문서: 완료 증적
-- legacy 문서: 1회성 이관/하위호환 대응
-- archived 문서: 신규 작업 기준 아님
+## 8) Doc Lifecycle
 
-아카이브 문서는 `doc/archive/README.md`와 그 하위 경로에서 관리한다.
+- active: current implementation/operations baseline
+- snapshot: date-based progress record
+- completed: completion evidence
+- legacy: one-time migration/backward-compat guidance
+- archived: historical reference only
+
+Archive index: `doc/archive/README.md`.

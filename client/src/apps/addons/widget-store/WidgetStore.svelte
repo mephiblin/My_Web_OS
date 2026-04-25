@@ -99,8 +99,9 @@
     {#if activeTab === 'presets'}
       <div class="preset-grid">
         {#each presets as p}
+          {@const PresetIcon = p.icon}
           <div class="card">
-            <div class="icon-box"><svelte:component this={p.icon} size={24} color="var(--accent-blue)" /></div>
+            <div class="icon-box"><PresetIcon size={24} color="var(--accent-blue)" /></div>
             <div class="info"><span class="title">{p.title}</span><span class="desc">{p.desc}</span></div>
             <button class="add-btn" onclick={() => addPreset(p)}><Plus size={14} /> Add</button>
           </div>
@@ -110,8 +111,9 @@
     {:else if activeTab === 'system'}
       <div class="preset-grid">
         {#each systemWidgets as s}
+          {@const SystemIcon = s.icon}
           <div class="card sys-card">
-            <div class="icon-box sys"><svelte:component this={s.icon} size={20} color="#34d399" /></div>
+            <div class="icon-box sys"><SystemIcon size={20} color="#34d399" /></div>
             <div class="info"><span class="title">{s.title}</span><span class="desc">{s.desc}</span></div>
             <button class="add-btn sys-btn" onclick={() => addSystemWidget(s)}><Plus size={14} /> Add</button>
           </div>
@@ -153,16 +155,16 @@
         </div>
         
         <div class="form-group">
-          <label>Widget Title</label>
-          <input type="text" bind:value={tempTitle} placeholder="e.g. My Website" />
+          <label for="widgetTitle">Widget Title</label>
+          <input id="widgetTitle" type="text" bind:value={tempTitle} placeholder="e.g. My Website" />
         </div>
 
         <div class="form-group">
-          <label>{activeTab === 'url' ? 'URL' : 'HTML / JS Content'}</label>
+          <label for="widgetSource">{activeTab === 'url' ? 'URL' : 'HTML / JS Content'}</label>
           {#if activeTab === 'url'}
-            <input type="text" bind:value={tempSource} placeholder="https://example.com" />
+            <input id="widgetSource" type="text" bind:value={tempSource} placeholder="https://example.com" />
           {:else}
-            <textarea bind:value={tempSource} rows="10" spellcheck="false"></textarea>
+            <textarea id="widgetSource" bind:value={tempSource} rows="10" spellcheck="false"></textarea>
           {/if}
         </div>
 
@@ -250,4 +252,3 @@
 
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 </style>
-

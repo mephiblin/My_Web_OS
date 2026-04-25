@@ -98,6 +98,9 @@ const AGENT_CHAT_MAX_DRAFT_LENGTH = 2000;
 const AGENT_CHAT_MAX_APPROVAL_TITLE_LENGTH = 120;
 const AGENT_CHAT_MAX_APPROVAL_SUMMARY_LENGTH = 2000;
 const AGENT_CHAT_MAX_META_LENGTH = 2000;
+const AGENT_CHAT_MAX_RESULT_ACTION_COUNT = 8;
+const AGENT_CHAT_MAX_RESULT_PAYLOAD_LENGTH = 2000;
+const AGENT_CHAT_MAX_RAW_OUTPUT_LENGTH = 8000;
 
 const DEFAULT_BY_KEY = {
   settings: DEFAULT_SETTINGS,
@@ -395,6 +398,24 @@ function normalizeAgentChatMessage(item, index) {
   const hasApproval = Boolean(approval?.actionId && approval?.title);
   if (!content && !hasApproval) return null;
 
+  const normalizedResultActions =
+    Array.isArray(item?.meta?.resultActions)
+      ? item.meta.resultActions
+        .slice(0, AGENT_CHAT_MAX_RESULT_ACTION_COUNT)
+        .map((action, actionIndex) => ({
+          id: asTrimmedString(action?.id, `result-action-${actionIndex + 1}`, AGENT_CHAT_MAX_ID_LENGTH),
+          type: asTrimmedString(action?.type, '', 64),
+          label: asTrimmedString(action?.label, '', 200),
+          status: asTrimmedString(action?.status, 'ready', 24),
+          payload: asTrimmedString(
+            typeof action?.payload === 'string' ? action.payload : JSON.stringify(action?.payload || {}),
+            '{}',
+            AGENT_CHAT_MAX_RESULT_PAYLOAD_LENGTH
+          )
+        }))
+        .filter((action) => action.type && action.label)
+      : [];
+
   return {
     id: asTrimmedString(item.id, `message-${index + 1}`, AGENT_CHAT_MAX_ID_LENGTH),
     role: item.role,
@@ -405,7 +426,11 @@ function normalizeAgentChatMessage(item, index) {
       ? {
           sourceMessageId: asTrimmedString(item.meta.sourceMessageId, '', AGENT_CHAT_MAX_ID_LENGTH),
           decision: asTrimmedString(item.meta.decision, '', 24),
-          note: asTrimmedString(item.meta.note, '', AGENT_CHAT_MAX_META_LENGTH)
+          note: asTrimmedString(item.meta.note, '', AGENT_CHAT_MAX_META_LENGTH),
+          resultTitle: asTrimmedString(item.meta.resultTitle, '', 160),
+          resultStatus: asTrimmedString(item.meta.resultStatus, '', 24),
+          rawOutput: asTrimmedString(item.meta.rawOutput, '', AGENT_CHAT_MAX_RAW_OUTPUT_LENGTH),
+          resultActions: normalizedResultActions
         }
       : null,
     createdAt: asNumberInRange(item.createdAt, Date.now(), 0, Number.MAX_SAFE_INTEGER)

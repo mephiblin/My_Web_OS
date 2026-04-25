@@ -1,0 +1,7 @@
+services:
+  proxy:
+    environment:
+      WEBOS_ACME_EMAIL: "${WEBOS_ACME_EMAIL:?Set WEBOS_ACME_EMAIL in .env.hardened}"
+      WEBOS_ACME_CA: "${WEBOS_ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}"
+    volumes:
+      - ./docker/Caddyfile.acme:/etc/caddy/Caddyfile:ro

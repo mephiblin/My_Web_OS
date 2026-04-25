@@ -1,5 +1,7 @@
 # Package Troubleshooting
 
+> Status: `[ACTIVE]` package install/runtime 운영 트러블슈팅 가이드.
+
 This document lists common package install/runtime issues and quick recovery actions.
 
 ## 1. Preflight Blocked
@@ -66,4 +68,3 @@ Actions:
 
 1. Query `GET /api/system/app-api-policy?clientVersion=<x.y.z>`
 2. Align app client version with `minimumSupportedVersion` and major compatibility rules
-

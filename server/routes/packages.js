@@ -56,10 +56,22 @@ let cachedAdminUsername = '';
 
 const ECOSYSTEM_TEMPLATES = [
   {
-    id: 'markdown-workspace',
-    title: 'Markdown Workspace',
+    id: 'empty-html',
+    title: 'Empty HTML App',
     category: 'productivity',
-    description: '문서 작성/노트용 1st-party 기본 앱 템플릿',
+    description: '가장 작은 sandbox-html 앱 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: []
+    }
+  },
+  {
+    id: 'memo-app',
+    title: 'Memo App',
+    category: 'productivity',
+    description: 'app-owned data 기반 메모 앱 템플릿',
     defaults: {
       runtimeType: 'sandbox-html',
       appType: 'app',
@@ -68,10 +80,70 @@ const ECOSYSTEM_TEMPLATES = [
     }
   },
   {
-    id: 'ops-dashboard',
-    title: 'Ops Dashboard',
+    id: 'todo-app',
+    title: 'Todo App',
+    category: 'productivity',
+    description: 'app-owned data 기반 할 일 관리 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['app.data.read', 'app.data.write']
+    }
+  },
+  {
+    id: 'bookmark-manager',
+    title: 'Bookmark Manager',
+    category: 'productivity',
+    description: 'app-owned data 기반 북마크 관리 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['app.data.read', 'app.data.write', 'window.open']
+    }
+  },
+  {
+    id: 'calculator',
+    title: 'Calculator',
+    category: 'utility',
+    description: '간단한 계산기 앱 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: []
+    }
+  },
+  {
+    id: 'clipboard-history',
+    title: 'Clipboard History',
+    category: 'utility',
+    description: 'app-owned data 기반 클립보드 기록 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['app.data.read', 'app.data.write']
+    }
+  },
+  {
+    id: 'widget-basic',
+    title: 'Widget Template',
+    category: 'widget',
+    description: 'widget 타입의 작은 대시보드 위젯 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'widget',
+      entry: 'index.html',
+      permissions: ['system.info']
+    }
+  },
+  {
+    id: 'server-monitor',
+    title: 'Server Monitor',
     category: 'system',
-    description: '상태/이벤트 확인용 운영 대시보드 템플릿',
+    description: 'system.info를 사용하는 서버 모니터 템플릿',
     defaults: {
       runtimeType: 'sandbox-html',
       appType: 'app',
@@ -80,14 +152,62 @@ const ECOSYSTEM_TEMPLATES = [
     }
   },
   {
-    id: 'service-probe',
-    title: 'Service Probe',
-    category: 'runtime',
-    description: '런타임 헬스 체크/복구 실험용 서비스 템플릿',
+    id: 'markdown-editor',
+    title: 'Markdown Editor',
+    category: 'productivity',
+    description: '마크다운 편집/미리보기 앱 템플릿',
     defaults: {
-      runtimeType: 'process-node',
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['app.data.read', 'app.data.write']
+    }
+  },
+  {
+    id: 'json-formatter',
+    title: 'JSON Formatter',
+    category: 'developer',
+    description: 'JSON 유효성 검사/정렬 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['app.data.read', 'app.data.write']
+    }
+  },
+  {
+    id: 'api-tester',
+    title: 'API Tester',
+    category: 'developer',
+    description: '헤더 편집/응답 저장을 지원하는 HTTP 요청 테스트 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['app.data.read', 'app.data.write']
+    }
+  },
+  {
+    id: 'snippet-vault',
+    title: 'Snippet Vault',
+    category: 'developer',
+    description: '검색/태그/내보내기를 지원하는 app-owned data 스니펫 보관 템플릿',
+    defaults: {
+      runtimeType: 'sandbox-html',
+      appType: 'app',
+      entry: 'index.html',
+      permissions: ['app.data.read', 'app.data.write']
+    }
+  },
+  {
+    id: 'python-experimental',
+    title: 'Python Experimental',
+    category: 'runtime',
+    description: 'process-python 기반 실험용 서비스 템플릿',
+    defaults: {
+      runtimeType: 'process-python',
       appType: 'service',
-      entry: 'service.js',
+      entry: 'service.py',
       permissions: []
     }
   }
@@ -622,6 +742,1516 @@ setInterval(() => {
   console.log('heartbeat');
 }, 5000);
 `;
+}
+
+function createTemplateEntryContent(templateId, options = {}) {
+  const key = String(templateId || '').trim();
+  const appId = String(options.appId || '').trim();
+  const title = String(options.title || appId || 'Web OS App').trim();
+
+  if (!key || key === 'empty-html') {
+    return createDefaultHtmlTemplate({ appId, title });
+  }
+
+  if (key === 'memo-app') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; padding: 12px; font-family: sans-serif; background: #0f172a; color: #e2e8f0; }
+      textarea { width: 100%; min-height: 70vh; border-radius: 8px; border: 1px solid #334155; background: #111827; color: #e2e8f0; padding: 10px; box-sizing: border-box; }
+      .row { display: flex; gap: 8px; margin-top: 8px; }
+      button { border: 1px solid #334155; background: #1e293b; color: #e2e8f0; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <h3>${title}</h3>
+    <textarea id="memo" placeholder="Write memo..."></textarea>
+    <div class="row">
+      <button id="save">Save</button>
+      <button id="load">Load</button>
+    </div>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const el = document.getElementById('memo');
+      async function save() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({ path: 'memo.txt', content: el.value });
+      }
+      async function load() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return;
+        try {
+          const out = await sdk.app.data.read({ path: 'memo.txt' });
+          el.value = out?.content || '';
+        } catch (_err) {}
+      }
+      document.getElementById('save').onclick = save;
+      document.getElementById('load').onclick = load;
+      window.WebOS?.ready?.().then(load).catch(() => {});
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'todo-app') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; padding: 12px; font-family: sans-serif; background: #0f172a; color: #e2e8f0; }
+      form { display: flex; gap: 8px; margin-bottom: 10px; }
+      input { flex: 1; border: 1px solid #334155; border-radius: 6px; padding: 8px; background: #111827; color: #e2e8f0; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 7px 10px; cursor: pointer; }
+      ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+      li { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid #334155; border-radius: 6px; background: #111827; }
+      li.done span { text-decoration: line-through; opacity: 0.65; }
+      .remove { margin-left: auto; }
+    </style>
+  </head>
+  <body>
+    <h3>${title}</h3>
+    <form id="todo-form">
+      <input id="todo-input" placeholder="Add a task" />
+      <button type="submit">Add</button>
+    </form>
+    <ul id="todo-list"></ul>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const FILE_PATH = 'todo-items.json';
+      const form = document.getElementById('todo-form');
+      const input = document.getElementById('todo-input');
+      const list = document.getElementById('todo-list');
+      let todos = [];
+
+      async function readTodos() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return [];
+        try {
+          const out = await sdk.app.data.read({ path: FILE_PATH });
+          const parsed = JSON.parse(String(out?.content || '[]'));
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (_err) {
+          return [];
+        }
+      }
+
+      async function writeTodos() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({
+          path: FILE_PATH,
+          content: JSON.stringify(todos, null, 2)
+        });
+      }
+
+      function render() {
+        list.innerHTML = '';
+        todos.forEach((item, index) => {
+          const row = document.createElement('li');
+          if (item.done) row.className = 'done';
+
+          const toggle = document.createElement('input');
+          toggle.type = 'checkbox';
+          toggle.checked = Boolean(item.done);
+          toggle.addEventListener('change', async () => {
+            todos[index].done = toggle.checked;
+            await writeTodos();
+            render();
+          });
+
+          const label = document.createElement('span');
+          label.textContent = String(item.text || '');
+
+          const remove = document.createElement('button');
+          remove.className = 'remove';
+          remove.type = 'button';
+          remove.textContent = 'Delete';
+          remove.addEventListener('click', async () => {
+            todos.splice(index, 1);
+            await writeTodos();
+            render();
+          });
+
+          row.appendChild(toggle);
+          row.appendChild(label);
+          row.appendChild(remove);
+          list.appendChild(row);
+        });
+      }
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const text = String(input.value || '').trim();
+        if (!text) return;
+        todos.unshift({
+          id: Date.now(),
+          text,
+          done: false
+        });
+        input.value = '';
+        await writeTodos();
+        render();
+      });
+
+      window.WebOS?.ready?.().then(async () => {
+        todos = await readTodos();
+        render();
+      }).catch(() => {});
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'bookmark-manager') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; padding: 12px; font-family: sans-serif; background: #0f172a; color: #e2e8f0; }
+      form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 10px; }
+      input { border: 1px solid #334155; border-radius: 6px; padding: 8px; background: #111827; color: #e2e8f0; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 7px 10px; cursor: pointer; }
+      ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+      li { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid #334155; border-radius: 6px; background: #111827; }
+      a { color: #93c5fd; text-decoration: none; }
+      .remove { margin-left: auto; }
+      .toolbar { display: flex; gap: 8px; margin-bottom: 10px; }
+      .hint { font-size: 12px; color: #93c5fd; margin-bottom: 8px; }
+    </style>
+  </head>
+  <body>
+    <h3>${title}</h3>
+    <div class="hint">Only HTTP/HTTPS URLs are accepted. Duplicate URLs are ignored.</div>
+    <div class="toolbar">
+      <button id="export-bookmarks" type="button">Export JSON</button>
+      <button id="import-bookmarks" type="button">Import JSON</button>
+      <input id="import-file" type="file" accept="application/json" hidden />
+    </div>
+    <form id="bookmark-form">
+      <input id="bookmark-title" placeholder="Title" />
+      <input id="bookmark-url" placeholder="https://example.com" />
+      <button type="submit">Add</button>
+    </form>
+    <ul id="bookmark-list"></ul>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const FILE_PATH = 'bookmarks.json';
+      const form = document.getElementById('bookmark-form');
+      const titleInput = document.getElementById('bookmark-title');
+      const urlInput = document.getElementById('bookmark-url');
+      const exportButton = document.getElementById('export-bookmarks');
+      const importButton = document.getElementById('import-bookmarks');
+      const importFileInput = document.getElementById('import-file');
+      const list = document.getElementById('bookmark-list');
+      let bookmarks = [];
+
+      async function readBookmarks() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return [];
+        try {
+          const out = await sdk.app.data.read({ path: FILE_PATH });
+          const parsed = JSON.parse(String(out?.content || '[]'));
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (_err) {
+          return [];
+        }
+      }
+
+      async function writeBookmarks() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({
+          path: FILE_PATH,
+          content: JSON.stringify(bookmarks, null, 2)
+        });
+      }
+
+      function normalizeUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return null;
+        const candidate = /^https?:\\/\\//i.test(raw) ? raw : ('https://' + raw);
+        try {
+          const parsed = new URL(candidate);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+          return parsed.toString();
+        } catch (_err) {
+          return null;
+        }
+      }
+
+      function hasDuplicateUrl(url) {
+        const target = String(url || '').trim().toLowerCase();
+        return bookmarks.some((item) => String(item?.url || '').trim().toLowerCase() === target);
+      }
+
+      async function addBookmark(payload) {
+        const title = String(payload?.title || '').trim();
+        const url = normalizeUrl(payload?.url);
+        if (!url || hasDuplicateUrl(url)) return false;
+        bookmarks.unshift({
+          id: Date.now() + Math.random(),
+          title: title || url,
+          url,
+          createdAt: new Date().toISOString()
+        });
+        await writeBookmarks();
+        render();
+        return true;
+      }
+
+      function render() {
+        list.innerHTML = '';
+        bookmarks.forEach((item, index) => {
+          const row = document.createElement('li');
+
+          const link = document.createElement('a');
+          link.href = String(item.url || '#');
+          link.target = '_blank';
+          link.rel = 'noreferrer';
+          link.textContent = String(item.title || item.url || 'Untitled');
+
+          const remove = document.createElement('button');
+          remove.className = 'remove';
+          remove.type = 'button';
+          remove.textContent = 'Delete';
+          remove.addEventListener('click', async () => {
+            bookmarks.splice(index, 1);
+            await writeBookmarks();
+            render();
+          });
+
+          row.appendChild(link);
+          row.appendChild(remove);
+          list.appendChild(row);
+        });
+      }
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const added = await addBookmark({
+          title: String(titleInput.value || '').trim(),
+          url: String(urlInput.value || '')
+        });
+        if (!added) return;
+        titleInput.value = '';
+        urlInput.value = '';
+      });
+
+      exportButton.addEventListener('click', () => {
+        const blob = new Blob([JSON.stringify(bookmarks, null, 2)], { type: 'application/json' });
+        const href = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = href;
+        anchor.download = 'bookmarks.json';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(href);
+      });
+
+      importButton.addEventListener('click', () => importFileInput.click());
+
+      importFileInput.addEventListener('change', async () => {
+        const file = importFileInput.files && importFileInput.files[0] ? importFileInput.files[0] : null;
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const parsed = JSON.parse(text);
+          const rows = Array.isArray(parsed) ? parsed : [];
+          for (const row of rows.slice(0, 2000)) {
+            await addBookmark({
+              title: String(row?.title || '').trim(),
+              url: String(row?.url || '')
+            });
+          }
+        } catch (_err) {}
+        importFileInput.value = '';
+      });
+
+      window.WebOS?.ready?.().then(async () => {
+        bookmarks = await readBookmarks();
+        render();
+      }).catch(() => {});
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'calculator') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; padding: 12px; font-family: sans-serif; background: #0f172a; color: #e2e8f0; }
+      .display { border: 1px solid #334155; border-radius: 8px; padding: 10px; min-height: 24px; background: #111827; font-size: 20px; margin-bottom: 10px; text-align: right; }
+      .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 10px; cursor: pointer; font-size: 14px; }
+      .history { margin-top: 10px; border: 1px solid #334155; border-radius: 8px; background: #111827; max-height: 160px; overflow: auto; }
+      .history-item { font-family: monospace; font-size: 12px; padding: 6px 10px; border-top: 1px solid #1f2937; }
+      .history-item:first-child { border-top: 0; }
+    </style>
+  </head>
+  <body>
+    <h3>${title}</h3>
+    <div id="display" class="display">0</div>
+    <div class="grid" id="keys"></div>
+    <div id="history" class="history"></div>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const HISTORY_PATH = 'calculator-history.json';
+      const display = document.getElementById('display');
+      const keys = document.getElementById('keys');
+      const historyEl = document.getElementById('history');
+      const buttons = ['7','8','9','/','4','5','6','*','1','2','3','-','0','.','=','+','C'];
+      let expr = '';
+      let history = [];
+
+      function update() {
+        display.textContent = expr || '0';
+      }
+
+      function renderHistory() {
+        historyEl.innerHTML = '';
+        history.slice(0, 30).forEach((row) => {
+          const item = document.createElement('div');
+          item.className = 'history-item';
+          item.textContent = row;
+          historyEl.appendChild(item);
+        });
+      }
+
+      async function loadHistory() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return [];
+        try {
+          const out = await sdk.app.data.read({ path: HISTORY_PATH });
+          const parsed = JSON.parse(String(out?.content || '[]'));
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (_err) {
+          return [];
+        }
+      }
+
+      async function saveHistory() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({
+          path: HISTORY_PATH,
+          content: JSON.stringify(history.slice(0, 100), null, 2)
+        });
+      }
+
+      async function evaluateExpression() {
+        if (!expr.trim() || expr === 'Error') return;
+        const original = expr;
+        try {
+          const safe = /^[0-9+\\-*/.()\\s]+$/.test(expr);
+          if (!safe) return;
+          const result = Function('"use strict"; return (' + expr + ')')();
+          expr = String(Number.isFinite(result) ? result : 'Error');
+        } catch (_err) {
+          expr = 'Error';
+        }
+        if (expr !== 'Error') {
+          history.unshift(original + ' = ' + expr);
+          history = history.slice(0, 100);
+          await saveHistory();
+          renderHistory();
+        }
+        update();
+      }
+
+      buttons.forEach((label) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.addEventListener('click', () => {
+          if (label === 'C') {
+            expr = '';
+            update();
+            return;
+          }
+          if (label === '=') {
+            evaluateExpression();
+            return;
+          }
+          expr += label;
+          update();
+        });
+        keys.appendChild(button);
+      });
+
+      document.addEventListener('keydown', (event) => {
+        const key = event.key;
+        if (/^[0-9]$/.test(key) || ['+', '-', '*', '/', '(', ')', '.'].includes(key)) {
+          expr += key;
+          update();
+          return;
+        }
+        if (key === 'Enter') {
+          event.preventDefault();
+          evaluateExpression();
+          return;
+        }
+        if (key === 'Backspace') {
+          expr = expr.slice(0, -1);
+          update();
+          return;
+        }
+        if (key.toLowerCase() === 'c' || key === 'Escape') {
+          expr = '';
+          update();
+        }
+      });
+
+      window.WebOS?.ready?.().then(async () => {
+        history = await loadHistory();
+        renderHistory();
+      }).catch(() => {});
+
+      update();
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'clipboard-history') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; padding: 12px; font-family: sans-serif; background: #0f172a; color: #e2e8f0; }
+      .row { display: flex; gap: 8px; margin-bottom: 10px; }
+      textarea { width: 100%; min-height: 84px; border: 1px solid #334155; border-radius: 6px; padding: 8px; box-sizing: border-box; background: #111827; color: #e2e8f0; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 7px 10px; cursor: pointer; }
+      ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+      li { padding: 8px; border: 1px solid #334155; border-radius: 6px; background: #111827; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+      .actions { margin-top: 6px; display: flex; gap: 6px; }
+    </style>
+  </head>
+  <body>
+    <h3>${title}</h3>
+    <div style="font-size:12px;color:#93c5fd;margin-bottom:8px;">Manual add only. No automatic host clipboard capture.</div>
+    <textarea id="clip-input" placeholder="Paste or type text"></textarea>
+    <div class="row">
+      <button id="capture" type="button">Add</button>
+      <button id="clear-all" type="button">Clear All</button>
+    </div>
+    <ul id="clip-list"></ul>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const FILE_PATH = 'clipboard-history.json';
+      const MAX_ENTRIES = 100;
+      const input = document.getElementById('clip-input');
+      const captureButton = document.getElementById('capture');
+      const clearAllButton = document.getElementById('clear-all');
+      const list = document.getElementById('clip-list');
+      let history = [];
+
+      async function readHistory() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return [];
+        try {
+          const out = await sdk.app.data.read({ path: FILE_PATH });
+          const parsed = JSON.parse(String(out?.content || '[]'));
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (_err) {
+          return [];
+        }
+      }
+
+      async function writeHistory() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({
+          path: FILE_PATH,
+          content: JSON.stringify(history, null, 2)
+        });
+      }
+
+      function render() {
+        list.innerHTML = '';
+        history.forEach((item, index) => {
+          const row = document.createElement('li');
+          const text = document.createElement('pre');
+          text.textContent = String(item.text || '');
+
+          const actions = document.createElement('div');
+          actions.className = 'actions';
+
+          const copy = document.createElement('button');
+          copy.type = 'button';
+          copy.textContent = 'Copy';
+          copy.addEventListener('click', async () => {
+            try {
+              await navigator.clipboard.writeText(String(item.text || ''));
+            } catch (_err) {}
+          });
+
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.textContent = 'Delete';
+          remove.addEventListener('click', async () => {
+            history.splice(index, 1);
+            await writeHistory();
+            render();
+          });
+
+          actions.appendChild(copy);
+          actions.appendChild(remove);
+          row.appendChild(text);
+          row.appendChild(actions);
+          list.appendChild(row);
+        });
+      }
+
+      async function addEntry(text) {
+        const normalized = String(text || '').trim();
+        if (!normalized) return;
+        history.unshift({
+          id: Date.now() + Math.random(),
+          text: normalized,
+          createdAt: new Date().toISOString()
+        });
+        history = history.slice(0, MAX_ENTRIES);
+        await writeHistory();
+        render();
+      }
+
+      captureButton.addEventListener('click', async () => {
+        await addEntry(input.value);
+        input.value = '';
+      });
+
+      clearAllButton.addEventListener('click', async () => {
+        history = [];
+        await writeHistory();
+        render();
+      });
+
+      window.WebOS?.ready?.().then(async () => {
+        history = await readHistory();
+        if (history.length > MAX_ENTRIES) {
+          history = history.slice(0, MAX_ENTRIES);
+          await writeHistory();
+        }
+        render();
+      }).catch(() => {});
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'widget-basic') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; padding: 10px; font-family: sans-serif; background: #0b1220; color: #dbeafe; }
+      .card { border: 1px solid #334155; border-radius: 8px; padding: 10px; }
+      .metric { font-size: 24px; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div>${title}</div>
+      <div id="metric" class="metric">--</div>
+    </div>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      async function tick() {
+        try {
+          const info = await window.WebOS.system.info();
+          const cpu = Number(info?.cpu?.currentLoad || 0).toFixed(1);
+          document.getElementById('metric').textContent = cpu + '% CPU';
+        } catch (_err) {}
+      }
+      window.WebOS?.ready?.().then(() => {
+        tick();
+        setInterval(tick, 3000);
+      }).catch(() => {});
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'server-monitor') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; padding: 12px; font-family: sans-serif; background: #020617; color: #e2e8f0; }
+      pre { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h3>${title}</h3>
+    <pre id="out">Loading...</pre>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      async function refresh() {
+        try {
+          const info = await window.WebOS.system.info();
+          document.getElementById('out').textContent = JSON.stringify(info, null, 2);
+        } catch (err) {
+          document.getElementById('out').textContent = String(err?.message || err);
+        }
+      }
+      window.WebOS?.ready?.().then(() => { refresh(); setInterval(refresh, 4000); }).catch(() => {});
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'markdown-editor') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; height: 100vh; display: grid; grid-template-columns: 1fr 1fr; background: #0f172a; color: #e2e8f0; font-family: sans-serif; }
+      textarea { border: 0; outline: 0; padding: 12px; resize: none; background: #111827; color: #e2e8f0; }
+      pre { margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; border-left: 1px solid #334155; }
+    </style>
+  </head>
+  <body>
+    <textarea id="src" placeholder="# Markdown"></textarea>
+    <pre id="preview"></pre>
+    <script>
+      const src = document.getElementById('src');
+      const preview = document.getElementById('preview');
+      function render() { preview.textContent = src.value; }
+      src.addEventListener('input', render);
+      render();
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'json-formatter') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto auto auto 1fr; background: #0f172a; color: #e2e8f0; font-family: sans-serif; }
+      .toolbar { display: flex; gap: 8px; padding: 10px; border-bottom: 1px solid #334155; }
+      .host-row { display: flex; gap: 8px; padding: 0 10px 10px; border-bottom: 1px solid #334155; }
+      .policy-row { display: flex; gap: 10px; padding: 0 10px 10px; border-bottom: 1px solid #334155; align-items: center; flex-wrap: wrap; }
+      .policy-row label { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: #93c5fd; }
+      .policy-row input[type="checkbox"] { margin: 0; accent-color: #60a5fa; }
+      .host-row input { border: 1px solid #334155; border-radius: 6px; background: #111827; color: #e2e8f0; padding: 7px 8px; min-width: 0; }
+      .policy-row input[type="text"] { border: 1px solid #334155; border-radius: 6px; background: #111827; color: #e2e8f0; padding: 7px 8px; min-width: 220px; flex: 1; }
+      .host-row #host-path { flex: 1.2; }
+      .host-row #grant-id { flex: 1; }
+      textarea { width: 100%; height: 100%; border: 0; outline: 0; resize: none; background: #111827; color: #e2e8f0; padding: 12px; box-sizing: border-box; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 6px 10px; cursor: pointer; }
+      .status { margin-left: auto; font-size: 12px; color: #93c5fd; align-self: center; }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button id="format" type="button">Format</button>
+      <button id="minify" type="button">Minify</button>
+      <button id="load-file" type="button">Load File</button>
+      <button id="save-file" type="button">Save File</button>
+      <span id="status" class="status">Ready</span>
+    </div>
+    <div class="host-row">
+      <input id="host-path" type="text" placeholder="/allowed/root/path/data.json" />
+      <input id="grant-id" type="text" placeholder="grantId (optional)" />
+      <button id="read-host" type="button">Read Host</button>
+      <button id="write-host" type="button">Write Host</button>
+    </div>
+    <div class="policy-row">
+      <label><input id="overwrite-host" type="checkbox" /> overwrite existing</label>
+      <label><input id="validate-json" type="checkbox" checked /> validate json before write</label>
+      <label><input id="approve-overwrite" type="checkbox" /> overwrite approval</label>
+      <input id="approval-reason" type="text" placeholder="approval reason (optional)" />
+    </div>
+    <textarea id="json" spellcheck="false" placeholder="{&quot;hello&quot;:&quot;world&quot;}"></textarea>
+    <input id="file-input" type="file" accept=".json,.txt,.log,.md" style="display:none" />
+    <script>
+      const input = document.getElementById('json');
+      const status = document.getElementById('status');
+      const fileInput = document.getElementById('file-input');
+      const hostPathEl = document.getElementById('host-path');
+      const grantIdEl = document.getElementById('grant-id');
+      const overwriteHostEl = document.getElementById('overwrite-host');
+      const validateJsonEl = document.getElementById('validate-json');
+      const approveOverwriteEl = document.getElementById('approve-overwrite');
+      const approvalReasonEl = document.getElementById('approval-reason');
+      function setStatus(text) { status.textContent = text; }
+      function normalizeHostError(err) {
+        const code = String(err?.code || '').trim().toUpperCase();
+        const raw = String(err?.message || err || '').trim();
+        if (code === 'FS_FILE_GRANT_REQUIRED') return 'Host access requires grantId';
+        if (code === 'FS_FILE_GRANT_INVALID') return 'Grant is invalid or expired';
+        if (code === 'FS_FILE_GRANT_SCOPE_MISMATCH') return 'Grant does not match selected host path';
+        if (code === 'FS_FILE_GRANT_MODE_DENIED') return 'Grant does not allow this operation';
+        if (code === 'FS_WRITE_OVERWRITE_APPROVAL_REQUIRED') return 'Target exists. Enable overwrite and approval.';
+        if (code === 'FS_WRITE_APPROVAL_REQUIRED') return 'Overwrite approval is required for host write.';
+        if (code === 'FS_PERMISSION_DENIED') return 'Path is outside allowed roots';
+        if (code === 'FS_INVALID_PATH') return 'Host path is invalid';
+        if (code) return code + ': ' + (raw || 'Host operation failed');
+        return raw || 'Host operation failed';
+      }
+      function parseJsonIfNeeded() {
+        if (!validateJsonEl.checked) return { ok: true };
+        try {
+          JSON.parse(String(input.value || '{}'));
+          return { ok: true };
+        } catch (_err) {
+          return { ok: false, message: 'Invalid JSON. Disable validation to write raw text.' };
+        }
+      }
+      function buildWriteApproval() {
+        if (!approveOverwriteEl.checked) return undefined;
+        const reason = String(approvalReasonEl.value || '').trim() || 'json-formatter-host-write';
+        return { approved: true, reason };
+      }
+      document.getElementById('format').addEventListener('click', () => {
+        try {
+          input.value = JSON.stringify(JSON.parse(input.value || '{}'), null, 2);
+          setStatus('Formatted');
+        } catch (_err) { setStatus('Invalid JSON'); }
+      });
+      document.getElementById('minify').addEventListener('click', () => {
+        try {
+          input.value = JSON.stringify(JSON.parse(input.value || '{}'));
+          setStatus('Minified');
+        } catch (_err) { setStatus('Invalid JSON'); }
+      });
+      document.getElementById('load-file').addEventListener('click', () => {
+        fileInput.click();
+      });
+      fileInput.addEventListener('change', async (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        const text = await file.text().catch(() => '');
+        if (!text) {
+          setStatus('Failed to read file');
+          fileInput.value = '';
+          return;
+        }
+        input.value = text;
+        setStatus('Loaded file: ' + String(file.name || 'input'));
+        fileInput.value = '';
+      });
+      document.getElementById('save-file').addEventListener('click', () => {
+        const blob = new Blob([String(input.value || '')], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'formatted.json';
+        a.click();
+        URL.revokeObjectURL(url);
+        setStatus('Saved to download');
+      });
+
+      document.getElementById('read-host').addEventListener('click', async () => {
+        const sdk = window.WebOS;
+        const path = String(hostPathEl.value || '').trim();
+        const grantId = String(grantIdEl.value || '').trim();
+        if (!path) {
+          setStatus('host path required');
+          return;
+        }
+        if (!sdk?.files?.read) {
+          setStatus('WebOS.files.read unavailable');
+          return;
+        }
+        if (!grantId) {
+          setStatus('grantId required for host read');
+          return;
+        }
+        try {
+          const payload = await sdk.files.read({
+            path,
+            grantId
+          });
+          input.value = String(payload?.content || '');
+          setStatus('Host file loaded');
+        } catch (err) {
+          setStatus(normalizeHostError(err));
+        }
+      });
+
+      document.getElementById('write-host').addEventListener('click', async () => {
+        const sdk = window.WebOS;
+        const path = String(hostPathEl.value || '').trim();
+        const grantId = String(grantIdEl.value || '').trim();
+        if (!path) {
+          setStatus('host path required');
+          return;
+        }
+        if (!sdk?.files?.write) {
+          setStatus('WebOS.files.write unavailable');
+          return;
+        }
+        if (!grantId) {
+          setStatus('grantId required for host write');
+          return;
+        }
+        const validation = parseJsonIfNeeded();
+        if (!validation.ok) {
+          setStatus(validation.message);
+          return;
+        }
+        const overwrite = overwriteHostEl.checked;
+        const approval = buildWriteApproval();
+        if (overwrite && (!approval || approval.approved !== true)) {
+          setStatus('Enable overwrite approval before writing existing host file');
+          return;
+        }
+        try {
+          await sdk.files.write({
+            path,
+            grantId,
+            content: String(input.value || ''),
+            overwrite,
+            approval
+          });
+          setStatus(overwrite ? 'Host file overwritten' : 'Host file written');
+        } catch (err) {
+          setStatus(normalizeHostError(err));
+        }
+      });
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'api-tester') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto auto auto auto auto 1fr; background: #0f172a; color: #e2e8f0; font-family: sans-serif; }
+      .row { display: flex; gap: 8px; padding: 10px; }
+      input, select, textarea { border: 1px solid #334155; border-radius: 6px; background: #111827; color: #e2e8f0; padding: 8px; }
+      input { flex: 1; }
+      textarea { width: calc(100% - 20px); margin: 0 10px 10px; min-height: 76px; resize: vertical; box-sizing: border-box; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 8px 10px; cursor: pointer; }
+      pre { margin: 0; padding: 10px; overflow: auto; background: #020617; border-top: 1px solid #334155; }
+      .status { margin-left: auto; color: #93c5fd; font-size: 12px; align-self: center; }
+      .collection-row #request-name { min-width: 180px; }
+      .collection-row #request-folder { min-width: 150px; }
+      .collection-row #request-tags { min-width: 200px; }
+      .history-row select { min-width: 160px; max-width: 320px; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <select id="method">
+        <option>GET</option>
+        <option>POST</option>
+        <option>PUT</option>
+        <option>DELETE</option>
+      </select>
+      <input id="url" value="/api/system/overview" />
+      <button id="send" type="button">Send</button>
+      <button id="save" type="button">Save Response</button>
+      <span id="status" class="status">Ready</span>
+    </div>
+    <div class="row collection-row">
+      <input id="request-name" type="text" placeholder="request name (optional)" />
+      <input id="request-folder" type="text" placeholder="folder (optional)" />
+      <input id="request-tags" type="text" placeholder="tags: prod, health, admin" />
+      <button id="save-request" type="button">Save Request</button>
+    </div>
+    <div class="row history-row">
+      <select id="folder-filter">
+        <option value="">all folders</option>
+      </select>
+      <select id="tag-filter">
+        <option value="">all tags</option>
+      </select>
+      <select id="history-select">
+        <option value="">request history</option>
+      </select>
+      <button id="rerun" type="button">Rerun Last</button>
+    </div>
+    <textarea id="headers" placeholder="Authorization: Bearer ...&#10;X-Trace-Id: sample">content-type: application/json</textarea>
+    <textarea id="body" placeholder='{"key":"value"}'></textarea>
+    <pre id="out">Ready</pre>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const HISTORY_FILE = 'request-history.json';
+      const methodEl = document.getElementById('method');
+      const urlEl = document.getElementById('url');
+      const requestNameEl = document.getElementById('request-name');
+      const requestFolderEl = document.getElementById('request-folder');
+      const requestTagsEl = document.getElementById('request-tags');
+      const folderFilterEl = document.getElementById('folder-filter');
+      const tagFilterEl = document.getElementById('tag-filter');
+      const historySelectEl = document.getElementById('history-select');
+      const headersEl = document.getElementById('headers');
+      const bodyEl = document.getElementById('body');
+      const statusEl = document.getElementById('status');
+      const out = document.getElementById('out');
+      let lastResponse = null;
+      let requestHistory = [];
+      let filteredHistory = [];
+
+      function setStatus(text) {
+        statusEl.textContent = String(text || 'Ready');
+      }
+
+      function parseHeaders(rawValue) {
+        const headers = {};
+        const lines = String(rawValue || '').split(/\\r?\\n/);
+        for (const line of lines) {
+          const row = String(line || '').trim();
+          if (!row) continue;
+          const idx = row.indexOf(':');
+          if (idx <= 0) continue;
+          const key = row.slice(0, idx).trim();
+          const value = row.slice(idx + 1).trim();
+          if (!key) continue;
+          headers[key] = value;
+        }
+        return headers;
+      }
+
+      function toHeaderText(headers) {
+        const rows = [];
+        for (const [key, value] of Object.entries(headers || {})) {
+          rows.push(String(key) + ': ' + String(value || ''));
+        }
+        return rows.join('\\n');
+      }
+
+      function parseTagList(rawValue) {
+        return String(rawValue || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .slice(0, 10);
+      }
+
+      function toTagText(tags) {
+        return Array.isArray(tags) ? tags.join(', ') : '';
+      }
+
+      function normalizeHistoryItem(item) {
+        const row = item && typeof item === 'object' ? item : {};
+        return {
+          id: String(row.id || ''),
+          name: String(row.name || '').trim(),
+          folder: String(row.folder || '').trim(),
+          tags: parseTagList(Array.isArray(row.tags) ? row.tags.join(',') : row.tags),
+          method: String(row.method || 'GET').toUpperCase(),
+          url: String(row.url || '').trim(),
+          headersText: String(row.headersText || ''),
+          body: String(row.body || ''),
+          createdAt: String(row.createdAt || new Date().toISOString())
+        };
+      }
+
+      function readCurrentRequest() {
+        return normalizeHistoryItem({
+          id: 'req-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+          name: String(requestNameEl.value || '').trim(),
+          folder: String(requestFolderEl.value || '').trim(),
+          tags: parseTagList(requestTagsEl.value),
+          method: methodEl.value,
+          url: String(urlEl.value || '').trim(),
+          headersText: String(headersEl.value || '').trim(),
+          body: String(bodyEl.value || ''),
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      async function loadRequestHistory() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return [];
+        try {
+          const out = await sdk.app.data.read({ path: HISTORY_FILE });
+          const parsed = JSON.parse(String(out?.content || '[]'));
+          return Array.isArray(parsed) ? parsed.map(normalizeHistoryItem).filter((item) => item.url) : [];
+        } catch (_err) {
+          return [];
+        }
+      }
+
+      async function writeRequestHistory() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({
+          path: HISTORY_FILE,
+          content: JSON.stringify(requestHistory.slice(0, 80), null, 2)
+        });
+      }
+
+      function uniqueSorted(values) {
+        return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+      }
+
+      function renderFilterOptions(selectEl, values, placeholder) {
+        const previous = String(selectEl.value || '');
+        selectEl.innerHTML = '';
+        const head = document.createElement('option');
+        head.value = '';
+        head.textContent = placeholder;
+        selectEl.appendChild(head);
+
+        values.forEach((value) => {
+          const option = document.createElement('option');
+          option.value = value;
+          option.textContent = value;
+          selectEl.appendChild(option);
+        });
+
+        if (values.includes(previous)) {
+          selectEl.value = previous;
+        } else {
+          selectEl.value = '';
+        }
+      }
+
+      function renderCollectionFilters() {
+        const folders = uniqueSorted(requestHistory.map((item) => String(item.folder || '').trim()));
+        const tags = uniqueSorted(
+          requestHistory.flatMap((item) => (Array.isArray(item.tags) ? item.tags : [])).map((item) => String(item || '').trim())
+        );
+        renderFilterOptions(folderFilterEl, folders, 'all folders');
+        renderFilterOptions(tagFilterEl, tags, 'all tags');
+      }
+
+      function currentHistoryFilter() {
+        return {
+          folder: String(folderFilterEl.value || '').trim(),
+          tag: String(tagFilterEl.value || '').trim()
+        };
+      }
+
+      function matchesFilter(item, filter) {
+        if (!item) return false;
+        if (filter.folder && String(item.folder || '').trim() !== filter.folder) return false;
+        if (filter.tag) {
+          const tags = Array.isArray(item.tags) ? item.tags : [];
+          if (!tags.includes(filter.tag)) return false;
+        }
+        return true;
+      }
+
+      function renderHistoryOptions() {
+        const filter = currentHistoryFilter();
+        filteredHistory = requestHistory.filter((item) => matchesFilter(item, filter));
+        historySelectEl.innerHTML = '';
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'request history';
+        historySelectEl.appendChild(placeholder);
+
+        filteredHistory.forEach((item, index) => {
+          const option = document.createElement('option');
+          option.value = String(index);
+          const label = String(item.name || '').trim();
+          const folder = String(item.folder || '').trim();
+          const tags = Array.isArray(item.tags) ? item.tags : [];
+          const tagText = tags.length ? ' #' + tags.join(' #') : '';
+          option.textContent = (folder ? '[' + folder + '] ' : '') + (label ? label + ' · ' : '') + String(item.method || 'GET') + ' ' + String(item.url || '') + tagText;
+          historySelectEl.appendChild(option);
+        });
+      }
+
+      function applyHistoryItem(item) {
+        if (!item) return;
+        requestNameEl.value = String(item.name || '');
+        requestFolderEl.value = String(item.folder || '');
+        requestTagsEl.value = toTagText(item.tags);
+        methodEl.value = String(item.method || 'GET');
+        urlEl.value = String(item.url || '');
+        headersEl.value = String(item.headersText || '');
+        bodyEl.value = String(item.body || '');
+      }
+
+      function requestDedupKey(item) {
+        return String(item.method || 'GET') + '|' + String(item.url || '') + '|' + String(item.headersText || '') + '|' + String(item.body || '');
+      }
+
+      async function rememberRequest(request) {
+        if (!request?.url) return;
+        const normalized = normalizeHistoryItem(request);
+        const key = requestDedupKey(normalized);
+        const next = [normalized];
+        for (const item of requestHistory) {
+          const existingKey = requestDedupKey(item);
+          if (existingKey === key) continue;
+          next.push(item);
+          if (next.length >= 80) break;
+        }
+        requestHistory = next;
+        renderCollectionFilters();
+        renderHistoryOptions();
+        await writeRequestHistory();
+      }
+
+      async function sendRequest(sendOptions = {}) {
+        const method = methodEl.value;
+        const url = String(urlEl.value || '').trim();
+        if (!url) return;
+        const headers = parseHeaders(headersEl.value);
+        const body = String(bodyEl.value || '').trim();
+        const requestOptions = { method, headers };
+        if (body && method !== 'GET' && method !== 'HEAD') {
+          requestOptions.body = body;
+          const hasContentType = Object.keys(headers).some((key) => key.toLowerCase() === 'content-type');
+          if (!hasContentType) requestOptions.headers['content-type'] = 'application/json';
+        }
+        try {
+          setStatus('Sending...');
+          const response = await fetch(url, requestOptions);
+          const text = await response.text();
+          let parsed = text;
+          try { parsed = JSON.parse(text); } catch (_err) {}
+          lastResponse = {
+            method,
+            url,
+            status: response.status,
+            responseHeaders: Object.fromEntries(response.headers.entries()),
+            body: parsed,
+            receivedAt: new Date().toISOString()
+          };
+          out.textContent = 'HTTP ' + response.status + '\\n\\n' + (typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2));
+          if (sendOptions.remember !== false) {
+            await rememberRequest({
+              name: String(requestNameEl.value || '').trim(),
+              folder: String(requestFolderEl.value || '').trim(),
+              tags: parseTagList(requestTagsEl.value),
+              method,
+              url,
+              headersText: toHeaderText(headers),
+              body: String(body || ''),
+              createdAt: new Date().toISOString()
+            });
+          }
+          setStatus('Done');
+        } catch (err) {
+          const message = String(err?.message || err);
+          out.textContent = 'Request failed: ' + message;
+          setStatus('Failed');
+        }
+      }
+
+      document.getElementById('send').addEventListener('click', () => sendRequest({ remember: true }));
+
+      document.getElementById('save').addEventListener('click', async () => {
+        if (!lastResponse) {
+          setStatus('No response to save');
+          return;
+        }
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) {
+          setStatus('app.data.write permission unavailable');
+          return;
+        }
+        try {
+          const filePath = 'responses/response-' + Date.now() + '.json';
+          await sdk.app.data.write({
+            path: filePath,
+            content: JSON.stringify(lastResponse, null, 2)
+          });
+          setStatus('Saved: ' + filePath);
+        } catch (err) {
+          setStatus('Save failed: ' + String(err?.message || err));
+        }
+      });
+
+      document.getElementById('save-request').addEventListener('click', async () => {
+        const request = readCurrentRequest();
+        if (!request.url) {
+          setStatus('URL required');
+          return;
+        }
+        await rememberRequest(request);
+        setStatus('Request saved');
+      });
+
+      document.getElementById('rerun').addEventListener('click', async () => {
+        if (filteredHistory.length === 0) {
+          setStatus('No saved request');
+          return;
+        }
+        applyHistoryItem(filteredHistory[0]);
+        await sendRequest({ remember: true });
+      });
+
+      historySelectEl.addEventListener('change', async (event) => {
+        const index = Number(event.currentTarget.value);
+        if (!Number.isInteger(index) || index < 0) return;
+        applyHistoryItem(filteredHistory[index] || null);
+        setStatus('Loaded request #' + String(index + 1));
+      });
+
+      folderFilterEl.addEventListener('change', () => {
+        renderHistoryOptions();
+      });
+
+      tagFilterEl.addEventListener('change', () => {
+        renderHistoryOptions();
+      });
+
+      window.WebOS?.ready?.().then(async () => {
+        requestHistory = await loadRequestHistory();
+        renderCollectionFilters();
+        renderHistoryOptions();
+      }).catch(() => {});
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'snippet-vault') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; padding: 12px; background: #0f172a; color: #e2e8f0; font-family: sans-serif; }
+      .row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
+      .row.search { grid-template-columns: 1fr auto auto auto; }
+      input, textarea { border: 1px solid #334155; border-radius: 6px; background: #111827; color: #e2e8f0; padding: 8px; }
+      textarea { width: 100%; min-height: 120px; box-sizing: border-box; margin-bottom: 10px; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 7px 10px; cursor: pointer; }
+      ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+      li { border: 1px solid #334155; border-radius: 6px; padding: 8px; background: #111827; }
+      .head { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 6px; }
+      .meta { font-size: 12px; color: #93c5fd; }
+      .report { min-height: 18px; margin-bottom: 8px; }
+      pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; }
+    </style>
+  </head>
+  <body>
+    <h3>${title}</h3>
+    <div class="row">
+      <input id="name" placeholder="snippet name" />
+      <input id="tags" placeholder="tags (comma separated)" />
+      <button id="save" type="button">Save</button>
+    </div>
+    <div class="row search">
+      <input id="query" placeholder="search by name, tag, or content" />
+      <select id="import-mode">
+        <option value="merge">merge import</option>
+        <option value="overwrite">overwrite import</option>
+      </select>
+      <button id="export" type="button">Export JSON</button>
+      <button id="import" type="button">Import JSON</button>
+    </div>
+    <textarea id="content" placeholder="code snippet"></textarea>
+    <ul id="list"></ul>
+    <input id="import-file" type="file" accept="application/json,.json" style="display:none" />
+    <div id="import-report" class="meta report"></div>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const FILE_PATH = 'snippets.json';
+      const nameEl = document.getElementById('name');
+      const tagsEl = document.getElementById('tags');
+      const queryEl = document.getElementById('query');
+      const importModeEl = document.getElementById('import-mode');
+      const contentEl = document.getElementById('content');
+      const listEl = document.getElementById('list');
+      const importFileEl = document.getElementById('import-file');
+      const importReportEl = document.getElementById('import-report');
+      let snippets = [];
+
+      function setImportReport(message) {
+        if (!importReportEl) return;
+        importReportEl.textContent = String(message || '');
+      }
+
+      async function readSnippets() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return [];
+        try {
+          const out = await sdk.app.data.read({ path: FILE_PATH });
+          const parsed = JSON.parse(String(out?.content || '[]'));
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (_err) {
+          return [];
+        }
+      }
+
+      async function writeSnippets() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({ path: FILE_PATH, content: JSON.stringify(snippets.slice(0, 300), null, 2) });
+      }
+
+      function render() {
+        const query = String(queryEl.value || '').trim().toLowerCase();
+        const rows = snippets.filter((item) => {
+          if (!query) return true;
+          const name = String(item?.name || '').toLowerCase();
+          const content = String(item?.content || '').toLowerCase();
+          const tags = Array.isArray(item?.tags) ? item.tags.join(' ').toLowerCase() : '';
+          return name.includes(query) || content.includes(query) || tags.includes(query);
+        });
+        listEl.innerHTML = '';
+        rows.forEach((item) => {
+          const index = snippets.findIndex((row) => row.id === item.id);
+          const li = document.createElement('li');
+          const head = document.createElement('div');
+          head.className = 'head';
+          const title = document.createElement('strong');
+          title.textContent = String(item.name || 'snippet');
+          const meta = document.createElement('span');
+          const tagsText = Array.isArray(item.tags) && item.tags.length ? '#' + item.tags.join(' #') : 'untagged';
+          meta.className = 'meta';
+          meta.textContent = tagsText;
+          const pre = document.createElement('pre');
+          pre.textContent = String(item.content || '');
+          const del = document.createElement('button');
+          del.textContent = 'Delete';
+          del.type = 'button';
+          del.addEventListener('click', async () => {
+            if (index < 0) return;
+            snippets.splice(index, 1);
+            await writeSnippets();
+            render();
+          });
+          head.appendChild(title);
+          head.appendChild(meta);
+          head.appendChild(del);
+          li.appendChild(head);
+          li.appendChild(pre);
+          listEl.appendChild(li);
+        });
+      }
+
+      document.getElementById('save').addEventListener('click', async () => {
+        const name = String(nameEl.value || '').trim();
+        const tags = String(tagsEl.value || '')
+          .split(',')
+          .map((item) => item.trim().toLowerCase())
+          .filter(Boolean)
+          .slice(0, 8);
+        const content = String(contentEl.value || '');
+        if (!name || !content.trim()) return;
+        snippets.unshift({ id: Date.now() + Math.random(), name, tags, content, createdAt: new Date().toISOString() });
+        nameEl.value = '';
+        tagsEl.value = '';
+        contentEl.value = '';
+        await writeSnippets();
+        render();
+      });
+
+      queryEl.addEventListener('input', render);
+
+      document.getElementById('export').addEventListener('click', () => {
+        const payload = JSON.stringify(snippets, null, 2);
+        const blob = new Blob([payload], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'snippets-export.json';
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+
+      document.getElementById('import').addEventListener('click', () => {
+        setImportReport('');
+        importFileEl.click();
+      });
+
+      importFileEl.addEventListener('change', async (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const parsed = JSON.parse(String(text || '[]'));
+          if (!Array.isArray(parsed)) return;
+          const mode = String(importModeEl.value || 'merge').trim().toLowerCase();
+          const previousCount = snippets.length;
+          const merged = mode === 'overwrite' ? [] : [...snippets];
+          let added = 0;
+          let duplicate = 0;
+          let skipped = 0;
+          for (const row of parsed) {
+            const name = String(row?.name || '').trim();
+            const content = String(row?.content || '');
+            if (!name || !content.trim()) {
+              skipped += 1;
+              continue;
+            }
+            const tags = Array.isArray(row?.tags)
+              ? row.tags.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean).slice(0, 8)
+              : [];
+            const exists = merged.some((item) => item.name === name && item.content === content);
+            if (exists) {
+              duplicate += 1;
+              continue;
+            }
+            merged.unshift({
+              id: Date.now() + Math.random(),
+              name,
+              tags,
+              content,
+              createdAt: String(row?.createdAt || new Date().toISOString())
+            });
+            added += 1;
+          }
+          snippets = merged.slice(0, 300);
+          await writeSnippets();
+          render();
+          const replaced = mode === 'overwrite' ? previousCount : 0;
+          setImportReport(
+            mode === 'overwrite'
+              ? 'Import overwrite: added ' + added + ', duplicate ' + duplicate + ', skipped ' + skipped + ', replaced ' + replaced
+              : 'Import merge: added ' + added + ', duplicate ' + duplicate + ', skipped ' + skipped
+          );
+        } catch (_err) {
+          setImportReport('Import failed: invalid JSON file');
+        } finally {
+          importFileEl.value = '';
+        }
+      });
+
+      window.WebOS?.ready?.().then(async () => {
+        snippets = await readSnippets();
+        render();
+      }).catch(() => {});
+    </script>
+  </body>
+</html>`;
+  }
+
+  return createDefaultHtmlTemplate({ appId, title });
 }
 
 function resolveManifestRequestBody(body = {}) {
@@ -1640,7 +3270,11 @@ async function createLocalPackageFromManifest(manifestInput, options = {}) {
         'utf8'
       );
     } else {
-      await fs.writeFile(entryPath, createDefaultHtmlTemplate({ appId: manifest.id, title: manifest.title }), 'utf8');
+      await fs.writeFile(
+        entryPath,
+        createTemplateEntryContent(options.templateId, { appId: manifest.id, title: manifest.title }),
+        'utf8'
+      );
     }
   }
 
@@ -1905,7 +3539,8 @@ router.post('/wizard/create', async (req, res) => {
     const created = await createLocalPackageFromManifest(body.manifest, {
       user: req.user?.username,
       reason: 'create',
-      source: 'local:create'
+      source: 'local:create',
+      templateId: body.templateId
     });
 
     return res.status(201).json({
@@ -2880,7 +4515,11 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
         'utf8'
       );
     } else {
-      await fs.writeFile(entryPath, createDefaultHtmlTemplate({ appId: manifest.id, title: manifest.title }), 'utf8');
+      await fs.writeFile(
+        entryPath,
+        createTemplateEntryContent(template.id, { appId: manifest.id, title: manifest.title }),
+        'utf8'
+      );
     }
 
     const readmePath = await resolvePackagePath(manifest.id, 'README.md');
@@ -2961,6 +4600,80 @@ router.get(`/${APP_ID_ROUTE}/lifecycle`, async (req, res) => {
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_LIFECYCLE_READ_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.get(`/${APP_ID_ROUTE}/backup-policy`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const manifest = await readManifestRaw(appId);
+    if (!manifest) {
+      return res.status(404).json({
+        error: true,
+        code: 'PACKAGE_NOT_FOUND',
+        message: 'Package not found.'
+      });
+    }
+    const policy = await packageLifecycleService.getBackupPolicy(appId);
+    return res.json({
+      success: true,
+      appId,
+      backupPolicy: policy.backupPolicy
+    });
+  } catch (err) {
+    const status = err.code === 'APP_ID_INVALID' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_BACKUP_POLICY_READ_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.put(`/${APP_ID_ROUTE}/backup-policy`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const manifest = await readManifestRaw(appId);
+    if (!manifest) {
+      return res.status(404).json({
+        error: true,
+        code: 'PACKAGE_NOT_FOUND',
+        message: 'Package not found.'
+      });
+    }
+    const lifecycle = await packageLifecycleService.setBackupPolicy(appId, req.body || {});
+    await auditService.log(
+      'PACKAGES',
+      `Set Package Backup Policy: ${appId}`,
+      {
+        appId,
+        backupPolicy: lifecycle.backupPolicy,
+        user: req.user?.username
+      },
+      'INFO'
+    );
+
+    return res.json({
+      success: true,
+      appId,
+      backupPolicy: lifecycle.backupPolicy,
+      lifecycle
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID' ||
+      err.code === 'PACKAGE_BACKUP_POLICY_REQUIRED_FIELD' ||
+      err.code === 'PACKAGE_BACKUP_POLICY_INVALID_MAX_BACKUPS' ||
+      err.code === 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE' ||
+      err.code === 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE_INTERVAL' ||
+      err.code === 'PACKAGE_BACKUP_POLICY_INVALID_SCHEDULE_TIME'
+        ? 400
+        : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_BACKUP_POLICY_UPDATE_FAILED',
       message: err.message
     });
   }
@@ -3074,6 +4787,101 @@ router.post(`/${APP_ID_ROUTE}/backup`, async (req, res) => {
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_BACKUP_CREATE_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.get(`/${APP_ID_ROUTE}/backup-jobs`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const limit = parseBoundedLimit(req.query.limit, 20, 50);
+    const result = await packageLifecycleService.listBackupJobs(appId, { limit });
+    return res.json({
+      success: true,
+      appId,
+      jobs: result.jobs
+    });
+  } catch (err) {
+    const status = err.code === 'APP_ID_INVALID' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_BACKUP_JOBS_FETCH_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.post(`/${APP_ID_ROUTE}/backup-jobs`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const note = String(req.body?.note || '').trim();
+    const result = await packageLifecycleService.createBackupJob(appId, { note });
+
+    await auditService.log(
+      'PACKAGES',
+      `Create Package Backup Job: ${appId}`,
+      {
+        appId,
+        jobId: result.job.id,
+        note: result.job.note,
+        user: req.user?.username
+      },
+      'INFO'
+    );
+
+    return res.status(201).json({
+      success: true,
+      appId,
+      job: result.job
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID' || err.code === 'PACKAGE_NOT_FOUND'
+        ? 400
+        : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_BACKUP_JOB_CREATE_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.post(`/${APP_ID_ROUTE}/backup-jobs/:jobId/cancel`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const jobId = String(req.params.jobId || '').trim();
+    const result = await packageLifecycleService.cancelBackupJob(appId, jobId);
+
+    await auditService.log(
+      'PACKAGES',
+      `Cancel Package Backup Job: ${appId}`,
+      {
+        appId,
+        jobId: result.job.id,
+        user: req.user?.username
+      },
+      'WARN'
+    );
+
+    return res.json({
+      success: true,
+      appId,
+      job: result.job
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID' || err.code === 'PACKAGE_BACKUP_JOB_ID_REQUIRED'
+        ? 400
+        : err.code === 'PACKAGE_BACKUP_JOB_NOT_FOUND'
+          ? 404
+          : err.code === 'PACKAGE_BACKUP_JOB_NOT_CANCELABLE'
+            ? 409
+            : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_BACKUP_JOB_CANCEL_FAILED',
       message: err.message
     });
   }

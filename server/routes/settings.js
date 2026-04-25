@@ -15,7 +15,8 @@ const MUTABLE_KEYS = [
   'ADMIN_PASSWORD',
   'CORS_ORIGIN',
   'RATE_LIMIT_WINDOW_MS',
-  'RATE_LIMIT_MAX'
+  'RATE_LIMIT_MAX',
+  'TRUST_PROXY_HOPS'
 ];
 
 router.get('/', auth, async (req, res) => {

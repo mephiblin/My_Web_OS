@@ -4,10 +4,12 @@ client/node_modules/
 
 # Environment variables (Sensitive)
 .env
+.env.hardened
 
 # Build outputs
 dist/
 build/
+storage/rehearsal-backups/
 
 # IDE and System files
 .vscode/

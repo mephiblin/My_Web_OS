@@ -21,7 +21,8 @@ const UI_SETTINGS_KEYS = [
   'ADMIN_PASSWORD',
   'CORS_ORIGIN',
   'RATE_LIMIT_WINDOW_MS',
-  'RATE_LIMIT_MAX'
+  'RATE_LIMIT_MAX',
+  'TRUST_PROXY_HOPS'
 ];
 
 let cachedDefaults = null;
@@ -179,7 +180,8 @@ function buildResolved(envObj, defaults) {
       nodeEnv: envObj.NODE_ENV || defaults.server.nodeEnv,
       corsOrigin,
       rateLimitWindowMs: parseNumber(envObj.RATE_LIMIT_WINDOW_MS, defaults.server.rateLimitWindowMs),
-      rateLimitMax: parseNumber(envObj.RATE_LIMIT_MAX, defaults.server.rateLimitMax)
+      rateLimitMax: parseNumber(envObj.RATE_LIMIT_MAX, defaults.server.rateLimitMax),
+      trustProxyHops: Math.max(0, parseNumber(envObj.TRUST_PROXY_HOPS, defaults.server.trustProxyHops || 0))
     },
     auth: {
       adminUsername: envObj.ADMIN_USERNAME || defaults.auth.adminUsername,
@@ -220,7 +222,8 @@ function toUISettings(rawEnv, resolved) {
         : String(resolved.server.corsOrigin))
       ),
     RATE_LIMIT_WINDOW_MS: firstDefined(rawEnv.RATE_LIMIT_WINDOW_MS, String(resolved.server.rateLimitWindowMs)),
-    RATE_LIMIT_MAX: firstDefined(rawEnv.RATE_LIMIT_MAX, String(resolved.server.rateLimitMax))
+    RATE_LIMIT_MAX: firstDefined(rawEnv.RATE_LIMIT_MAX, String(resolved.server.rateLimitMax)),
+    TRUST_PROXY_HOPS: firstDefined(rawEnv.TRUST_PROXY_HOPS, String(resolved.server.trustProxyHops))
   };
 
   return UI_SETTINGS_KEYS.reduce((acc, key) => {
@@ -231,7 +234,8 @@ function toUISettings(rawEnv, resolved) {
 
 async function loadAll() {
   const [defaults, envFromFile] = await Promise.all([readDefaults(), readEnvFile()]);
-  const mergedEnv = { ...envFromFile };
+  // Runtime environment (e.g. Docker Compose env) should override .env file values.
+  const mergedEnv = { ...envFromFile, ...process.env };
   const resolved = buildResolved(mergedEnv, defaults);
 
   // Keep legacy modules that still read process.env working during migration.

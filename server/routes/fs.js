@@ -169,6 +169,38 @@ router.get('/user-dirs', (req, res) => {
 });
 
 /**
+ * GET /api/fs/grants
+ * List active file grants for current user
+ */
+router.get('/grants', async (req, res) => {
+  try {
+    const source = typeof req.query?.source === 'string' ? req.query.source.trim() : '';
+    const grants = fileGrantService.listActiveGrants({
+      user: req.user?.username,
+      source
+    });
+
+    return res.json({
+      success: true,
+      count: grants.length,
+      grants: grants.map((grant) => ({
+        id: grant.id,
+        appId: grant.appId,
+        source: grant.source,
+        scope: grant.scope,
+        mode: grant.mode,
+        path: grant.path,
+        createdAt: new Date(grant.createdAt).toISOString(),
+        expiresAt: new Date(grant.expiresAt).toISOString(),
+        expiresOnWindowClose: grant.expiresOnWindowClose
+      }))
+    });
+  } catch (err) {
+    sendFsError(res, err, 'FS_FILE_GRANT_LIST_FAILED', 'Failed to list active file grants.');
+  }
+});
+
+/**
  * Routes below require pathGuard (user-supplied path)
  */
 router.use(pathGuard);

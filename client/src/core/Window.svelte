@@ -14,10 +14,10 @@
   let rafId = null;
   let winEl;
 
-  let localX = $state(win.x);
-  let localY = $state(win.y);
-  let localWidth = $state(win.width);
-  let localHeight = $state(win.height);
+  let localX = $state(0);
+  let localY = $state(0);
+  let localWidth = $state(0);
+  let localHeight = $state(0);
 
   let snapZone = $state(null); // 'left', 'right', 'top', null
   const iconComponent = $derived(win.iconComponent || (typeof win.icon === 'function' ? win.icon : LayoutGrid));
@@ -150,14 +150,30 @@
   bind:this={winEl}
   class="window glass-effect window-shadow {active ? 'active' : ''} {win.minimized ? 'minimized' : ''} {win.maximized ? 'maximized' : ''} {dragging || resizing ? 'interacting' : ''}"
   style="transform: {win.maximized ? 'none' : `translate3d(${localX}px, ${localY}px, 0)`}; width: {win.maximized ? '100%' : localWidth + 'px'}; height: {win.maximized ? `calc(100% - ${taskbarHeight}px)` : localHeight + 'px'}; z-index: {win.zIndex}"
+  role="dialog"
+  aria-label={win.title}
+  tabindex="-1"
   onmousedown={handleMouseDown}
 >
-  <div class="title-bar" style:height={`${titleBarHeight}px`} ondblclick={() => toggleMaximize(win.id)}>
+  <div
+    class="title-bar"
+    style:height={`${titleBarHeight}px`}
+    role="button"
+    tabindex="-1"
+    ondblclick={() => toggleMaximize(win.id)}
+    onkeydown={(event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggleMaximize(win.id);
+      }
+    }}
+  >
     <div class="title">
       {#if win.iconType === 'image' && win.iconUrl}
         <img class="title-icon-image" src={win.iconUrl} alt={win.title} loading="lazy" />
       {:else}
-        <svelte:component this={iconComponent} size={16} />
+        {@const TitleIcon = iconComponent}
+        <TitleIcon size={16} />
       {/if}
       <span>{win.title}</span>
     </div>
@@ -175,7 +191,18 @@
     {/if}
   </div>
   {#if !win.maximized}
-    <div class="resize-handle" onmousedown={handleResizeStart}></div>
+    <div
+      class="resize-handle"
+      role="button"
+      aria-label="Resize window"
+      tabindex="-1"
+      onmousedown={handleResizeStart}
+      onkeydown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+        }
+      }}
+    ></div>
   {/if}
 </div>
 

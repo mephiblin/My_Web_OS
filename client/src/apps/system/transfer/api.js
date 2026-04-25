@@ -1,4 +1,5 @@
 import { apiFetch } from '../../../utils/api.js';
+import { normalizeTransferJobStatus } from './normalization.js';
 
 const LIST_PATHS = [
   '/api/transfer/jobs',
@@ -32,15 +33,6 @@ function text(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function toStatus(value) {
-  const raw = text(value).toLowerCase();
-  if (!raw) return 'unknown';
-  if (raw === 'done' || raw === 'success' || raw === 'completed') return 'completed';
-  if (raw === 'active' || raw === 'working') return 'running';
-  if (raw === 'cancelled' || raw === 'canceled') return 'canceled';
-  return raw;
-}
-
 function toProgress(item, status) {
   const nestedPercent = Number(item?.progress?.percent);
   if (Number.isFinite(nestedPercent)) {
@@ -64,7 +56,7 @@ function inferType(item) {
 }
 
 function normalizeJob(item) {
-  const status = toStatus(item?.status || item?.state || item?.phase || item?.lastStatus);
+  const status = normalizeTransferJobStatus(item?.status || item?.state || item?.phase || item?.lastStatus);
   return {
     id: text(item?.id || item?.jobId),
     type: inferType(item),
@@ -76,8 +68,26 @@ function normalizeJob(item) {
     url: text(item?.url),
     sourcePath: text(item?.sourcePath || item?.source),
     destinationDir: text(item?.destinationDir || item?.destinationRoot || item?.destinationPath),
+    errorCode: text(item?.error?.code || item?.errorCode || item?.lastErrorCode),
     error: text(item?.error?.message || item?.error || item?.errorMessage || item?.lastError),
+    errorDetails: item?.error?.details || null,
     raw: item
+  };
+}
+
+function normalizeSummary(payload) {
+  const summary = payload?.summary && typeof payload.summary === 'object' ? payload.summary : {};
+  const read = (key) => {
+    const value = Number(summary?.[key]);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  };
+  return {
+    total: read('total'),
+    queued: read('queued'),
+    running: read('running'),
+    completed: read('completed'),
+    failed: read('failed'),
+    canceled: read('canceled')
   };
 }
 
@@ -120,12 +130,59 @@ export async function listTransferJobs() {
   try {
     const result = await firstSuccess(LIST_PATHS, { method: 'GET' });
     const jobs = normalizeJobListResponse(result.payload).map(normalizeJob).filter((item) => item.id);
-    return { jobs, path: result.path };
+    return { jobs, summary: normalizeSummary(result.payload), path: result.path };
   } catch (err) {
     throw toApiError(
       err,
       'TRANSFER_LIST_FAILED',
       'Failed to load transfer jobs. Transfer backend API may be unavailable.'
+    );
+  }
+}
+
+export async function retryTransferJob(jobId) {
+  const id = text(jobId);
+  if (!id) {
+    throw {
+      code: 'TRANSFER_RETRY_INVALID_ID',
+      message: 'Transfer job id is required.'
+    };
+  }
+
+  try {
+    const payload = await apiFetch(`/api/transfer/jobs/${encodeURIComponent(id)}/retry`, {
+      method: 'POST'
+    });
+    return {
+      job: payload?.job ? normalizeJob(payload.job) : null,
+      payload
+    };
+  } catch (err) {
+    throw toApiError(
+      err,
+      'TRANSFER_RETRY_FAILED',
+      'Failed to retry transfer job.'
+    );
+  }
+}
+
+export async function clearTransferJobs(statuses = ['completed', 'failed', 'canceled']) {
+  const list = Array.isArray(statuses)
+    ? statuses.map((item) => text(item).toLowerCase()).filter(Boolean)
+    : [];
+  const query = list.length > 0
+    ? `?statuses=${encodeURIComponent(list.join(','))}`
+    : '';
+
+  try {
+    return await apiFetch(`/api/transfer/jobs${query}`, {
+      method: 'DELETE'
+    });
+  } catch (err) {
+    throw toApiError(
+      err,
+      'TRANSFER_CLEAR_FAILED',
+      'Failed to clear transfer job history.'
     );
   }
 }
@@ -211,7 +268,8 @@ export async function cancelTransferJob(jobId) {
 }
 
 export function isRunningStatus(status) {
-  const value = toStatus(status);
+  const value = normalizeTransferJobStatus(status);
   return value === 'running' || value === 'queued' || value === 'pending';
 }
 
+export { normalizeTransferJobStatus } from './normalization.js';

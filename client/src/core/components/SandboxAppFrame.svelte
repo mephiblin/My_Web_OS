@@ -5,6 +5,7 @@
   import { addToast } from '../stores/toastStore.js';
   import { notifications } from '../stores/notificationStore.js';
   import { apiFetch } from '../../utils/api.js';
+  import { cloneMessagePayload } from '../../utils/messagePayload.js';
 
   let { app } = $props();
 
@@ -59,8 +60,9 @@
 
   function postToFrame(payload) {
     if (!frameEl?.contentWindow || typeof window === 'undefined') return;
+    const safePayload = cloneMessagePayload(payload, null);
     // With iframe sandboxed without allow-same-origin, the child has an opaque origin.
-    frameEl.contentWindow.postMessage(payload, '*');
+    frameEl.contentWindow.postMessage(safePayload, '*');
   }
 
   function normalizeAppForWindow(targetApp) {
@@ -329,7 +331,8 @@
       // Opaque iframe origin is expected when `allow-same-origin` is removed.
       if (event.origin !== 'null' && event.origin !== window.location.origin) return;
 
-      const payload = event.data || {};
+      const payload = cloneMessagePayload(event.data, {});
+      if (!payload || typeof payload !== 'object') return;
 
       if (payload.type === 'webos:ready') {
         bridgeReady = true;

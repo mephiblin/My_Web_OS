@@ -34,6 +34,7 @@ const servicesRouter = require('./routes/services');
 const sandboxRouter = require('./routes/sandbox');
 const runtimeRouter = require('./routes/runtime');
 const transferRouter = require('./routes/transfer');
+const aiRouter = require('./routes/ai');
 
 async function bootstrap() {
   const config = await serverConfig.getAll();
@@ -63,7 +64,16 @@ async function bootstrap() {
   initTerminalService(io);
 
   // Middleware
-  // app.use(helmet());
+  app.disable('x-powered-by');
+  if (config.server.trustProxyHops > 0) {
+    app.set('trust proxy', config.server.trustProxyHops);
+  }
+  if (config.server.nodeEnv === 'production') {
+    app.use(helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false
+    }));
+  }
   app.use(cors({ origin: config.server.corsOrigin }));
   app.use(express.json());
 
@@ -99,6 +109,7 @@ async function bootstrap() {
   app.use('/api/sandbox', sandboxRouter);
   app.use('/api/runtime', runtimeRouter);
   app.use('/api/transfer', transferRouter);
+  app.use('/api/ai', aiRouter);
 
   app.set('serviceManager', serviceManager);
   app.set('runtimeManager', runtimeManager);

@@ -34,6 +34,7 @@ function cloneJob(job) {
   return {
     id: job.id,
     type: job.type,
+    fileName: job.fileName,
     status: job.status,
     source: job.source,
     destinationDir: job.destinationDir,
@@ -298,6 +299,7 @@ class TransferJobService {
 
     const job = this.#createBaseJob({
       type: 'download',
+      fileName: derivedName,
       source: { url: sourceUrl },
       destinationDir,
       destinationPath
@@ -332,6 +334,7 @@ class TransferJobService {
 
     const job = this.#createBaseJob({
       type: 'copy',
+      fileName: leafName,
       source: { path: sourcePath },
       destinationDir,
       destinationPath
@@ -381,10 +384,96 @@ class TransferJobService {
     throw createTransferError(409, 'TRANSFER_JOB_NOT_CANCELABLE', `Cannot cancel job in '${job.status}' status.`);
   }
 
-  #createBaseJob({ type, source, destinationDir, destinationPath }) {
+  async retryJob(jobId) {
+    const safeId = String(jobId || '').trim();
+    const job = this.jobs.get(safeId);
+    if (!job) {
+      throw createTransferError(404, 'TRANSFER_JOB_NOT_FOUND', 'Transfer job was not found.');
+    }
+
+    if (!(job.status === 'failed' || job.status === 'canceled')) {
+      throw createTransferError(
+        409,
+        'TRANSFER_JOB_RETRY_NOT_ALLOWED',
+        `Retry is only allowed for failed/canceled jobs (current: '${job.status}').`
+      );
+    }
+
+    if (job.type === 'download') {
+      return this.enqueueDownload({
+        url: job.source?.url,
+        destinationDir: job.destinationDir,
+        fileName: job.fileName
+      });
+    }
+
+    if (job.type === 'copy') {
+      return this.enqueueCopy({
+        sourcePath: job.source?.path,
+        destinationDir: job.destinationDir,
+        fileName: job.fileName
+      });
+    }
+
+    throw createTransferError(400, 'TRANSFER_JOB_TYPE_UNSUPPORTED', `Unsupported transfer type '${job.type}'.`);
+  }
+
+  clearJobs(options = {}) {
+    const requested = Array.isArray(options.statuses) ? options.statuses : [];
+    const normalized = new Set(
+      requested
+        .map((item) => String(item || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+
+    const defaultStatuses = new Set(['completed', 'failed', 'canceled']);
+    const targetStatuses = normalized.size > 0 ? normalized : defaultStatuses;
+
+    if (targetStatuses.has('queued') || targetStatuses.has('running')) {
+      throw createTransferError(400, 'TRANSFER_CLEAR_ACTIVE_NOT_ALLOWED', 'Cannot clear queued/running jobs.');
+    }
+
+    let removed = 0;
+    for (const [id, job] of this.jobs.entries()) {
+      const status = String(job.status || '').toLowerCase();
+      if (!targetStatuses.has(status)) continue;
+      this.jobs.delete(id);
+      removed += 1;
+    }
+
+    this.queue = this.queue.filter((id) => this.jobs.has(id));
+    return {
+      removed,
+      remaining: this.jobs.size
+    };
+  }
+
+  getSummary() {
+    const counts = {
+      total: 0,
+      queued: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      canceled: 0
+    };
+
+    for (const job of this.jobs.values()) {
+      counts.total += 1;
+      const status = String(job.status || '').toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(counts, status)) {
+        counts[status] += 1;
+      }
+    }
+
+    return counts;
+  }
+
+  #createBaseJob({ type, fileName, source, destinationDir, destinationPath }) {
     return {
       id: createJobId(),
       type,
+      fileName: String(fileName || '').trim() || path.basename(destinationPath || ''),
       source,
       destinationDir,
       destinationPath,

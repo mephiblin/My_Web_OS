@@ -4,8 +4,9 @@
 const fs = require('fs-extra');
 const path = require('path');
 const inventoryPaths = require('../server/utils/inventoryPaths');
+const builtinAppsSeed = require('../server/config/builtinAppsSeed');
 
-const EMPTY_REGISTRY = [];
+const FALLBACK_REGISTRY = builtinAppsSeed;
 
 function parseArgs(argv) {
   return {
@@ -45,7 +46,7 @@ async function main() {
   }
 
   const legacyApps = await loadJsonArray(legacyAppsRegistryFile);
-  const sourceApps = Array.isArray(legacyApps) ? legacyApps : EMPTY_REGISTRY;
+  const sourceApps = Array.isArray(legacyApps) ? legacyApps : FALLBACK_REGISTRY;
   const normalized = sourceApps.map(normalizeAppRecord).filter(Boolean);
 
   await fs.ensureDir(path.dirname(appsRegistryFile));
@@ -53,7 +54,7 @@ async function main() {
   console.log(`[migrate-apps-registry] wrote ${normalized.length} app(s) -> ${appsRegistryFile}`);
 
   if (!legacyApps) {
-    console.log(`[migrate-apps-registry] legacy source missing (${legacyAppsRegistryFile}), initialized empty registry.`);
+    console.log(`[migrate-apps-registry] legacy source missing (${legacyAppsRegistryFile}), initialized from builtin seed.`);
   } else {
     const backupFile = `${legacyAppsRegistryFile}.bak`;
     await fs.copyFile(legacyAppsRegistryFile, backupFile).catch(() => {});

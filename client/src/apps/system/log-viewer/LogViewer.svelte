@@ -16,6 +16,8 @@
 
   ChartJS.register(CTitle, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale);
 
+  let { data = null } = $props();
+
   let logs = $state([]);
   let allLogs = $state([]); // For overview stats
   let loading = $state(true);
@@ -24,6 +26,7 @@
   let levelFilter = $state('ALL');
   let opsSummary = $state(null);
   let interval;
+  let lastDeepLinkKey = $state('');
 
   const categories = [
     { id: 'OVERVIEW', label: 'Overview', icon: LayoutDashboard },
@@ -58,6 +61,41 @@
       opsSummary = await fetchOpsSummary();
     } catch (_err) {
       opsSummary = null;
+    }
+  }
+
+  function applyDeepLink(input) {
+    const payload = input && typeof input === 'object' ? input : {};
+    const focus = String(payload.focus || '').trim().toLowerCase();
+    const search = String(payload.search || '').trim();
+    const level = String(payload.level || '').trim().toUpperCase();
+    const category = String(payload.category || '').trim().toUpperCase();
+    if (!focus && !search && !level && !category) return;
+    const key = JSON.stringify({ focus, search, level, category });
+    if (key === lastDeepLinkKey) return;
+    lastDeepLinkKey = key;
+
+    if (focus === 'audit') {
+      activeTab = 'OVERVIEW';
+      levelFilter = level || 'ALL';
+      searchQuery = search || 'agent workflow';
+      return;
+    }
+    if (focus === 'errors') {
+      activeTab = 'OVERVIEW';
+      levelFilter = 'ERROR';
+      searchQuery = search || '';
+      return;
+    }
+
+    if (category && ['OVERVIEW', 'SYSTEM', 'CONNECTION', 'FILE_TRANSFER'].includes(category)) {
+      activeTab = category;
+    }
+    if (level && ['ALL', 'INFO', 'WARNING', 'ERROR'].includes(level)) {
+      levelFilter = level;
+    }
+    if (search) {
+      searchQuery = search;
     }
   }
 
@@ -151,6 +189,7 @@
   });
 
   onMount(() => {
+    applyDeepLink(data);
     loadLogs();
     loadOpsSummary();
     interval = setInterval(loadLogs, 5000);
@@ -158,6 +197,10 @@
 
   onDestroy(() => {
     if (interval) clearInterval(interval);
+  });
+
+  $effect(() => {
+    applyDeepLink(data);
   });
 
   $effect(() => {
@@ -174,12 +217,13 @@
     <div class="sidebar-header">Log Center</div>
     <div class="nav-group">
       {#each categories as cat}
+        {@const CategoryIcon = cat.icon}
         <button 
           class="nav-item" 
           class:active={activeTab === cat.id}
           onclick={() => { activeTab = cat.id; searchQuery = ''; levelFilter = 'ALL'; }}
         >
-          <svelte:component this={cat.icon} size={16} />
+          <CategoryIcon size={16} />
           <span>{cat.label}</span>
         </button>
       {/each}
@@ -305,9 +349,10 @@
             </thead>
             <tbody>
               {#each logs as log}
+                {@const LevelIcon = getLevelIcon(log.level)}
                 <tr class="log-row {log.level.toLowerCase()}">
                   <td class="cell-level">
-                    <svelte:component this={getLevelIcon(log.level)} size={14} color={getLevelColor(log.level)} />
+                    <LevelIcon size={14} color={getLevelColor(log.level)} />
                   </td>
                   <td class="cell-time">{new Date(log.timestamp).toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
                   <td class="cell-user">{log.user || 'system'}</td>

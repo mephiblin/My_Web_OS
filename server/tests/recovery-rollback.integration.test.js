@@ -12,6 +12,7 @@ const packagesRouter = require('../routes/packages');
 const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
 const serverConfig = require('../config/serverConfig');
+const packageLifecycleService = require('../services/packageLifecycleService');
 
 function signToken(username) {
   return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -73,22 +74,7 @@ async function cleanupAppArtifacts(appId) {
 
   const backupRoot = path.join(roots.systemDir, 'package-backups', appId);
   await fs.remove(backupRoot).catch(() => {});
-
-  const lifecyclePath = path.join(roots.systemDir, 'package-lifecycle.json');
-  if (!(await fs.pathExists(lifecyclePath))) {
-    return;
-  }
-
-  const lifecycle = await fs.readJson(lifecyclePath).catch(() => null);
-  if (!lifecycle || typeof lifecycle !== 'object' || !lifecycle.apps || typeof lifecycle.apps !== 'object') {
-    return;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(lifecycle.apps, appId)) {
-    delete lifecycle.apps[appId];
-    lifecycle.updatedAt = new Date().toISOString();
-    await fs.writeJson(lifecyclePath, lifecycle, { spaces: 2 });
-  }
+  await packageLifecycleService.deleteLifecycle(appId).catch(() => {});
 }
 
 test('recovery rollback chain restores package files from backup', async () => {

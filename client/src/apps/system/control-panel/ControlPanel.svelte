@@ -22,7 +22,7 @@
   let openWithExtension = $state('');
   let openWithAppId = $state('');
   let desktopApps = $state([]);
-  let fileInput;
+  let fileInput = $state(null);
   
   const tabs = [
     { id: 'personalization', title: 'Personalization', icon: Palette },
@@ -196,11 +196,12 @@
     </div>
     <nav>
       {#each tabs as tab}
+        {@const TabIcon = tab.icon}
         <button 
           class="tab-btn {activeTab === tab.id ? 'active' : ''}" 
           onclick={() => activeTab = tab.id}
         >
-          <svelte:component this={tab.icon} size={18} />
+          <TabIcon size={18} />
           <span>{tab.title}</span>
         </button>
       {/each}
@@ -214,7 +215,7 @@
         <p class="panel-note">Desktop appearance lives here. Server/runtime operations are managed in the Settings app.</p>
         
         <div class="setting-group">
-          <label>Background Source</label>
+          <div class="setting-label">Background Source</div>
           <div class="type-selector">
             <button class:active={$systemSettings.wallpaperType === 'css'} onclick={() => systemSettings.updateSettings({ wallpaperType: 'css' })}>
               <Palette size={14} /> Gradient
@@ -230,7 +231,7 @@
 
         {#if $systemSettings.wallpaperType === 'css'}
           <div class="setting-group">
-            <label>Presets</label>
+            <div class="setting-label">Presets</div>
             <div class="wallpaper-grid">
               {#each gradientPresets as wp}
                 <button 
@@ -249,7 +250,7 @@
         {:else}
           <div class="setting-group">
             <div class="lib-header">
-              <label>Media Library</label>
+              <div class="setting-label">Media Library</div>
               <div class="header-actions">
                 <button class="action-btn-outline" onclick={() => showFilePicker = true}>
                   <ExternalLink size={14} /> Browse Local Files
@@ -294,9 +295,10 @@
           </div>
 
           <div class="setting-group">
-            <label>Or manually enter URL</label>
+            <label for="wallpaperUrl">Or manually enter URL</label>
             <div class="url-input-container">
               <input 
+                id="wallpaperUrl"
                 type="text" 
                 placeholder="https://example.com/custom.png"
                 value={$systemSettings.wallpaper}
@@ -306,7 +308,7 @@
           </div>
 
           <div class="setting-group">
-            <label>Display Mode</label>
+            <div class="setting-label">Display Mode</div>
             <div class="type-selector">
               <button class:active={$systemSettings.wallpaperFit === 'cover' || !$systemSettings.wallpaperFit} onclick={() => systemSettings.updateSettings({ wallpaperFit: 'cover' })}>Fill</button>
               <button class:active={$systemSettings.wallpaperFit === 'contain'} onclick={() => systemSettings.updateSettings({ wallpaperFit: 'contain' })}>Fit</button>
@@ -320,8 +322,9 @@
         <div class="setting-divider"></div>
 
         <div class="setting-group">
-          <label>Glassmorphism Blur ({$systemSettings.blurIntensity}px)</label>
+          <label for="glassBlur">Glassmorphism Blur ({$systemSettings.blurIntensity}px)</label>
           <input 
+            id="glassBlur"
             type="range" min="0" max="40" 
             value={$systemSettings.blurIntensity} 
             oninput={(e) => systemSettings.updateSettings({ blurIntensity: parseInt(e.target.value) })} 
@@ -329,8 +332,9 @@
         </div>
 
         <div class="setting-group">
-          <label>Transparency ({Math.round($systemSettings.transparency * 100)}%)</label>
+          <label for="transparency">Transparency ({Math.round($systemSettings.transparency * 100)}%)</label>
           <input 
+            id="transparency"
             type="range" min="0.05" max="0.5" step="0.01" 
             value={$systemSettings.transparency} 
             oninput={(e) => systemSettings.updateSettings({ transparency: parseFloat(e.target.value) })} 
@@ -338,9 +342,10 @@
         </div>
 
         <div class="setting-group">
-          <label>Accent Color</label>
+          <label for="accentColor">Accent Color</label>
           <div class="color-picker">
             <input 
+              id="accentColor"
               type="color" 
               value={$systemSettings.accentColor} 
               oninput={(e) => systemSettings.updateSettings({ accentColor: e.target.value })} 
@@ -350,7 +355,7 @@
         </div>
 
         <div class="setting-group">
-          <label>Theme Presets</label>
+          <div class="setting-label">Theme Presets</div>
           <div class="taskbar-settings glass-effect theme-preset-panel">
             <div class="theme-preset-create">
               <input
@@ -391,7 +396,7 @@
         <div class="setting-divider"></div>
 
         <div class="setting-group">
-          <label>Start Menu</label>
+          <div class="setting-label">Start Menu</div>
           <div class="taskbar-settings glass-effect">
             <div class="taskbar-row">
               <span>Layout</span>
@@ -424,7 +429,7 @@
         </div>
 
         <div class="setting-group">
-          <label>Taskbar</label>
+          <div class="setting-label">Taskbar</div>
           <div class="taskbar-settings glass-effect">
             <div class="taskbar-row">
               <span>Compact mode</span>
@@ -500,7 +505,7 @@
         </div>
 
         <div class="setting-group">
-          <label>Window Defaults</label>
+          <div class="setting-label">Window Defaults</div>
           <div class="taskbar-settings glass-effect window-defaults">
             <div class="taskbar-row">
               <span>Default size</span>
@@ -577,7 +582,7 @@
         </div>
 
         <div class="setting-group">
-          <label>Context Menu</label>
+          <div class="setting-label">Context Menu</div>
           <div class="taskbar-settings glass-effect">
             <div class="taskbar-row">
               <span>Show icons</span>
@@ -656,7 +661,7 @@
         </div>
 
         <div class="setting-group">
-          <label>App-specific Window Backgrounds</label>
+          <div class="setting-label">App-specific Window Backgrounds</div>
           <div class="taskbar-settings glass-effect">
             <div class="taskbar-row wrap">
               <span>Target app</span>
@@ -778,7 +783,8 @@
   .panel-note { margin: -10px 0 16px; color: var(--text-dim); font-size: 13px; }
   
   .setting-group { margin-bottom: 24px; display: flex; flex-direction: column; gap: 10px; }
-  .setting-group label { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
+  .setting-group label,
+  .setting-label { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
   
   .setting-divider { height: 1px; background: var(--glass-border); margin: 30px 0; }
 

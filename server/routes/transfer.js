@@ -33,12 +33,23 @@ function sendTransferError(res, err, fallbackCode, fallbackMessage) {
   });
 }
 
+const TRANSFER_STATUS_ALIASES = new Map([
+  ['error', 'failed'],
+  ['cancelled', 'canceled'],
+  ['success', 'completed'],
+  ['done', 'completed'],
+  ['active', 'running'],
+  ['working', 'running']
+]);
+
 router.get('/jobs', (req, res) => {
   try {
     const jobs = transferJobService.listJobs();
+    const summary = transferJobService.getSummary();
     return res.json({
       success: true,
-      jobs
+      jobs,
+      summary
     });
   } catch (err) {
     return sendTransferError(res, err, 'TRANSFER_LIST_FAILED', 'Failed to list transfer jobs.');
@@ -88,6 +99,35 @@ router.post('/jobs/:id/cancel', (req, res) => {
     });
   } catch (err) {
     return sendTransferError(res, err, 'TRANSFER_CANCEL_FAILED', 'Failed to cancel transfer job.');
+  }
+});
+
+router.post('/jobs/:id/retry', async (req, res) => {
+  try {
+    const job = await transferJobService.retryJob(req.params.id);
+    return res.status(202).json({
+      success: true,
+      job
+    });
+  } catch (err) {
+    return sendTransferError(res, err, 'TRANSFER_RETRY_FAILED', 'Failed to retry transfer job.');
+  }
+});
+
+router.delete('/jobs', (req, res) => {
+  try {
+    const statuses = String(req.query?.statuses || '')
+      .split(',')
+      .map((item) => String(item || '').trim().toLowerCase())
+      .map((status) => TRANSFER_STATUS_ALIASES.get(status) || status)
+      .filter(Boolean);
+    const result = transferJobService.clearJobs({ statuses });
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (err) {
+    return sendTransferError(res, err, 'TRANSFER_CLEAR_FAILED', 'Failed to clear transfer jobs.');
   }
 });
 
