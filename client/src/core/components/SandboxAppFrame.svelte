@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Send, AlertTriangle, Check } from 'lucide-svelte';
   import { openWindow } from '../stores/windowStore.js';
   import { addToast } from '../stores/toastStore.js';
@@ -64,6 +64,12 @@
     const safePayload = cloneMessagePayload(payload, null);
     // With iframe sandboxed without allow-same-origin, the child has an opaque origin.
     frameEl.contentWindow.postMessage(safePayload, '*');
+  }
+
+  function disposeFrame() {
+    if (!frameEl) return;
+    postToFrame({ type: 'webos:dispose' });
+    frameEl.src = 'about:blank';
   }
 
   function normalizeAppForWindow(targetApp) {
@@ -395,6 +401,10 @@
     lastError = 'Failed to load sandbox app.';
     lastErrorCode = 'SANDBOX_FRAME_LOAD_FAILED';
   }
+
+  onDestroy(() => {
+    disposeFrame();
+  });
 </script>
 
 <div class="sandbox-shell">

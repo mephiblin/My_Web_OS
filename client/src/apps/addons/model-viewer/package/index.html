@@ -342,6 +342,13 @@
         renderer = null;
       }
 
+      window.addEventListener('message', (event) => {
+        const payload = event.data && typeof event.data === 'object' ? event.data : {};
+        if (payload.type === 'webos:dispose') {
+          cleanup();
+        }
+      });
+
       wireframeEl.addEventListener('click', () => {
         wireframe = !wireframe;
         wireframeEl.classList.toggle('active', wireframe);
