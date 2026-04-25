@@ -1,5 +1,7 @@
 # Core-System / App-Addon 분리 정비안
 
+> Archive Status: `[ARCHIVED][COMPLETED]` 2026-04-25 시점의 분리 정비 완료 기록. 현재 작업 기준 문서는 `AGENTS.md` 및 `doc/planning/*`를 우선한다.
+
 ## 목적
 
 현재 구조는 `논리 분리`는 진행됐지만 `물리 분리`와 `레거시 제거`가 완전하지 않습니다.  
@@ -9,7 +11,7 @@
 
 1. 앱 모델은 `system / standard / package`로 분류되지만, 실제 폴더/런타임 분리가 혼재됨
 2. Desktop 실행은 registry 기반으로 전환됐으나, 빌트인 컴포넌트 매핑 의존이 남아 있음
-3. 앱 레지스트리 로딩에 legacy fallback(`server/storage/apps.json`)이 남아 있음
+3. fresh bootstrap에서 legacy seed(`server/storage/apps.json`)와 inventory registry 간 데이터 드리프트가 재발할 수 있음
 4. 코어 외 앱도 `client/src/apps/*`에 함께 존재하여 addon 경계가 약함
 5. “done” 상태 대비 아키텍처 완결성이 일부 부족함 (운영/문서 기준 불일치)
 
@@ -31,13 +33,14 @@
 
 ## 해결 전략 (단계별)
 
-## 실행 상태 (2026-04-24)
+## 실행 상태 (2026-04-25)
 
 - Phase 1: 완료
 - Phase 2: 완료
 - Phase 3: 완료 (`readBuiltinRegistry` legacy fallback 제거, `tools/migrate-apps-registry.js` 추가)
 - Phase 4: 완료 (built-in registry manifest-like 필드 정규화, `tools/package-doctor.js` builtin registry 검증 확장)
 - Phase 5: 완료 (`AGENTS.md`/`doc/operations/completed-backlog-log.md`/본 문서 상태 동기화)
+- Follow-up: `P0-2 ~ P1-4` 워킹트리 반영 완료, 단 전체 로드맵(P2+)은 별도 진행 필요
 
 ### Phase 1. 분류/소유권 확정
 
@@ -92,8 +95,9 @@
 
 현재 판단:
 
-- Phase 5는 문서 동기화 자체는 완료.
-- 그러나 File Station Open With, file grant, addon overwrite 승인, package addon 파일 API parity가 모두 완료되기 전까지는 “아키텍처 정합 완료”로 간주하지 않음.
+- Phase 5 문서 동기화는 완료.
+- `P0-2 ~ P1-4` 구현/문서 정합화는 워킹트리 기준 완료.
+- 다만 이것은 P0~P1 범위 완료 의미이며, 프로젝트 전체 아키텍처 완결(P2+)과 동일하지 않음.
 
 ## 파일 경계 원칙
 

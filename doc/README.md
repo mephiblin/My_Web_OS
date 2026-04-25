@@ -1,27 +1,57 @@
 # Documentation Index
 
-프로젝트 문서는 아래 구조를 기준으로 관리합니다.
+문서 상태와 우선순위를 함께 관리한다.
+
+우선순위 규칙:
+
+1. `AGENTS.md` + roadmap/product brief
+2. active planning/reference docs
+3. dated operations snapshot
+4. archive/legacy docs
+
+상태 라벨:
+
+- `[ACTIVE]`: 현재 구현/운영 기준
+- `[SNAPSHOT]`: 특정 날짜 기준 진행 메모
+- `[COMPLETED]`: 완료 기록(운영 증적)
+- `[LEGACY]`: 1회성 이관/하위호환 대응 문서
+- `[ARCHIVED]`: 과거 참고용, 신규 작업 기준 아님
+
+## Root Docs
+- `[ACTIVE]` `README.md` (개발/에이전트 기준)
+- `[ACTIVE]` `USER_README.md` (사용자/운영자 기준)
 
 ## Planning
-- `doc/planning/project-identity-boundaries.md`
-- `doc/planning/feature-scope-priorities.md`
-- `doc/planning/ui-ux-customization-agent.md`
-- `doc/planning/app-install-file-workflow-direction.md`
+- `[ACTIVE]` `doc/planning/product-brief-home-server-remote-computer.md`
+- `[ACTIVE]` `doc/planning/feature-inventory-home-server-remote-computer.md`
+- `[ACTIVE]` `doc/planning/implementation-priority-plan.md`
+- `[ACTIVE]` `doc/planning/roadmap-home-server-remote-computer.md`
+- `[ACTIVE]` `doc/planning/project-identity-boundaries.md`
+- `[ACTIVE]` `doc/planning/feature-scope-priorities.md`
+- `[ACTIVE]` `doc/planning/ui-ux-customization-agent.md`
+- `[ACTIVE]` `doc/planning/app-install-file-workflow-direction.md`
 
 ## Operations
-- `doc/operations/completed-backlog-log.md`
-- `doc/operations/local-run-guide.md`
-- `doc/operations/package-troubleshooting.md`
+- `[ACTIVE]` `doc/operations/completed-backlog-log.md`
+- `[ACTIVE]` `doc/operations/local-run-guide.md`
+- `[ACTIVE]` `doc/operations/remote-access-hardening-guide.md`
+- `[ACTIVE]` `doc/operations/package-troubleshooting.md`
+- `[SNAPSHOT]` `doc/operations/next-tasks-2026-04-25.md`
+- `[COMPLETED]` `doc/operations/backup-restore-rehearsal-2026-04-25.md`
 
 ## Policies
-- `doc/policies/file-station-places-policy.md`
+- `[ACTIVE]` `doc/policies/file-station-places-policy.md`
 
 ## Migrations
-- `doc/migrations/media-library-path-migration.md`
+- `[LEGACY]` `doc/migrations/media-library-path-migration.md`
 
 ## Reference
-- `doc/reference/architecture-api-reference.md`
-- `doc/reference/app-development-model.md`
-- `doc/reference/package-ecosystem-guide.md`
-- `doc/reference/core-addon-separation-remediation.md`
-- `doc/reference/app-ownership-matrix.md`
+- `[ACTIVE]` `doc/reference/architecture-api-reference.md`
+- `[ACTIVE]` `doc/reference/app-development-model.md`
+- `[ACTIVE]` `doc/reference/package-ecosystem-guide.md`
+- `[ACTIVE]` `doc/reference/app-ownership-matrix.md`
+
+## Archive
+- `[ARCHIVED]` `doc/archive/README.md`
+- `[ARCHIVED]` `doc/archive/reference/core-addon-separation-remediation.completed.md`
+- `[ARCHIVED]` `doc/archive/operations/daily-log-2026-04-24.completed.md`

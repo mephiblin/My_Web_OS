@@ -1,5 +1,7 @@
 # Media Library Migration Guide
 
+> Status: `[LEGACY]` one-time migration guide. 기존 wallpaper/media 경로 데이터를 가진 설치에서만 필요하며, 신규 설치는 보통 불필요하다.
+
 기존 wallpaper/media 레거시 경로 참조를 Media Library 표준 경로로 이관할 때 사용하는 운영 가이드.
 
 ## Target Scope
