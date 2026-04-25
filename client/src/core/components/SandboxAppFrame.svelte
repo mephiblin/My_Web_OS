@@ -69,7 +69,6 @@
   function disposeFrame() {
     if (!frameEl) return;
     postToFrame({ type: 'webos:dispose' });
-    frameEl.src = 'about:blank';
   }
 
   function normalizeAppForWindow(targetApp) {

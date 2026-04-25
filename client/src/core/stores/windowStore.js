@@ -166,7 +166,16 @@ export function openWindow(app, data = null) {
 }
 
 export function closeWindow(id) {
-  windows.update(items => items.filter(w => w.id !== id));
+  windows.update(items => {
+    const next = items.filter(w => w.id !== id);
+    if (get(activeWindowId) === id) {
+      const nextActive = next.length > 0
+        ? next.reduce((best, item) => (item.zIndex > best.zIndex ? item : best), next[0]).id
+        : null;
+      activeWindowId.set(nextActive);
+    }
+    return next;
+  });
 }
 
 export function focusWindow(id) {
