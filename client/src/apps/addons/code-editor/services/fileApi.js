@@ -1,4 +1,4 @@
-import { apiFetch } from '../../../utils/api.js';
+import { apiFetch } from '../../../../utils/api.js';
 
 export async function readFile(path, options = {}) {
   const params = new URLSearchParams({

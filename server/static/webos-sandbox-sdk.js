@@ -170,6 +170,14 @@
       }
     },
     files: {
+      rawUrl: function rawUrl(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        var appId = context && context.app && context.app.id ? context.app.id : '';
+        var path = payload.path || '';
+        var grantId = payload.grantId || '';
+        if (!appId || !path || !grantId) return '';
+        return '/api/sandbox/' + encodeURIComponent(appId) + '/file/raw?path=' + encodeURIComponent(path) + '&grantId=' + encodeURIComponent(grantId);
+      },
       read: function read(input) {
         var payload = input && typeof input === 'object' ? input : {};
         return requestWithPermission('app.data.read', 'host.file.read', {

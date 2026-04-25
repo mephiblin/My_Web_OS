@@ -12,6 +12,12 @@
   import { addShortcut } from '../../../core/stores/shortcutStore.js';
   import { contextMenuSettings } from '../../../core/stores/contextMenuStore.js';
   import * as fsApi from './api.js';
+  import {
+    findAssociationMatches,
+    getFileExtension,
+    inferPreferredActionByExtension,
+    resolveOpenPlan
+  } from './services/fileAssociations.js';
   import { listTransferJobs, isRunningStatus } from '../transfer/api.js';
 
   let currentPath = $state('/');
@@ -208,51 +214,6 @@
     cloudUploadPolling = setInterval(() => refreshCloudUploadStatus(), 2500);
   }
 
-  function getFileExtension(fileName = '') {
-    const segments = String(fileName || '').split('.');
-    if (segments.length < 2) return '';
-    return String(segments.pop() || '').trim().toLowerCase();
-  }
-
-  function inferPreferredActionByExtension(extension) {
-    const ext = String(extension || '').trim().toLowerCase();
-    if (!ext) return 'open';
-    if (['txt', 'md', 'markdown', 'json', 'js', 'ts', 'css', 'html', 'xml', 'yml', 'yaml', 'csv', 'log'].includes(ext)) {
-      return 'edit';
-    }
-    return 'open';
-  }
-
-  function findAssociationApps(extension, action) {
-    const normalizedExt = String(extension || '').trim().toLowerCase();
-    const normalizedAction = String(action || 'open').trim().toLowerCase();
-    const matched = [];
-
-    for (const app of desktopApps) {
-      const rows = Array.isArray(app?.fileAssociations) ? app.fileAssociations : [];
-      for (const row of rows) {
-        const extensions = Array.isArray(row?.extensions) ? row.extensions.map((item) => String(item || '').trim().toLowerCase()) : [];
-        if (!extensions.includes(normalizedExt)) continue;
-        const actions = Array.isArray(row?.actions) ? row.actions.map((item) => String(item || '').trim().toLowerCase()) : [];
-        if (actions.length > 0 && !actions.includes(normalizedAction)) {
-          continue;
-        }
-        matched.push({
-          appId: app.id,
-          defaultAction: String(row?.defaultAction || '').trim().toLowerCase() || null
-        });
-        break;
-      }
-    }
-
-    matched.sort((a, b) => {
-      const scoreA = a.defaultAction === normalizedAction ? 1 : 0;
-      const scoreB = b.defaultAction === normalizedAction ? 1 : 0;
-      return scoreB - scoreA;
-    });
-    return matched.map((item) => item.appId);
-  }
-
   function resolvePreferredOpenWith(extension) {
     const ext = String(extension || '').trim().toLowerCase();
     if (!ext) return '';
@@ -261,15 +222,43 @@
     return preferred;
   }
 
-  function resolveLegacyFallbackApp(extension) {
+  function resolveAppMeta(appId) {
+    const normalizedId = String(appId || '').trim();
+    return desktopApps.find((app) => app.id === normalizedId) || null;
+  }
+
+  function buildWindowAppForFile(appMeta, appId, item) {
+    const source = appMeta && typeof appMeta === 'object' ? appMeta : {};
+    return {
+      ...source,
+      id: source.id || appId,
+      title: item?.name || source.title || appId,
+      icon: source.icon || FileText,
+      singleton: source.singleton === true
+    };
+  }
+
+  function setDefaultOpenWith(extension, appId) {
     const ext = String(extension || '').trim().toLowerCase();
-    const isMedia = ['mp4', 'webm', 'mkv', 'mov', 'avi', 'mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext);
-    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
-    const is3D = ['gltf', 'glb', 'fbx', 'obj'].includes(ext);
-    if (isMedia || isImage) return 'player';
-    if (ext === 'pdf') return 'doc-viewer';
-    if (is3D) return 'model-viewer';
-    return 'editor';
+    const normalizedAppId = String(appId || '').trim();
+    if (!ext || !normalizedAppId) return;
+    contextMenuSettings.updateSettings({
+      openWithByExtension: {
+        ...($contextMenuSettings?.openWithByExtension || {}),
+        [ext]: normalizedAppId
+      }
+    });
+    const appMeta = resolveAppMeta(normalizedAppId);
+    addToast(`.${ext} files will open with ${appMeta?.title || normalizedAppId}.`, 'success');
+  }
+
+  function clearDefaultOpenWith(extension) {
+    const ext = String(extension || '').trim().toLowerCase();
+    if (!ext) return;
+    const next = { ...($contextMenuSettings?.openWithByExtension || {}) };
+    delete next[ext];
+    contextMenuSettings.updateSettings({ openWithByExtension: next });
+    addToast(`Default app for .${ext} cleared.`, 'info');
   }
 
   async function openFileWithApp(item, appId, action) {
@@ -295,23 +284,18 @@
       }
     };
 
-    openWindow(
-      {
-        id: appId,
-        title: `${item.name}`,
-        icon: FileText
-      },
-      {
-        path: item.path,
-        fileContext
-      }
-    );
+    const appMeta = resolveAppMeta(appId);
+    openWindow(buildWindowAppForFile(appMeta, appId, item), {
+      path: item.path,
+      fileContext
+    });
   }
 
   async function openFileWithByAppId(item, appId) {
     const extension = getFileExtension(item?.name || '');
-    const preferredAction = inferPreferredActionByExtension(extension);
-    await openFileWithApp(item, appId, preferredAction);
+    const matches = findAssociationMatches(desktopApps, extension);
+    const match = matches.find((candidate) => candidate.appId === appId);
+    await openFileWithApp(item, appId, match?.defaultAction || inferPreferredActionByExtension(extension));
   }
 
   function buildSidebarLinks(homePath, dirs) {
@@ -370,19 +354,32 @@
     } else if (item) {
       const isLocked = lockedFolders.includes(item.path);
       const extension = item?.isDirectory ? '' : getFileExtension(item.name);
-      const preferredAction = inferPreferredActionByExtension(extension);
-      const associationApps = item?.isDirectory ? [] : findAssociationApps(extension, preferredAction);
+      const associationMatches = item?.isDirectory ? [] : findAssociationMatches(desktopApps, extension);
+      const preferredApp = resolvePreferredOpenWith(extension);
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
-        ...(!item.isDirectory && associationApps.length > 0
-          ? associationApps.slice(0, 5).map((appId) => {
-            const appMeta = desktopApps.find((app) => app.id === appId);
+        ...(!item.isDirectory && associationMatches.length > 0
+          ? associationMatches.slice(0, 6).map((match) => {
+            const appMeta = match.app || resolveAppMeta(match.appId);
             return {
-              label: `Open With ${appMeta?.title || appId}`,
+              label: `Open With ${appMeta?.title || match.appId}`,
               icon: LayoutGrid,
-              action: () => openFileWithByAppId(item, appId)
+              action: () => openFileWithByAppId(item, match.appId)
             };
           })
+          : []),
+        ...(!item.isDirectory && associationMatches.length > 0
+          ? associationMatches.slice(0, 6).map((match) => {
+            const appMeta = match.app || resolveAppMeta(match.appId);
+            return {
+              label: `Always Open .${extension} With ${appMeta?.title || match.appId}`,
+              icon: ShieldAlert,
+              action: () => setDefaultOpenWith(extension, match.appId)
+            };
+          })
+          : []),
+        ...(!item.isDirectory && preferredApp
+          ? [{ label: `Clear Default App for .${extension}`, icon: RotateCcw, action: () => clearDefaultOpenWith(extension) }]
           : []),
         { label: 'Rename', icon: Pencil, action: () => handleRename(item) },
         { label: 'Create Desktop Shortcut', icon: ExternalLink, action: () => addShortcut(item) },
@@ -602,13 +599,9 @@
       fetchItems(item.path);
     } else {
       const extension = getFileExtension(item.name);
-      const preferredAction = inferPreferredActionByExtension(extension);
-      const candidates = findAssociationApps(extension, preferredAction);
       const preferredApp = resolvePreferredOpenWith(extension);
-      const appId = (preferredApp && candidates.includes(preferredApp))
-        ? preferredApp
-        : (candidates[0] || resolveLegacyFallbackApp(extension));
-      await openFileWithApp(item, appId, preferredAction);
+      const plan = resolveOpenPlan(desktopApps, extension, preferredApp);
+      await openFileWithApp(item, plan.appId, plan.action);
     }
   }
 

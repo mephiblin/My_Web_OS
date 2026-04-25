@@ -11,10 +11,13 @@ const packageRegistryService = require('../services/packageRegistryService');
 const packageLifecycleService = require('../services/packageLifecycleService');
 const channelUpdatePolicyService = require('../services/channelUpdatePolicyService');
 const templateQualityGate = require('../services/templateQualityGate');
+const templateCatalogService = require('../services/templateCatalogService');
+const stateStore = require('../services/stateStore');
 const { CAPABILITY_CATALOG } = require('../services/capabilityCatalog');
 const { APP_API_POLICY, checkCompatibility } = require('../services/appApiPolicy');
 const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
+const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath } = require('../utils/pathPolicy');
 const { normalizeRuntimeProfile, assertValidRuntimeProfile, toManifestRuntimeFields } = require('../services/runtimeProfiles');
 
 const router = express.Router();
@@ -30,7 +33,7 @@ const DEFAULT_WINDOW = {
 const ICON_FILE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
 const REGISTRY_DOWNLOAD_TIMEOUT_MS = 15000;
 const REGISTRY_DOWNLOAD_MAX_BYTES = 80 * 1024 * 1024;
-const ECOSYSTEM_TEMPLATE_NAMESPACE = 'official';
+const LOCAL_WORKSPACE_MODES = new Set(['read', 'readwrite']);
 const upload = multer({
   storage: multer.diskStorage({
     destination: async (_req, _file, cb) => {
@@ -53,165 +56,6 @@ const APP_ID_ROUTE = ':id';
 const ROOT_PACKAGE_JSON_PATH = path.join(__dirname, '../../package.json');
 let cachedServerVersion = '';
 let cachedAdminUsername = '';
-
-const ECOSYSTEM_TEMPLATES = [
-  {
-    id: 'empty-html',
-    title: 'Empty HTML App',
-    category: 'productivity',
-    description: '가장 작은 sandbox-html 앱 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: []
-    }
-  },
-  {
-    id: 'memo-app',
-    title: 'Memo App',
-    category: 'productivity',
-    description: 'app-owned data 기반 메모 앱 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['app.data.read', 'app.data.write', 'ui.notification']
-    }
-  },
-  {
-    id: 'todo-app',
-    title: 'Todo App',
-    category: 'productivity',
-    description: 'app-owned data 기반 할 일 관리 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['app.data.read', 'app.data.write']
-    }
-  },
-  {
-    id: 'bookmark-manager',
-    title: 'Bookmark Manager',
-    category: 'productivity',
-    description: 'app-owned data 기반 북마크 관리 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['app.data.read', 'app.data.write', 'window.open']
-    }
-  },
-  {
-    id: 'calculator',
-    title: 'Calculator',
-    category: 'utility',
-    description: '간단한 계산기 앱 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: []
-    }
-  },
-  {
-    id: 'clipboard-history',
-    title: 'Clipboard History',
-    category: 'utility',
-    description: 'app-owned data 기반 클립보드 기록 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['app.data.read', 'app.data.write']
-    }
-  },
-  {
-    id: 'widget-basic',
-    title: 'Widget Template',
-    category: 'widget',
-    description: 'widget 타입의 작은 대시보드 위젯 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'widget',
-      entry: 'index.html',
-      permissions: ['system.info']
-    }
-  },
-  {
-    id: 'server-monitor',
-    title: 'Server Monitor',
-    category: 'system',
-    description: 'system.info를 사용하는 서버 모니터 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['system.info', 'ui.notification']
-    }
-  },
-  {
-    id: 'markdown-editor',
-    title: 'Markdown Editor',
-    category: 'productivity',
-    description: '마크다운 편집/미리보기 앱 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['app.data.read', 'app.data.write']
-    }
-  },
-  {
-    id: 'json-formatter',
-    title: 'JSON Formatter',
-    category: 'developer',
-    description: 'JSON 유효성 검사/정렬 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['app.data.read', 'app.data.write']
-    }
-  },
-  {
-    id: 'api-tester',
-    title: 'API Tester',
-    category: 'developer',
-    description: '헤더 편집/응답 저장을 지원하는 HTTP 요청 테스트 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['app.data.read', 'app.data.write']
-    }
-  },
-  {
-    id: 'snippet-vault',
-    title: 'Snippet Vault',
-    category: 'developer',
-    description: '검색/태그/내보내기를 지원하는 app-owned data 스니펫 보관 템플릿',
-    defaults: {
-      runtimeType: 'sandbox-html',
-      appType: 'app',
-      entry: 'index.html',
-      permissions: ['app.data.read', 'app.data.write']
-    }
-  },
-  {
-    id: 'python-experimental',
-    title: 'Python Experimental',
-    category: 'runtime',
-    description: 'process-python 기반 실험용 서비스 템플릿',
-    defaults: {
-      runtimeType: 'process-python',
-      appType: 'service',
-      entry: 'service.py',
-      permissions: []
-    }
-  }
-];
 
 function toPosixPath(value = '') {
   return String(value).split(path.sep).join('/');
@@ -513,18 +357,6 @@ function normalizeRemotePackage(item = {}, source) {
       url: source.url
     }
   };
-}
-
-function listEcosystemTemplates() {
-  return ECOSYSTEM_TEMPLATES.map((template) => ({
-    ...template,
-    namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
-  }));
-}
-
-function getEcosystemTemplate(templateId) {
-  const key = String(templateId || '').trim();
-  return ECOSYSTEM_TEMPLATES.find((item) => item.id === key) || null;
 }
 
 function buildTemplateManifestInput(template, requestBody = {}) {
@@ -1449,6 +1281,355 @@ function createTemplateEntryContent(templateId, options = {}) {
       function render() { preview.textContent = src.value; }
       src.addEventListener('input', render);
       render();
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'markdown-preview') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto 1fr; background: #0f172a; color: #e2e8f0; font-family: sans-serif; }
+      .toolbar { display: flex; gap: 8px; padding: 10px; border-bottom: 1px solid #334155; }
+      .layout { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+      textarea { border: 0; outline: 0; resize: none; padding: 12px; background: #111827; color: #e2e8f0; }
+      .preview { border-left: 1px solid #334155; overflow: auto; padding: 12px; }
+      .status { margin-left: auto; align-self: center; font-size: 12px; color: #93c5fd; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 6px 10px; cursor: pointer; }
+      @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .preview { border-left: 0; border-top: 1px solid #334155; } }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button id="load-app-data" type="button">Load</button>
+      <button id="save-app-data" type="button">Save</button>
+      <span id="status" class="status">Ready</span>
+    </div>
+    <div class="layout">
+      <textarea id="src" placeholder="# Markdown Preview\\n\\n- edit\\n- save\\n- reload"></textarea>
+      <article id="preview" class="preview"></article>
+    </div>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const FILE_PATH = 'document.md';
+      const src = document.getElementById('src');
+      const preview = document.getElementById('preview');
+      const status = document.getElementById('status');
+
+      function setStatus(text) { status.textContent = String(text || 'Ready'); }
+      function escapeHtml(value) {
+        return String(value || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+      function renderMarkdown(raw) {
+        const lines = String(raw || '').split(/\\r?\\n/);
+        const out = [];
+        let inList = false;
+        for (const line of lines) {
+          const text = String(line || '');
+          if (/^\\s*[-*]\\s+/.test(text)) {
+            if (!inList) {
+              out.push('<ul>');
+              inList = true;
+            }
+            out.push('<li>' + escapeHtml(text.replace(/^\\s*[-*]\\s+/, '')) + '</li>');
+            continue;
+          }
+          if (inList) {
+            out.push('</ul>');
+            inList = false;
+          }
+          if (/^###\\s+/.test(text)) {
+            out.push('<h3>' + escapeHtml(text.replace(/^###\\s+/, '')) + '</h3>');
+          } else if (/^##\\s+/.test(text)) {
+            out.push('<h2>' + escapeHtml(text.replace(/^##\\s+/, '')) + '</h2>');
+          } else if (/^#\\s+/.test(text)) {
+            out.push('<h1>' + escapeHtml(text.replace(/^#\\s+/, '')) + '</h1>');
+          } else if (!text.trim()) {
+            out.push('<p></p>');
+          } else {
+            out.push('<p>' + escapeHtml(text) + '</p>');
+          }
+        }
+        if (inList) out.push('</ul>');
+        preview.innerHTML = out.join('');
+      }
+
+      async function loadFromAppData() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return;
+        try {
+          const payload = await sdk.app.data.read({ path: FILE_PATH });
+          src.value = String(payload?.content || '');
+          renderMarkdown(src.value);
+          setStatus('Loaded');
+        } catch (_err) {
+          setStatus('No saved file');
+        }
+      }
+      async function saveToAppData() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({ path: FILE_PATH, content: String(src.value || '') });
+        setStatus('Saved');
+      }
+
+      src.addEventListener('input', () => renderMarkdown(src.value));
+      document.getElementById('load-app-data').addEventListener('click', () => loadFromAppData().catch(() => setStatus('Load failed')));
+      document.getElementById('save-app-data').addEventListener('click', () => saveToAppData().catch(() => setStatus('Save failed')));
+      window.WebOS?.ready?.().then(async () => {
+        renderMarkdown(src.value);
+        await loadFromAppData();
+      }).catch(() => renderMarkdown(src.value));
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'csv-viewer') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto auto 1fr; background: #0f172a; color: #e2e8f0; font-family: sans-serif; }
+      .toolbar { display: flex; gap: 8px; padding: 10px; border-bottom: 1px solid #334155; }
+      .status { margin-left: auto; align-self: center; font-size: 12px; color: #93c5fd; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 6px 10px; cursor: pointer; }
+      textarea { width: 100%; min-height: 120px; box-sizing: border-box; border: 0; border-bottom: 1px solid #334155; outline: 0; padding: 12px; background: #111827; color: #e2e8f0; resize: vertical; }
+      .table-wrap { overflow: auto; padding: 10px; }
+      table { border-collapse: collapse; min-width: 100%; }
+      th, td { border: 1px solid #334155; padding: 6px 8px; text-align: left; white-space: nowrap; }
+      th { background: #1e293b; position: sticky; top: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button id="load-app-data" type="button">Load</button>
+      <button id="save-app-data" type="button">Save</button>
+      <button id="import-csv-file" type="button">Import File</button>
+      <button id="render-csv" type="button">Render Table</button>
+      <span id="status" class="status">Ready</span>
+    </div>
+    <textarea id="csv-input" placeholder="name,score\\nalpha,10\\nbeta,20"></textarea>
+    <div class="table-wrap">
+      <table id="csv-table"></table>
+    </div>
+    <input id="csv-file-input" type="file" accept=".csv,text/csv" style="display:none" />
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const FILE_PATH = 'table.csv';
+      const status = document.getElementById('status');
+      const input = document.getElementById('csv-input');
+      const table = document.getElementById('csv-table');
+      const fileInput = document.getElementById('csv-file-input');
+
+      function setStatus(text) { status.textContent = String(text || 'Ready'); }
+      function parseCsvLine(line) {
+        const row = [];
+        let current = '';
+        let quoted = false;
+        for (let i = 0; i < line.length; i += 1) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (quoted && line[i + 1] === '"') {
+              current += '"';
+              i += 1;
+            } else {
+              quoted = !quoted;
+            }
+            continue;
+          }
+          if (ch === ',' && !quoted) {
+            row.push(current);
+            current = '';
+            continue;
+          }
+          current += ch;
+        }
+        row.push(current);
+        return row;
+      }
+      function parseCsv(raw) {
+        return String(raw || '')
+          .split(/\\r?\\n/)
+          .filter((line) => line.trim().length > 0)
+          .map((line) => parseCsvLine(line));
+      }
+      function renderTable() {
+        const rows = parseCsv(input.value);
+        table.innerHTML = '';
+        if (!rows.length) {
+          setStatus('No rows');
+          return;
+        }
+        const [head, ...body] = rows;
+        const thead = document.createElement('thead');
+        const htr = document.createElement('tr');
+        head.forEach((cell) => {
+          const th = document.createElement('th');
+          th.textContent = String(cell || '');
+          htr.appendChild(th);
+        });
+        thead.appendChild(htr);
+        table.appendChild(thead);
+        const tbody = document.createElement('tbody');
+        body.forEach((row) => {
+          const tr = document.createElement('tr');
+          row.forEach((cell) => {
+            const td = document.createElement('td');
+            td.textContent = String(cell || '');
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        setStatus('Rendered ' + rows.length + ' rows');
+      }
+      async function loadFromAppData() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return;
+        try {
+          const payload = await sdk.app.data.read({ path: FILE_PATH });
+          input.value = String(payload?.content || '');
+          renderTable();
+          setStatus('Loaded');
+        } catch (_err) {
+          setStatus('No saved csv');
+        }
+      }
+      async function saveToAppData() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({ path: FILE_PATH, content: String(input.value || '') });
+        setStatus('Saved');
+      }
+
+      document.getElementById('render-csv').addEventListener('click', renderTable);
+      document.getElementById('load-app-data').addEventListener('click', () => loadFromAppData().catch(() => setStatus('Load failed')));
+      document.getElementById('save-app-data').addEventListener('click', () => saveToAppData().catch(() => setStatus('Save failed')));
+      document.getElementById('import-csv-file').addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', async (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+        try {
+          input.value = await file.text();
+          renderTable();
+          setStatus('Imported file: ' + String(file.name || 'input.csv'));
+        } catch (_err) {
+          setStatus('Import failed');
+        } finally {
+          fileInput.value = '';
+        }
+      });
+      window.WebOS?.ready?.().then(async () => {
+        await loadFromAppData();
+        renderTable();
+      }).catch(renderTable);
+    </script>
+  </body>
+</html>`;
+  }
+
+  if (key === 'text-processor') {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; height: 100vh; display: grid; grid-template-rows: auto auto 1fr; background: #0f172a; color: #e2e8f0; font-family: sans-serif; }
+      .toolbar, .ops { display: flex; gap: 8px; padding: 10px; border-bottom: 1px solid #334155; align-items: center; flex-wrap: wrap; }
+      .status { margin-left: auto; font-size: 12px; color: #93c5fd; }
+      textarea { width: 100%; border: 0; outline: 0; resize: none; background: #111827; color: #e2e8f0; padding: 12px; box-sizing: border-box; }
+      input { border: 1px solid #334155; border-radius: 6px; background: #111827; color: #e2e8f0; padding: 7px 8px; }
+      button { border: 1px solid #334155; border-radius: 6px; background: #1e293b; color: #e2e8f0; padding: 6px 10px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button id="load-app-data" type="button">Load</button>
+      <button id="save-app-data" type="button">Save</button>
+      <button id="to-uppercase" type="button">UPPERCASE</button>
+      <button id="to-lowercase" type="button">lowercase</button>
+      <button id="trim-lines" type="button">Trim Lines</button>
+      <span id="status" class="status">Ready</span>
+    </div>
+    <div class="ops">
+      <input id="find-text" type="text" placeholder="find" />
+      <input id="replace-text" type="text" placeholder="replace" />
+      <button id="replace-all" type="button">Replace All</button>
+    </div>
+    <textarea id="text-input" placeholder="Paste or type text..."></textarea>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const FILE_PATH = 'text.txt';
+      const textInput = document.getElementById('text-input');
+      const findText = document.getElementById('find-text');
+      const replaceText = document.getElementById('replace-text');
+      const status = document.getElementById('status');
+      function setStatus(text) { status.textContent = String(text || 'Ready'); }
+
+      async function loadFromAppData() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.read) return;
+        try {
+          const payload = await sdk.app.data.read({ path: FILE_PATH });
+          textInput.value = String(payload?.content || '');
+          setStatus('Loaded');
+        } catch (_err) {
+          setStatus('No saved text');
+        }
+      }
+      async function saveToAppData() {
+        const sdk = window.WebOS;
+        if (!sdk?.app?.data?.write) return;
+        await sdk.app.data.write({ path: FILE_PATH, content: String(textInput.value || '') });
+        setStatus('Saved');
+      }
+      function replaceAll() {
+        const from = String(findText.value || '');
+        if (!from) {
+          setStatus('find text required');
+          return;
+        }
+        const to = String(replaceText.value || '');
+        textInput.value = String(textInput.value || '').split(from).join(to);
+        setStatus('Replaced');
+      }
+      function trimLines() {
+        textInput.value = String(textInput.value || '')
+          .split(/\\r?\\n/)
+          .map((line) => line.trimEnd())
+          .join('\\n');
+        setStatus('Trimmed line endings');
+      }
+
+      document.getElementById('load-app-data').addEventListener('click', () => loadFromAppData().catch(() => setStatus('Load failed')));
+      document.getElementById('save-app-data').addEventListener('click', () => saveToAppData().catch(() => setStatus('Save failed')));
+      document.getElementById('to-uppercase').addEventListener('click', () => {
+        textInput.value = String(textInput.value || '').toUpperCase();
+        setStatus('Uppercased');
+      });
+      document.getElementById('to-lowercase').addEventListener('click', () => {
+        textInput.value = String(textInput.value || '').toLowerCase();
+        setStatus('Lowercased');
+      });
+      document.getElementById('trim-lines').addEventListener('click', trimLines);
+      document.getElementById('replace-all').addEventListener('click', replaceAll);
+      window.WebOS?.ready?.().then(loadFromAppData).catch(() => {});
     </script>
   </body>
 </html>`;
@@ -2742,6 +2923,7 @@ async function buildPackageOpsSummary(appId, options = {}) {
     appId: safeAppId,
     runtimeStatus,
     lifecycle,
+    localWorkspaceBridge: normalizeLocalWorkspaceBridgeSummary(lifecycle?.workspaceBridge),
     recentRuntimeEvents,
     lastHealthReport,
     lifecycleSafeguards: safeguards
@@ -2752,6 +2934,66 @@ function parseBooleanBody(value) {
   if (typeof value === 'boolean') return value;
   const normalized = String(value || '').trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+async function clearOpenWithDefaultsForRemovedApp(appId) {
+  const normalizedAppId = String(appId || '').trim();
+  if (!normalizedAppId) {
+    return { removedExtensions: [] };
+  }
+
+  const current = await stateStore.readState('contextMenu');
+  const table = current?.openWithByExtension && typeof current.openWithByExtension === 'object'
+    ? current.openWithByExtension
+    : {};
+  const nextTable = {};
+  const removedExtensions = [];
+
+  for (const [extension, targetAppId] of Object.entries(table)) {
+    if (String(targetAppId || '').trim() === normalizedAppId) {
+      removedExtensions.push(extension);
+      continue;
+    }
+    nextTable[extension] = targetAppId;
+  }
+
+  if (removedExtensions.length === 0) {
+    return { removedExtensions };
+  }
+
+  await stateStore.writeState('contextMenu', {
+    ...current,
+    openWithByExtension: nextTable
+  });
+
+  return { removedExtensions };
+}
+
+function parseMultipartJsonField(value, fieldName) {
+  if (value == null || typeof value === 'object') {
+    return value;
+  }
+
+  const codePrefix = String(fieldName || 'FIELD')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toUpperCase();
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      const err = new Error(`${fieldName} must be a JSON object when provided as a multipart field.`);
+      err.code = `${codePrefix}_INVALID`;
+      throw err;
+    }
+    return parsed;
+  } catch (err) {
+    if (err.code) throw err;
+    const wrapped = new Error(`${fieldName} must be valid JSON when provided as a multipart field.`);
+    wrapped.code = `${codePrefix}_INVALID_JSON`;
+    throw wrapped;
+  }
 }
 
 async function resolveRegistryInstallTarget(body = {}) {
@@ -3247,8 +3489,148 @@ function buildExternalOnboardingGuide(options = {}) {
   };
 }
 
+function createLocalWorkspaceError(code, message, status = 400, details = null) {
+  const err = new Error(message);
+  err.code = code;
+  err.status = status;
+  err.details = details;
+  return err;
+}
+
+function normalizeLocalWorkspaceMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  if (!mode) return 'readwrite';
+  if (LOCAL_WORKSPACE_MODES.has(mode)) return mode;
+  throw createLocalWorkspaceError(
+    'LOCAL_WORKSPACE_MODE_INVALID',
+    'localWorkspace.mode must be "read" or "readwrite".'
+  );
+}
+
+function normalizeLocalWorkspaceBridgeSummary(input = {}, fallback = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  const status = String(source.status || fallback.status || '').trim().toLowerCase() === 'inventory+local-workspace'
+    ? 'inventory+local-workspace'
+    : 'inventory-only';
+  const pathValue = String(source.path || fallback.path || '').trim();
+  const modeValue = String(source.mode || fallback.mode || '').trim().toLowerCase();
+  const mode = modeValue === 'read' ? 'read' : (modeValue === 'readwrite' ? 'readwrite' : null);
+  const requested = Boolean(
+    Object.prototype.hasOwnProperty.call(source, 'requested')
+      ? source.requested
+      : fallback.requested
+  );
+  const rawUpdatedAt = source.updatedAt || fallback.updatedAt || null;
+  let updatedAt = typeof rawUpdatedAt === 'string' && rawUpdatedAt.trim()
+    ? rawUpdatedAt
+    : null;
+
+  if (status === 'inventory+local-workspace' && !updatedAt) {
+    updatedAt = new Date().toISOString();
+  } else if (status === 'inventory-only' && requested && !updatedAt) {
+    updatedAt = new Date().toISOString();
+  }
+
+  return {
+    requested,
+    status,
+    boundary: 'inventory-app-data',
+    path: status === 'inventory+local-workspace' && pathValue ? pathValue : null,
+    mode: status === 'inventory+local-workspace' ? (mode || 'readwrite') : null,
+    updatedAt
+  };
+}
+
+async function resolveLocalWorkspaceBridge(input, options = {}) {
+  void options;
+  const base = normalizeLocalWorkspaceBridgeSummary({
+    requested: false,
+    status: 'inventory-only'
+  });
+
+  if (input == null) {
+    return base;
+  }
+
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw createLocalWorkspaceError(
+      'LOCAL_WORKSPACE_INVALID',
+      'localWorkspace must be an object when provided.'
+    );
+  }
+
+  const enabled = !Object.prototype.hasOwnProperty.call(input, 'enabled') || parseBooleanBody(input.enabled);
+  if (!enabled) {
+    return {
+      ...base,
+      requested: true
+    };
+  }
+
+  const rawPath = String(input.path || input.rootPath || '').trim();
+  if (!rawPath) {
+    throw createLocalWorkspaceError(
+      'LOCAL_WORKSPACE_PATH_REQUIRED',
+      'localWorkspace.path is required when local workspace bridge is enabled.'
+    );
+  }
+
+  let absolutePath = '';
+  try {
+    absolutePath = resolveSafePath(rawPath);
+  } catch (err) {
+    throw createLocalWorkspaceError(
+      'LOCAL_WORKSPACE_PATH_INVALID',
+      err.message || 'localWorkspace.path is invalid.',
+      400,
+      { path: rawPath }
+    );
+  }
+
+  const configPaths = await serverConfig.getPaths();
+  const allowedRoots = Array.isArray(configPaths.allowedRoots) ? configPaths.allowedRoots : [];
+  if (!isWithinAllowedRoots(absolutePath, allowedRoots)) {
+    throw createLocalWorkspaceError(
+      'LOCAL_WORKSPACE_PATH_NOT_ALLOWED',
+      'localWorkspace.path must be inside allowed roots.',
+      403,
+      { path: absolutePath }
+    );
+  }
+
+  if (isProtectedSystemPath(absolutePath, [configPaths.inventoryRoot])) {
+    throw createLocalWorkspaceError(
+      'LOCAL_WORKSPACE_PATH_SYSTEM_PROTECTED',
+      'localWorkspace.path cannot target protected inventory system paths.',
+      403,
+      { path: absolutePath }
+    );
+  }
+
+  const mode = normalizeLocalWorkspaceMode(input.mode);
+
+  return normalizeLocalWorkspaceBridgeSummary({
+    requested: true,
+    status: 'inventory+local-workspace',
+    path: absolutePath,
+    mode,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function appendLocalWorkspaceBridgeNote(baseNote = '', bridge = null) {
+  const note = String(baseNote || '').trim();
+  const normalized = normalizeLocalWorkspaceBridgeSummary(bridge);
+  if (normalized.status !== 'inventory+local-workspace') {
+    return note || '';
+  }
+  const bridgeNote = `local-workspace-bridge:${normalized.mode}:${normalized.path}`;
+  return note ? `${note} | ${bridgeNote}` : bridgeNote;
+}
+
 async function createLocalPackageFromManifest(manifestInput, options = {}) {
   const manifest = normalizeManifestInput(manifestInput || {});
+  const localWorkspaceBridge = normalizeLocalWorkspaceBridgeSummary(options.localWorkspaceBridge);
   const appRoot = await appPaths.getAppRoot(manifest.id);
   if (await fs.pathExists(appRoot)) {
     const err = new Error(`Package "${manifest.id}" already exists.`);
@@ -3282,18 +3664,25 @@ async function createLocalPackageFromManifest(manifestInput, options = {}) {
   await packageLifecycleService.recordInstall(manifest.id, {
     manifest,
     reason: options.reason || 'create',
-    source: options.source || 'local:create'
+    source: options.source || 'local:create',
+    workspaceBridge: localWorkspaceBridge,
+    note: appendLocalWorkspaceBridgeNote(options.note, localWorkspaceBridge)
   });
   await auditService.log(
     'PACKAGES',
     `Create Package: ${manifest.id}`,
-    { appId: manifest.id, user: options.user || '' },
+    {
+      appId: manifest.id,
+      localWorkspaceBridge,
+      user: options.user || ''
+    },
     'INFO'
   );
 
   return {
     package: created,
-    manifest
+    manifest,
+    localWorkspaceBridge
   };
 }
 
@@ -3301,6 +3690,7 @@ async function buildWizardPreflight(manifestInput, options = {}) {
   const manifest = normalizeManifestInput(manifestInput || {});
   const appId = manifest.id;
   const templateId = String(options.templateId || '').trim();
+  const localWorkspaceBridge = normalizeLocalWorkspaceBridgeSummary(options.localWorkspaceBridge);
   const existing = await packageRegistryService.getSandboxApp(appId);
   const runtimeManager = options.runtimeManager || null;
   const lifecycle = existing ? await packageLifecycleService.getLifecycle(appId).catch(() => null) : null;
@@ -3376,6 +3766,7 @@ async function buildWizardPreflight(manifestInput, options = {}) {
       type: 'create',
       appId,
       templateId: templateId || null,
+      localWorkspaceBridge,
       existing: existing
         ? {
             installed: true,
@@ -3393,6 +3784,130 @@ async function buildWizardPreflight(manifestInput, options = {}) {
     backupPlan,
     lifecycleSafeguards,
     onboarding,
+    localWorkspaceBridge,
+    executionReadiness: {
+      ready: blockers.length === 0,
+      blockers
+    }
+  };
+}
+
+async function buildZipImportPreflight(filePath, options = {}) {
+  const body = options.body && typeof options.body === 'object' ? options.body : {};
+  const incomingManifest = await readManifestFromZip(filePath);
+  const appId = incomingManifest.id;
+  const overwrite = parseBooleanBody(body.overwrite);
+  const existing = await packageRegistryService.getSandboxApp(appId);
+  const localWorkspaceInput = parseMultipartJsonField(body.localWorkspace, 'localWorkspace');
+  const localWorkspaceBridge = await resolveLocalWorkspaceBridge(localWorkspaceInput, {
+    operationType: existing ? 'update-preflight' : 'install-preflight',
+    appId
+  });
+  const lifecycle = existing ? await packageLifecycleService.getLifecycle(appId).catch(() => null) : null;
+  const runtimeManager = options.runtimeManager || null;
+  const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
+  const permissionsReview = buildPermissionReview(incomingManifest);
+
+  let qualityGateReport = null;
+  try {
+    qualityGateReport = await templateQualityGate.evaluate({
+      templateId: 'upload:zip',
+      appId,
+      manifest: incomingManifest,
+      allowFsMutation: false
+    });
+  } catch (err) {
+    const wrapped = new Error('Failed to evaluate template quality gate during import preflight.');
+    wrapped.code = err.code || 'PACKAGE_IMPORT_PREFLIGHT_QUALITY_GATE_FAILED';
+    wrapped.cause = err;
+    throw wrapped;
+  }
+
+  let dependencyCompatibility = null;
+  try {
+    dependencyCompatibility = await evaluateManifestDependencyCompatibility(incomingManifest);
+  } catch (err) {
+    const wrapped = new Error('Failed to evaluate dependency and compatibility checks.');
+    wrapped.code = 'PACKAGE_IMPORT_PREFLIGHT_COMPATIBILITY_CHECK_FAILED';
+    wrapped.cause = err;
+    throw wrapped;
+  }
+
+  const backupPlan = buildBackupPlanSummary({
+    overwrite,
+    existing
+  });
+  const operationType = existing ? 'update' : 'install';
+  const lifecycleSafeguards = buildLifecycleSafeguards({
+    operationType,
+    existing: Boolean(existing),
+    lifecycle,
+    runtimeStatus,
+    dependencyCompatibility,
+    backupPlan
+  });
+  const onboarding = buildExternalOnboardingGuide({
+    manifest: incomingManifest,
+    operationType,
+    sourceId: 'upload',
+    packageId: appId,
+    qualityGate: qualityGateReport,
+    dependencyCompatibility
+  });
+  const blockers = [];
+
+  if (existing && !overwrite) {
+    blockers.push({
+      code: 'PACKAGE_ALREADY_EXISTS',
+      message: `Package "${appId}" already exists. Set overwrite=true to perform update.`,
+      area: 'operation'
+    });
+  }
+
+  if (qualityGateReport?.status === 'fail') {
+    blockers.push({
+      code: 'TEMPLATE_QUALITY_GATE_FAILED',
+      message: 'Quality gate produced blocking failures for this package manifest.',
+      area: 'qualityGate'
+    });
+  }
+
+  blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
+
+  return {
+    operation: {
+      type: operationType,
+      appId,
+      overwrite,
+      source: 'upload:zip',
+      localWorkspaceBridge,
+      existing: existing
+        ? {
+            installed: true,
+            id: existing.id,
+            title: existing.title,
+            version: String(existing.version || '0.0.0').trim() || '0.0.0',
+            lifecycle: lifecycle
+              ? {
+                  channel: lifecycle.channel || lifecycle.current?.channel || 'stable',
+                  currentVersion: lifecycle.current?.version || null
+                }
+              : null
+          }
+        : {
+            installed: false
+          }
+    },
+    permissionsReview,
+    qualityGate: qualityGateReport,
+    dependencyCompatibility,
+    backupPlan,
+    lifecycleSafeguards,
+    onboarding,
+    localWorkspaceBridge,
+    updatePolicy: {
+      evaluated: false
+    },
     executionReadiness: {
       ready: blockers.length === 0,
       blockers
@@ -3401,6 +3916,9 @@ async function buildWizardPreflight(manifestInput, options = {}) {
 }
 
 function mapPreflightStatusToHttpStatus(err) {
+  if (Number.isInteger(err?.status)) {
+    return err.status;
+  }
   if (
     err.code === 'APP_ID_INVALID' ||
     err.code === 'REGISTRY_INSTALL_TARGET_REQUIRED' ||
@@ -3409,6 +3927,8 @@ function mapPreflightStatusToHttpStatus(err) {
     err.code === 'REGISTRY_PACKAGE_ZIP_URL_INVALID' ||
     err.code === 'REGISTRY_PACKAGE_DOWNLOAD_TIMEOUT' ||
     err.code === 'REGISTRY_PACKAGE_DOWNLOAD_FAILED' ||
+    err.code === 'LOCAL_WORKSPACE_INVALID' ||
+    err.code === 'LOCAL_WORKSPACE_INVALID_JSON' ||
     err.code === 'RUNTIME_PROFILE_INVALID' ||
     err.code?.startsWith('PACKAGE_') ||
     err.code?.startsWith('TEMPLATE_QUALITY_')
@@ -3422,6 +3942,9 @@ function mapPreflightStatusToHttpStatus(err) {
 }
 
 function mapWizardStatusToHttpStatus(err) {
+  if (Number.isInteger(err?.status)) {
+    return err.status;
+  }
   if (err.code === 'PACKAGE_ALREADY_EXISTS') {
     return 409;
   }
@@ -3471,11 +3994,13 @@ router.get('/', async (req, res) => {
     const runtimeStatusMap = runtimeManager?.getRuntimeStatusMap
       ? runtimeManager.getRuntimeStatusMap()
       : {};
+    const lifecycleMap = await buildLifecycleMap(packages);
     res.json({
       success: true,
       packages: packages.map((pkg) => ({
         ...pkg,
-        runtimeStatus: runtimeStatusMap[pkg.id] || null
+        runtimeStatus: runtimeStatusMap[pkg.id] || null,
+        workspaceBridge: lifecycleMap.get(pkg.id)?.workspaceBridge || normalizeLocalWorkspaceBridgeSummary()
       }))
     });
   } catch (err) {
@@ -3505,8 +4030,14 @@ router.post('/wizard/preflight', async (req, res) => {
       });
     }
 
+    const localWorkspaceBridge = await resolveLocalWorkspaceBridge(body.localWorkspace, {
+      operationType: 'create-preflight',
+      appId: body.manifest?.id
+    });
+
     const preflight = await buildWizardPreflight(body.manifest, {
       templateId: body.templateId,
+      localWorkspaceBridge,
       runtimeManager: req.app.get('runtimeManager')
     });
 
@@ -3536,17 +4067,24 @@ router.post('/wizard/create', async (req, res) => {
       });
     }
 
+    const localWorkspaceBridge = await resolveLocalWorkspaceBridge(body.localWorkspace, {
+      operationType: 'create',
+      appId: body.manifest?.id
+    });
+
     const created = await createLocalPackageFromManifest(body.manifest, {
       user: req.user?.username,
       reason: 'create',
       source: 'local:create',
-      templateId: body.templateId
+      templateId: body.templateId,
+      localWorkspaceBridge
     });
 
     return res.status(201).json({
       success: true,
       package: created.package,
       manifest: created.manifest,
+      localWorkspaceBridge: created.localWorkspaceBridge,
       onboarding: buildExternalOnboardingGuide({
         manifest: created.manifest,
         templateId: body.templateId,
@@ -3566,15 +4104,23 @@ router.post('/wizard/create', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const localWorkspaceBridge = await resolveLocalWorkspaceBridge(body.localWorkspace, {
+      operationType: 'create',
+      appId: body.id
+    });
+
     const created = await createLocalPackageFromManifest(req.body || {}, {
       user: req.user?.username,
       reason: 'create',
-      source: 'local:create'
+      source: 'local:create',
+      localWorkspaceBridge
     });
 
     return res.status(201).json({
       success: true,
-      package: created.package
+      package: created.package,
+      localWorkspaceBridge: created.localWorkspaceBridge
     });
   } catch (err) {
     const status = mapWizardStatusToHttpStatus(err);
@@ -3671,13 +4217,26 @@ router.delete(`/${APP_ID_ROUTE}`, async (req, res) => {
     await runtimeManager?.stopApp?.(appId).catch(() => {});
     await fs.remove(appRoot);
     await fs.remove(await appPaths.getAppDataRoot(appId)).catch(() => {});
+    await packageLifecycleService.deleteLifecycle(appId).catch(() => {});
+    const associationCleanup = await clearOpenWithDefaultsForRemovedApp(appId).catch((err) => ({
+      error: err.message,
+      removedExtensions: []
+    }));
     await auditService.log(
       'PACKAGES',
       `Delete Package: ${appId}`,
-      { appId, user: req.user?.username },
+      {
+        appId,
+        user: req.user?.username,
+        openWithDefaultsRemoved: associationCleanup.removedExtensions || [],
+        openWithCleanupError: associationCleanup.error || ''
+      },
       'WARN'
     );
-    return res.json({ success: true });
+    return res.json({
+      success: true,
+      associationCleanup
+    });
   } catch (err) {
     const status = err.code === 'APP_ID_INVALID' ? 400 : 500;
     return res.status(status).json({
@@ -3734,6 +4293,40 @@ router.get(`/${APP_ID_ROUTE}/export`, async (req, res) => {
   }
 });
 
+router.post('/import/preflight', upload.single('package'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_IMPORT_FILE_REQUIRED',
+        message: 'Upload file field "package" is required.'
+      });
+    }
+
+    const preflight = await buildZipImportPreflight(req.file.path, {
+      body: req.body,
+      runtimeManager: req.app.get('runtimeManager')
+    });
+
+    return res.json({
+      success: true,
+      preflight,
+      validation: buildManifestValidation()
+    });
+  } catch (err) {
+    return res.status(mapPreflightStatusToHttpStatus(err)).json({
+      error: true,
+      code: err.code || 'PACKAGE_IMPORT_PREFLIGHT_FAILED',
+      message: err.message,
+      validation: err.code === 'RUNTIME_PROFILE_INVALID' ? buildManifestValidation(err) : undefined
+    });
+  } finally {
+    if (req.file?.path) {
+      await fs.remove(req.file.path).catch(() => {});
+    }
+  }
+});
+
 router.post('/import', upload.single('package'), async (req, res) => {
   try {
     if (!req.file) {
@@ -3748,9 +4341,14 @@ router.post('/import', upload.single('package'), async (req, res) => {
     const runtimeManager = req.app.get('runtimeManager');
     const incomingManifest = await readManifestFromZip(req.file.path);
     const appId = incomingManifest.id;
+    const localWorkspaceInput = parseMultipartJsonField(req.body?.localWorkspace, 'localWorkspace');
+    const existing = await packageRegistryService.getSandboxApp(appId);
+    const localWorkspaceBridge = await resolveLocalWorkspaceBridge(localWorkspaceInput, {
+      operationType: existing ? 'update' : 'install',
+      appId
+    });
     const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
     const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
-    const existing = await packageRegistryService.getSandboxApp(appId);
 
     let backup = null;
     if (overwrite && existing) {
@@ -3777,7 +4375,9 @@ router.post('/import', upload.single('package'), async (req, res) => {
       manifest: incomingManifest,
       reason: overwrite && existing ? 'import-overwrite' : 'import',
       source: 'upload:zip',
-      backupId: backup?.id || null
+      backupId: backup?.id || null,
+      workspaceBridge: localWorkspaceBridge,
+      note: appendLocalWorkspaceBridgeNote('', localWorkspaceBridge)
     });
 
     if (wasRunning) {
@@ -3787,21 +4387,33 @@ router.post('/import', upload.single('package'), async (req, res) => {
     await auditService.log(
       'PACKAGES',
       `Import Package: ${installed.id}`,
-      { appId: installed.id, overwrite, backupId: backup?.id || null, user: req.user?.username },
+      {
+        appId: installed.id,
+        overwrite,
+        localWorkspaceBridge,
+        backupId: backup?.id || null,
+        user: req.user?.username
+      },
       'INFO'
     );
 
     return res.status(201).json({
       success: true,
-      package: installed
+      package: installed,
+      localWorkspaceBridge
     });
   } catch (err) {
-    const status =
-      err.code === 'APP_ID_INVALID' ||
-      err.code?.startsWith('PACKAGE_') ||
-      err.code === 'RUNTIME_PROFILE_INVALID'
-        ? 400
-        : 500;
+    const status = err.code === 'PACKAGE_ALREADY_EXISTS'
+      ? 409
+      : (
+        err.code === 'APP_ID_INVALID' ||
+        err.code?.startsWith('PACKAGE_') ||
+        err.code === 'LOCAL_WORKSPACE_INVALID' ||
+        err.code === 'LOCAL_WORKSPACE_INVALID_JSON' ||
+        err.code === 'RUNTIME_PROFILE_INVALID'
+          ? 400
+          : 500
+      );
     return res.status(status).json({
       error: true,
       code: err.code || 'PACKAGE_IMPORT_FAILED',
@@ -4060,6 +4672,10 @@ router.post('/registry/preflight', async (req, res) => {
     const incomingManifest = await readManifestFromZip(tempZipFile);
     const appId = incomingManifest.id;
     const existing = await packageRegistryService.getSandboxApp(appId);
+    const localWorkspaceBridge = await resolveLocalWorkspaceBridge(body.localWorkspace, {
+      operationType: existing ? 'update-preflight' : 'install-preflight',
+      appId
+    });
     const lifecycle = existing ? await packageLifecycleService.getLifecycle(appId).catch(() => null) : null;
 
     const permissionsReview = buildPermissionReview(incomingManifest);
@@ -4176,6 +4792,7 @@ router.post('/registry/preflight', async (req, res) => {
           type: operationType,
           appId,
           overwrite: target.overwrite,
+          localWorkspaceBridge,
           sourceId: target.sourceId || null,
           packageId: target.packageId || null,
           zipUrl: target.zipUrl,
@@ -4202,6 +4819,7 @@ router.post('/registry/preflight', async (req, res) => {
         backupPlan,
         lifecycleSafeguards,
         onboarding,
+        localWorkspaceBridge,
         updatePolicy: updatePolicy || {
           evaluated: false
         },
@@ -4280,6 +4898,10 @@ router.post('/registry/install', async (req, res) => {
     const incomingManifest = await readManifestFromZip(tempZipFile);
     const appId = incomingManifest.id;
     const existing = await packageRegistryService.getSandboxApp(appId);
+    const localWorkspaceBridge = await resolveLocalWorkspaceBridge(body.localWorkspace, {
+      operationType: existing ? 'update' : 'install',
+      appId
+    });
     const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
     const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
 
@@ -4342,7 +4964,9 @@ router.post('/registry/install', async (req, res) => {
       manifest: incomingManifest,
       reason: overwrite && existing ? 'upgrade-overwrite' : 'registry-install',
       source: sourceId ? `registry:${sourceId}` : 'registry:direct-url',
-      backupId: backup?.id || null
+      backupId: backup?.id || null,
+      workspaceBridge: localWorkspaceBridge,
+      note: appendLocalWorkspaceBridgeNote('', localWorkspaceBridge)
     });
 
     if (wasRunning) {
@@ -4357,6 +4981,7 @@ router.post('/registry/install', async (req, res) => {
         sourceId: sourceId || 'direct-url',
         zipUrl,
         overwrite,
+        localWorkspaceBridge,
         backupId: backup?.id || null,
         user: req.user?.username
       },
@@ -4365,10 +4990,13 @@ router.post('/registry/install', async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      package: installed
+      package: installed,
+      localWorkspaceBridge
     });
   } catch (err) {
-    const status =
+    const status = Number.isInteger(err.status)
+      ? err.status
+      : (
       err.code === 'APP_ID_INVALID' ||
       err.code?.startsWith('PACKAGE_') ||
       err.code === 'REGISTRY_PACKAGE_TOO_LARGE' ||
@@ -4377,7 +5005,8 @@ router.post('/registry/install', async (req, res) => {
       err.code === 'REGISTRY_PACKAGE_DOWNLOAD_FAILED' ||
       err.code === 'RUNTIME_PROFILE_INVALID'
         ? 400
-        : 500;
+        : 500
+      );
     return res.status(status).json({
       error: true,
       code: err.code || 'REGISTRY_PACKAGE_INSTALL_FAILED',
@@ -4391,17 +5020,28 @@ router.post('/registry/install', async (req, res) => {
 });
 
 router.get('/ecosystem/templates', async (_req, res) => {
-  return res.json({
-    success: true,
-    namespace: ECOSYSTEM_TEMPLATE_NAMESPACE,
-    templates: listEcosystemTemplates()
-  });
+  try {
+    const catalog = await templateCatalogService.getCatalog();
+    return res.json({
+      success: true,
+      version: catalog.version,
+      source: catalog.source,
+      namespace: catalog.namespace,
+      templates: catalog.templates
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: true,
+      code: err.code || templateCatalogService.CATALOG_LOAD_ERROR_CODE,
+      message: err.message || 'Failed to load ecosystem template catalog.'
+    });
+  }
 });
 
 router.post('/ecosystem/templates/:templateId/quality-check', async (req, res) => {
   let manifest = null;
   try {
-    const template = getEcosystemTemplate(req.params.templateId);
+    const template = await templateCatalogService.getTemplate(req.params.templateId);
     if (!template) {
       return res.status(404).json({
         error: true,
@@ -4422,7 +5062,7 @@ router.post('/ecosystem/templates/:templateId/quality-check', async (req, res) =
       success: true,
       template: {
         id: template.id,
-        namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
+        namespace: template.namespace
       },
       report,
       validation: buildManifestValidation()
@@ -4447,7 +5087,7 @@ router.post('/ecosystem/templates/:templateId/quality-check', async (req, res) =
 router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
   let manifest = null;
   try {
-    const template = getEcosystemTemplate(req.params.templateId);
+    const template = await templateCatalogService.getTemplate(req.params.templateId);
     if (!template) {
       return res.status(404).json({
         error: true,
@@ -4555,7 +5195,7 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
       success: true,
       template: {
         id: template.id,
-        namespace: ECOSYSTEM_TEMPLATE_NAMESPACE
+        namespace: template.namespace
       },
       package: created,
       report,

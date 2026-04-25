@@ -15,6 +15,7 @@ const MAX_BACKUP_JOBS = 60;
 const BACKUP_SCHEDULE_INTERVALS = new Set(['manual', 'daily', 'weekly', 'monthly']);
 const DEFAULT_BACKUP_TIME = '00:00';
 const SCHEDULE_TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const WORKSPACE_BRIDGE_STATUSES = new Set(['inventory-only', 'inventory+local-workspace']);
 const runningBackupJobs = new Set();
 let lifecycleMutationQueue = Promise.resolve();
 
@@ -95,6 +96,7 @@ function defaultSnapshot() {
 }
 
 function normalizeHistoryItem(item = {}) {
+  const workspaceBridge = normalizeWorkspaceBridge(item.workspaceBridge);
   return {
     version: String(item.version || '0.0.0').trim() || '0.0.0',
     channel: normalizeChannel(item.channel, 'stable'),
@@ -102,7 +104,8 @@ function normalizeHistoryItem(item = {}) {
     source: String(item.source || '').trim(),
     reason: String(item.reason || 'install').trim(),
     backupId: item.backupId ? String(item.backupId) : null,
-    note: String(item.note || '').trim()
+    note: String(item.note || '').trim(),
+    workspaceBridge
   };
 }
 
@@ -303,6 +306,55 @@ function createBackupJobId() {
   return `backupjob-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function normalizeWorkspaceBridgeStatus(value, fallback = 'inventory-only') {
+  const status = String(value || '').trim().toLowerCase();
+  if (WORKSPACE_BRIDGE_STATUSES.has(status)) return status;
+  return fallback;
+}
+
+function normalizeWorkspaceBridge(input = null) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return {
+      status: 'inventory-only',
+      boundary: 'inventory-app-data',
+      path: null,
+      mode: null,
+      requested: false,
+      updatedAt: null
+    };
+  }
+
+  const status = normalizeWorkspaceBridgeStatus(
+    input.status,
+    String(input.path || '').trim() ? 'inventory+local-workspace' : 'inventory-only'
+  );
+  const boundary = 'inventory-app-data';
+  const pathValue = String(input.path || '').trim();
+  const modeRaw = String(input.mode || '').trim().toLowerCase();
+  const mode = modeRaw === 'read' ? 'read' : (modeRaw === 'readwrite' ? 'readwrite' : 'readwrite');
+  const requested = input.requested === true || status === 'inventory+local-workspace';
+
+  if (status !== 'inventory+local-workspace' || !pathValue) {
+    return {
+      status: 'inventory-only',
+      boundary,
+      path: null,
+      mode: null,
+      requested,
+      updatedAt: typeof input.updatedAt === 'string' ? input.updatedAt : null
+    };
+  }
+
+  return {
+    status,
+    boundary,
+    path: pathValue,
+    mode,
+    requested,
+    updatedAt: typeof input.updatedAt === 'string' ? input.updatedAt : nowIso()
+  };
+}
+
 function normalizeLifecycleEntry(item = {}) {
   const backupPolicy = normalizeBackupPolicy(item.backupPolicy);
   const history = Array.isArray(item.history)
@@ -336,6 +388,7 @@ function normalizeLifecycleEntry(item = {}) {
     backups,
     backupPolicy,
     backupJobs,
+    workspaceBridge: normalizeWorkspaceBridge(item.workspaceBridge),
     lastQaReport: item.lastQaReport && typeof item.lastQaReport === 'object'
       ? {
         checkedAt: typeof item.lastQaReport.checkedAt === 'string' ? item.lastQaReport.checkedAt : nowIso(),
@@ -938,6 +991,11 @@ const packageLifecycleService = {
 
     return updateAppLifecycle(safeAppId, (current) => {
       const channel = normalizeChannel(existingChannel || channelFromManifest || current.channel || 'stable', 'stable');
+      const workspaceBridge = normalizeWorkspaceBridge(
+        Object.prototype.hasOwnProperty.call(options, 'workspaceBridge')
+          ? options.workspaceBridge
+          : current.workspaceBridge
+      );
       const nextHistory = [
         ...current.history,
         normalizeHistoryItem({
@@ -947,7 +1005,8 @@ const packageLifecycleService = {
           source: String(options.source || '').trim(),
           reason: String(options.reason || 'install').trim(),
           backupId: options.backupId || null,
-          note: String(options.note || '').trim()
+          note: String(options.note || '').trim(),
+          workspaceBridge
         })
       ].slice(-MAX_HISTORY);
 
@@ -961,7 +1020,8 @@ const packageLifecycleService = {
           source: String(options.source || '').trim(),
           reason: String(options.reason || 'install').trim()
         },
-        history: nextHistory
+        history: nextHistory,
+        workspaceBridge
       };
 
       if (options.qaReport && typeof options.qaReport === 'object') {

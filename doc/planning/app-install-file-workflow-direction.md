@@ -78,6 +78,12 @@ Rules:
 - Save/overwrite flows should move toward approval, audit, and recoverability.
 - They are trusted for early development, but should be designed so they can later become package addons.
 
+Development note:
+
+- A bundled addon can be the fastest way to develop and test a viewer/editor inside the desktop shell.
+- Once the addon needs user-facing install/update/remove behavior, it should have a package artifact path.
+- Package artifacts should be installable from both Git registry and direct ZIP import.
+
 ### Package Addons
 
 Package addons are installed apps discovered from package manifests.
@@ -97,6 +103,30 @@ Rules:
 - Their app-owned data lives under `server/storage/inventory/data/<appId>`.
 - They use sandbox/package APIs for local file operations.
 - Their lifecycle, health, logs, backup, rollback, and runtime state are visible in Package Center.
+- Their install source can be Git registry or direct ZIP import.
+
+## Current Isolation Gap (A0 Baseline)
+
+Current code behavior is a split by app class and folder, not full runtime isolation for all addons.
+
+- Most trusted built-in addons (`appModel: "standard"`) still run as component launches with host-shared access patterns.
+- This is an intentional transitional state for practical local file workflows.
+- Folder split (`system` vs `addons`) and ownership contract are real, but they do not by themselves guarantee sandbox isolation.
+- Directionally, standard addons should move toward sandbox/package-compatible contracts, but that migration is not complete.
+
+This document describes the migration direction and execution gates; it does not claim full isolation is already delivered.
+
+## Current Packageization Gap (B0 Baseline)
+
+The folder and ownership split is in place, but package-manager behavior is not yet the default mental model for all ordinary addons.
+
+Current direction:
+
+- keep system apps privileged and modular
+- keep project-bundled addons available for development
+- make ordinary addon distribution package-first over time
+- keep Git registry and ZIP import as equivalent package artifact onboarding paths
+- avoid adding addon-specific business logic to `Desktop.svelte` or `Window.svelte`
 
 ## File Station As The File Hub
 
@@ -260,6 +290,52 @@ Implement in this order.
 
    Show associations, grants, permissions, runtime, and app data boundaries in installed operations views.
 
+## Standard Addon Hardening Plan (Phased)
+
+Move standard addons from the current component + host-shared baseline toward sandbox/package parity in phases.
+
+1. Manifest readiness gate
+
+   Define and maintain manifest-equivalent metadata for each standard addon
+   (file associations, requested capabilities, runtime intent, data boundary intent)
+   so migration can be tracked per app instead of ad hoc.
+
+2. Permission mapping gate
+
+   Map current implicit addon behaviors to explicit permission scopes
+   (read, readwrite, import, export, risky-write operations)
+   and reject or warn on unmapped privileged behavior.
+
+3. Data migration gate
+
+   Introduce clear app-owned data locations and migration helpers
+   from mixed host paths to app-scoped storage where applicable,
+   while preserving user-visible file workflows.
+
+4. Approval/audit parity gate
+
+   Ensure overwrite, delete, batch modify, move, rollback, and command-like risky operations
+   follow the same approval and audit posture expected in package/sandbox paths.
+
+5. Rollback and recovery gate
+
+   Add practical rollback/recovery coverage for high-risk writes and app lifecycle changes
+   before marking an addon as hardened for sandbox/package transition.
+
+6. Runtime transition gate
+
+   Promote addons incrementally to sandbox/package runtime models only after the above gates pass,
+   with per-app validation rather than one-shot ecosystem migration.
+
+## Station App Ownership Decision (A0)
+
+Station apps remain `system`-classified in current code.
+
+- This keeps current operational authority stable while separation hardening is in progress.
+- Boundary note: keep Station capabilities under system-app rules and approval/audit expectations;
+  do not treat Station as a standard/package addon until a stricter permission and runtime boundary is ready.
+- Reclassification can be revisited later, but this document records the current decision as "system for now."
+
 ## Non-goals
 
 - Do not block trusted built-in addons from opening local files.
@@ -278,4 +354,3 @@ This direction is working when:
 - System apps, trusted built-in addons, and package addons are visibly distinct.
 - Host writes are approved, audited, and recoverable when risk is meaningful.
 - New app features do not require editing `Desktop.svelte` or `Window.svelte`.
-

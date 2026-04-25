@@ -22,6 +22,13 @@
 - `[ACTIVE]` `README.md` (개발/에이전트 기준)
 - `[ACTIVE]` `USER_README.md` (사용자/운영자 기준)
 
+## Presets
+- `[ACTIVE]` `doc/presets/AGENTS.preset.md` (AGENTS 실행 프리셋 복사본)
+- `[ACTIVE]` `doc/presets/webos-store.preset.json` (커뮤니티 스토어 인덱스 프리셋)
+- `[ACTIVE]` `doc/presets/package-manifest.preset.json` (패키지 manifest 프리셋)
+- `[ACTIVE]` `doc/presets/ecosystem-template-catalog.preset.json` (런타임 카탈로그와 동기화되는 문서용 프리셋 복사본)
+- `[ACTIVE]` `server/presets/ecosystem-template-catalog.json` (서버 런타임이 실제 로드하는 builtin 카탈로그)
+
 ## Planning
 - `[ACTIVE]` `doc/planning/product-brief-home-server-remote-computer.md`
 - `[ACTIVE]` `doc/planning/feature-inventory-home-server-remote-computer.md`
@@ -39,6 +46,8 @@
 - `[ACTIVE]` `doc/operations/package-troubleshooting.md`
 - `[SNAPSHOT]` `doc/operations/next-tasks-2026-04-25.md`
 - `[COMPLETED]` `doc/operations/backup-restore-rehearsal-2026-04-25.md`
+- `[COMPLETED]` `doc/operations/station-real-use-validation-2026-04-25.md`
+- `[SNAPSHOT]` `doc/operations/acme-real-domain-validation-2026-04-25.md`
 
 ## Policies
 - `[ACTIVE]` `doc/policies/file-station-places-policy.md`
@@ -50,6 +59,7 @@
 - `[ACTIVE]` `doc/reference/architecture-api-reference.md`
 - `[ACTIVE]` `doc/reference/app-development-model.md`
 - `[ACTIVE]` `doc/reference/package-ecosystem-guide.md`
+- `[ACTIVE]` `doc/reference/community-registry-and-presets.md`
 - `[ACTIVE]` `doc/reference/app-ownership-matrix.md`
 
 ## Archive

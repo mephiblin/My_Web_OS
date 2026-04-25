@@ -11,7 +11,8 @@
     "hardening:env": "node tools/generate-hardened-env.js --output=.env.hardened",
     "hardening:acme:config": "docker compose --env-file .env.hardened -f docker-compose.hardened.yml -f docker-compose.hardened-acme.yml config",
     "hardening:acme:up": "docker compose --env-file .env.hardened -f docker-compose.hardened.yml -f docker-compose.hardened-acme.yml up -d --build",
-    "rehearsal:backup-restore": "bash tools/rehearse-storage-backup-restore.sh"
+    "rehearsal:backup-restore": "bash tools/rehearse-storage-backup-restore.sh",
+    "rehearsal:station-snapshot": "node tools/station-real-use-snapshot.js"
   },
   "keywords": [],
   "author": "",

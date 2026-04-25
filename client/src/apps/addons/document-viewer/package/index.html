@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Document Viewer</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; height: 100vh; display: grid; grid-template-rows: 48px 1fr; background: #111827; color: #e5e7eb; }
+      header { display: flex; align-items: center; gap: 12px; padding: 0 14px; background: #0f172a; border-bottom: 1px solid #253044; }
+      .title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+      .badge { border: 1px solid #475569; border-radius: 999px; padding: 3px 8px; color: #cbd5e1; font-size: 12px; }
+      input { width: min(340px, 42vw); border: 1px solid #334155; border-radius: 8px; background: #020617; color: #e5e7eb; padding: 8px 10px; }
+      main { min-height: 0; overflow: hidden; }
+      iframe, img { width: 100%; height: 100%; border: 0; display: block; }
+      img { object-fit: contain; background: #020617; }
+      pre { height: 100%; box-sizing: border-box; margin: 0; overflow: auto; padding: 18px; white-space: pre-wrap; line-height: 1.55; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      mark { background: #facc15; color: #111827; border-radius: 3px; padding: 0 2px; }
+      .empty, .error { display: grid; place-items: center; height: 100%; padding: 24px; text-align: center; color: #94a3b8; }
+      .error { color: #fca5a5; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title" id="title">Document Viewer</div>
+      <span class="badge" id="mode">sandbox</span>
+      <input id="search" placeholder="Search text files..." disabled />
+    </header>
+    <main id="content"><div class="empty">Waiting for file context...</div></main>
+    <script src="/api/sandbox/sdk.js"></script>
+    <script>
+      const titleEl = document.getElementById('title');
+      const modeEl = document.getElementById('mode');
+      const searchEl = document.getElementById('search');
+      const contentEl = document.getElementById('content');
+      let rawText = '';
+
+      function extOf(path) {
+        const name = String(path || '').split('/').pop() || '';
+        return name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+      }
+
+      function escapeHtml(value) {
+        return String(value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      }
+
+      function renderText(query = '') {
+        const q = String(query || '').trim();
+        if (!q) {
+          contentEl.innerHTML = '<pre>' + escapeHtml(rawText) + '</pre>';
+          return;
+        }
+        const source = escapeHtml(rawText);
+        const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        contentEl.innerHTML = '<pre>' + source.replace(new RegExp(safe, 'gi'), (m) => '<mark>' + m + '</mark>') + '</pre>';
+      }
+
+      function showError(message) {
+        contentEl.innerHTML = '<div class="error">' + escapeHtml(message) + '</div>';
+      }
+
+      async function boot() {
+        try {
+          const context = await window.WebOS.ready();
+          const launchData = context?.app?.launchData || {};
+          const file = launchData?.fileContext?.file || {};
+          const grant = launchData?.fileContext?.permissionContext || {};
+          const path = file.path || launchData.path || '';
+          const grantId = grant.grantId || '';
+          const ext = extOf(path);
+          titleEl.textContent = file.name || path.split('/').pop() || 'Document Viewer';
+          modeEl.textContent = ext || 'file';
+          if (!path || !grantId) {
+            showError('File path or grant is missing.');
+            return;
+          }
+          const rawUrl = window.WebOS.files.rawUrl({ path, grantId });
+          if (ext === 'pdf') {
+            contentEl.innerHTML = '<iframe title="PDF preview" src="' + rawUrl + '"></iframe>';
+            return;
+          }
+          if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
+            contentEl.innerHTML = '<img alt="preview" src="' + rawUrl + '" />';
+            return;
+          }
+          const result = await window.WebOS.files.read({ path, grantId });
+          rawText = String(result?.content || '');
+          searchEl.disabled = false;
+          searchEl.addEventListener('input', () => renderText(searchEl.value));
+          renderText();
+        } catch (err) {
+          showError(err?.message || 'Failed to open document.');
+        }
+      }
+
+      boot();
+    </script>
+  </body>
+</html>

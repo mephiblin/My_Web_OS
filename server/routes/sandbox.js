@@ -360,6 +360,53 @@ router.post('/:appId/file/write', auth, async (req, res) => {
   }
 });
 
+router.get('/:appId/file/raw', async (req, res) => {
+  const appId = String(req.params.appId || '').trim();
+  try {
+    const app = await packageRegistryService.getSandboxApp(appId);
+    if (!app) {
+      return res.status(404).json({
+        error: true,
+        code: 'APP_NOT_FOUND',
+        message: 'Sandbox app not found.'
+      });
+    }
+
+    if (!app.permissions.includes('app.data.read')) {
+      return res.status(403).json({
+        error: true,
+        code: 'APP_PERMISSION_DENIED',
+        message: 'Sandbox app is not allowed to read host files.'
+      });
+    }
+
+    const targetPath = await resolveAllowedHostPath(req.query.path);
+    fileGrantService.consumeGrant(req.query.grantId, {
+      path: targetPath,
+      requiredMode: 'read',
+      appId: app.id
+    });
+
+    const stats = await fs.stat(targetPath);
+    if (!stats.isFile()) {
+      return res.status(400).json({
+        error: true,
+        code: 'FS_NOT_FILE',
+        message: 'Requested path is not a file.'
+      });
+    }
+
+    return res.sendFile(targetPath);
+  } catch (err) {
+    const status = err.code?.startsWith('FS_') || err.code === 'SANDBOX_FILE_PATH_REQUIRED' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'SANDBOX_FILE_RAW_FAILED',
+      message: err.message
+    });
+  }
+});
+
 router.get('/:appId/manifest', async (req, res) => {
   try {
     const app = await packageRegistryService.getSandboxApp(req.params.appId);

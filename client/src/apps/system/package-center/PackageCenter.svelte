@@ -1,7 +1,7 @@
 <script>
   import { get } from 'svelte/store';
   import { onMount } from 'svelte';
-  import { LayoutGrid, Store, Link2, RefreshCw, Download, Play, Square, RotateCcw, Trash2 } from 'lucide-svelte';
+  import { LayoutGrid, Store, Link2, RefreshCw, Download, Upload, Play, Square, RotateCcw, Trash2 } from 'lucide-svelte';
   import { API_BASE } from '../../../utils/constants.js';
   import { apiFetch } from '../../../utils/api.js';
   import {
@@ -23,6 +23,9 @@
     fetchRuntimeApps,
     fetchRuntimeEvents,
     fetchRuntimeLogs,
+    importZipPackage,
+    installRegistryPackage,
+    preflightZipPackageImport,
     recoverRuntimeApp,
     removeInstalledPackage as removeInstalledPackageRequest,
     rollbackPackageBackup,
@@ -50,7 +53,10 @@
   const DEVELOPER_STARTER_APPS = [
     { title: 'JSON Formatter', templateId: 'json-formatter' },
     { title: 'API Tester', templateId: 'api-tester' },
-    { title: 'Snippet Vault', templateId: 'snippet-vault' }
+    { title: 'Snippet Vault', templateId: 'snippet-vault' },
+    { title: 'Markdown Preview', templateId: 'markdown-preview' },
+    { title: 'CSV Viewer', templateId: 'csv-viewer' },
+    { title: 'Text Processor', templateId: 'text-processor' }
   ];
 
   let activeCategory = $state(CATEGORY.STORE);
@@ -99,10 +105,21 @@
   let backupJobActioningByApp = $state({});
   let selectedBackupByApp = $state({});
   let installReview = $state(null);
+  let zipImportFile = $state(null);
+  let zipImportInputKey = $state(0);
+  let zipImportOverwrite = $state(false);
+  let zipImportReview = $state(null);
+  let zipImportPreflighting = $state(false);
+  let zipImporting = $state(false);
   let wizardPhase = $state('draft');
   let wizardLoadingPreflight = $state(false);
   let wizardCreating = $state(false);
   let wizardReview = $state(null);
+  let installWorkspaceDraft = $state({
+    enabled: false,
+    path: '',
+    mode: 'readwrite'
+  });
 
   let wizardDraft = $state({
     id: '',
@@ -139,6 +156,58 @@
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean);
+  }
+
+  function setInstallWorkspaceField(field, value) {
+    installWorkspaceDraft = {
+      ...installWorkspaceDraft,
+      [field]: value
+    };
+  }
+
+  function normalizeLocalWorkspaceBridge(value, fallback = null) {
+    const source = value && typeof value === 'object' ? value : {};
+    const fallbackSource = fallback && typeof fallback === 'object' ? fallback : {};
+    const status = String(source.status || fallbackSource.status || '').trim().toLowerCase() === 'inventory+local-workspace'
+      ? 'inventory+local-workspace'
+      : 'inventory-only';
+    const path = String(source.path || fallbackSource.path || '').trim();
+    const modeRaw = String(source.mode || fallbackSource.mode || '').trim().toLowerCase();
+    const mode = modeRaw === 'read' ? 'read' : (modeRaw === 'readwrite' ? 'readwrite' : 'readwrite');
+
+    return {
+      requested: Boolean(source.requested || fallbackSource.requested),
+      status,
+      boundary: 'inventory-app-data',
+      path: status === 'inventory+local-workspace' && path ? path : '',
+      mode: status === 'inventory+local-workspace' ? mode : ''
+    };
+  }
+
+  function resolveLocalWorkspacePayloadOrThrow() {
+    if (!installWorkspaceDraft.enabled) {
+      return null;
+    }
+
+    const path = String(installWorkspaceDraft.path || '').trim();
+    if (!path) {
+      const err = new Error('Local workspace path is required when bridge is enabled.');
+      err.code = 'LOCAL_WORKSPACE_PATH_REQUIRED';
+      throw err;
+    }
+
+    const mode = String(installWorkspaceDraft.mode || 'readwrite').trim().toLowerCase();
+    if (mode !== 'read' && mode !== 'readwrite') {
+      const err = new Error('Local workspace mode must be read or readwrite.');
+      err.code = 'LOCAL_WORKSPACE_MODE_INVALID';
+      throw err;
+    }
+
+    return {
+      enabled: true,
+      path,
+      mode
+    };
   }
 
   function updateWizardDraft(field, value) {
@@ -198,7 +267,8 @@
     clearFeedback();
     try {
       const manifest = buildWizardManifest();
-      const response = await wizardPreflightPackage(manifest, wizardDraft.templateId);
+      const localWorkspace = resolveLocalWorkspacePayloadOrThrow();
+      const response = await wizardPreflightPackage(manifest, wizardDraft.templateId, localWorkspace);
       const raw = response?.review || response?.preflight || response?.data || response || {};
       const blockers = normalizeReviewItems(
         readPreflightField(raw, [
@@ -236,6 +306,13 @@
         blockers,
         onboarding: normalizeOnboardingReview(readPreflightField(raw, ['onboarding'], null)),
         lifecycleSafeguards: normalizeSafeguardReview(readPreflightField(raw, ['lifecycleSafeguards'], null)),
+        localWorkspace: normalizeLocalWorkspaceBridge(
+          readPreflightField(raw, [
+            ['operation', 'localWorkspaceBridge'],
+            'localWorkspaceBridge'
+          ], null),
+          localWorkspace
+        ),
         source: response ? 'preflight-endpoint' : 'fallback'
       };
       wizardPhase = 'review';
@@ -262,7 +339,8 @@
     clearFeedback();
     try {
       const manifest = buildWizardManifest();
-      const response = await wizardCreatePackage(manifest, wizardDraft.templateId);
+      const localWorkspace = resolveLocalWorkspacePayloadOrThrow();
+      const response = await wizardCreatePackage(manifest, wizardDraft.templateId, localWorkspace);
       const createdId = String(response?.package?.id || response?.appId || manifest.id || '').trim();
       message = createdId
         ? `Package "${createdId}" created successfully.`
@@ -398,6 +476,18 @@
 
   function getLifecycle(pkg) {
     return lifecycleByApp[pkg.id] || null;
+  }
+
+  function getWorkspaceBridge(pkg) {
+    return normalizeLocalWorkspaceBridge(getLifecycle(pkg)?.workspaceBridge || pkg?.workspaceBridge || null);
+  }
+
+  function getWorkspaceBoundaryLabel(pkg) {
+    const bridge = getWorkspaceBridge(pkg);
+    if (bridge.status === 'inventory+local-workspace') {
+      return 'inventory+local-workspace';
+    }
+    return 'inventory-only';
   }
 
   function getHealthReport(pkg) {
@@ -888,6 +978,9 @@
 
   function normalizeInstallPreflight(payload, pkg, overwrite, fallbackMessage = '', options = {}) {
     const forceBlocked = options.forceBlocked === true;
+    const localWorkspaceFallback = options.localWorkspaceFallback && typeof options.localWorkspaceFallback === 'object'
+      ? options.localWorkspaceFallback
+      : null;
     const raw = payload?.review || payload?.preflight || payload?.data || payload || {};
     const executionReadiness = readPreflightField(raw, ['executionReadiness'], null);
     const blockers = Array.isArray(executionReadiness?.blockers) ? executionReadiness.blockers : [];
@@ -1008,10 +1101,20 @@
     );
 
     const blockerItems = blockers.map((item) => ({
+      code: String(item?.code || item?.id || 'preflight.blocker'),
       label: String(item?.code || item?.id || 'preflight.blocker'),
       status: 'fail',
       detail: String(item?.message || item?.reason || '')
     }));
+    const localWorkspace = normalizeLocalWorkspaceBridge(
+      readPreflightField(raw, [
+        ['operation', 'localWorkspaceBridge'],
+        ['operation', 'localWorkspace'],
+        'localWorkspaceBridge',
+        'localWorkspace'
+      ], null),
+      localWorkspaceFallback
+    );
 
     return {
       packageId: pkg.id,
@@ -1035,6 +1138,7 @@
       blockerItems,
       onboarding: normalizeOnboardingReview(readPreflightField(raw, ['onboarding'], null)),
       lifecycleSafeguards: normalizeSafeguardReview(readPreflightField(raw, ['lifecycleSafeguards'], null)),
+      localWorkspace,
       source: payload ? 'preflight-endpoint' : 'fallback'
     };
   }
@@ -1166,6 +1270,13 @@
 
   async function openInstallReview(pkg, options = {}) {
     const overwrite = options.overwrite === true;
+    let localWorkspace = null;
+    try {
+      localWorkspace = resolveLocalWorkspacePayloadOrThrow();
+    } catch (err) {
+      error = err.message || 'Local workspace configuration is invalid.';
+      return;
+    }
     installReview = {
       packageId: pkg.id,
       packageTitle: pkg.title || pkg.id,
@@ -1186,6 +1297,7 @@
       blockerItems: [],
       onboarding: normalizeOnboardingReview(null),
       lifecycleSafeguards: normalizeSafeguardReview(null),
+      localWorkspace: normalizeLocalWorkspaceBridge(null, localWorkspace),
       source: 'loading'
     };
 
@@ -1196,19 +1308,25 @@
           sourceId: pkg.source?.id,
           packageId: pkg.id,
           zipUrl: pkg.zipUrl || '',
-          overwrite
+          overwrite,
+          localWorkspace
         }),
         12000,
         'Preflight review request timed out.'
       );
-      installReview = normalizeInstallPreflight(response, pkg, overwrite);
+      installReview = normalizeInstallPreflight(response, pkg, overwrite, '', {
+        localWorkspaceFallback: localWorkspace
+      });
     } catch (err) {
       installReview = normalizeInstallPreflight(
         null,
         pkg,
         overwrite,
         err.message || 'Preflight endpoint unavailable. Please verify details before continuing.',
-        { forceBlocked: true }
+        {
+          forceBlocked: true,
+          localWorkspaceFallback: localWorkspace
+        }
       );
     }
   }
@@ -1217,12 +1335,88 @@
     installReview = null;
   }
 
+  function canBypassInstallReviewPolicy(review) {
+    if (!review || !Array.isArray(review.blockerItems)) return false;
+    return review.blockerItems.some((item) => String(item?.code || '').trim() === 'REGISTRY_UPDATE_POLICY_BLOCKED');
+  }
+
   function setInstallReviewBypass(checked) {
     if (!installReview) return;
+    if (!canBypassInstallReviewPolicy(installReview)) {
+      installReview = {
+        ...installReview,
+        forcePolicyBypass: false
+      };
+      return;
+    }
     installReview = {
       ...installReview,
       forcePolicyBypass: checked === true
     };
+  }
+
+  async function quickInstallPackage(pkg, options = {}) {
+    const overwrite = options.overwrite === true;
+    clearFeedback();
+    let localWorkspace = null;
+
+    try {
+      localWorkspace = resolveLocalWorkspacePayloadOrThrow();
+    } catch (err) {
+      error = err.message || 'Local workspace configuration is invalid.';
+      return false;
+    }
+
+    try {
+      const response = await withTimeout(
+        fetchRegistryInstallPreflight({
+          sourceId: pkg.source?.id,
+          packageId: pkg.id,
+          zipUrl: pkg.zipUrl || '',
+          overwrite,
+          localWorkspace
+        }),
+        12000,
+        'Preflight review request timed out.'
+      );
+      const review = normalizeInstallPreflight(response, pkg, overwrite, '', {
+        localWorkspaceFallback: localWorkspace
+      });
+
+      if (review.blocked) {
+        installReview = review;
+        error = review.blockedReason || 'Quick install is blocked by preflight policy. Review details and continue from advanced review.';
+        return false;
+      }
+
+      if (review.decision !== 'pass') {
+        const proceed = globalThis.confirm('Preflight returned warnings. Continue quick install?');
+        if (!proceed) {
+          installReview = review;
+          message = 'Advanced preflight review is ready.';
+          return false;
+        }
+      }
+
+      return installPackage(pkg, {
+        overwrite,
+        forcePolicyBypass: false,
+        localWorkspace
+      });
+    } catch (err) {
+      installReview = normalizeInstallPreflight(
+        null,
+        pkg,
+        overwrite,
+        err.message || 'Quick install preflight failed. Review details before continuing.',
+        {
+          forceBlocked: true,
+          localWorkspaceFallback: localWorkspace
+        }
+      );
+      error = err.message || 'Quick install preflight failed.';
+      return false;
+    }
   }
 
   async function executeInstallFromReview() {
@@ -1232,14 +1426,26 @@
       error = 'Selected package is no longer in store results.';
       return;
     }
-    if (installReview.blocked && !installReview.forcePolicyBypass) {
-      error = 'Preflight is blocked. Enable policy bypass to continue.';
+    const canBypassPolicy = canBypassInstallReviewPolicy(installReview);
+    if (installReview.blocked && !canBypassPolicy) {
+      error = 'Preflight is blocked by non-bypassable checks. Resolve blockers first.';
+      return;
+    }
+    if (installReview.blocked && canBypassPolicy && !installReview.forcePolicyBypass) {
+      error = 'Preflight is blocked by policy. Enable policy bypass to continue.';
       return;
     }
 
     const ok = await installPackage(target, {
       overwrite: installReview.overwrite,
-      forcePolicyBypass: installReview.forcePolicyBypass
+      forcePolicyBypass: installReview.forcePolicyBypass,
+      localWorkspace: installReview.localWorkspace?.status === 'inventory+local-workspace'
+        ? {
+            enabled: true,
+            path: installReview.localWorkspace.path,
+            mode: installReview.localWorkspace.mode || 'readwrite'
+          }
+        : null
     });
     if (ok) {
       closeInstallReview();
@@ -1251,6 +1457,198 @@
     if (review.decision === 'pass' && !review.blocked) return 'PASS';
     if (review.decision === 'blocked' || review.blocked) return 'BLOCKED';
     return 'WARN';
+  }
+
+  function formatFileSize(bytes) {
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value <= 0) return 'unknown size';
+    if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${Math.floor(value)} B`;
+  }
+
+  function getZipImportPseudoPackage(payload = null) {
+    const raw = payload?.review || payload?.preflight || payload?.data || payload || {};
+    const appId = String(
+      readPreflightField(raw, [
+        ['operation', 'appId'],
+        ['manifest', 'id'],
+        ['package', 'id'],
+        'appId',
+        'id'
+      ], zipImportFile?.name || 'zip-import')
+    ).trim();
+    const title = String(
+      readPreflightField(raw, [
+        ['manifest', 'title'],
+        ['package', 'title'],
+        'title'
+      ], appId || zipImportFile?.name || 'ZIP import')
+    ).trim();
+
+    return {
+      id: appId || zipImportFile?.name || 'zip-import',
+      title: title || appId || zipImportFile?.name || 'ZIP import',
+      permissions: []
+    };
+  }
+
+  function resetZipImportReview() {
+    zipImportReview = null;
+  }
+
+  function onZipImportFileChange(event) {
+    const file = event.currentTarget.files?.[0] || null;
+    zipImportFile = file;
+    resetZipImportReview();
+    clearFeedback();
+    if (file && !/\.zip$/i.test(file.name)) {
+      error = 'Select a .zip package file.';
+    }
+  }
+
+  function setZipImportOverwrite(checked) {
+    zipImportOverwrite = checked === true;
+    resetZipImportReview();
+  }
+
+  async function runZipImportPreflight() {
+    clearFeedback();
+    if (!zipImportFile) {
+      error = 'Select a ZIP package before review.';
+      return;
+    }
+    if (!/\.zip$/i.test(zipImportFile.name)) {
+      error = 'Select a .zip package file.';
+      return;
+    }
+
+    let localWorkspace = null;
+    try {
+      localWorkspace = resolveLocalWorkspacePayloadOrThrow();
+    } catch (err) {
+      error = err.message || 'Local workspace configuration is invalid.';
+      return;
+    }
+
+    zipImportPreflighting = true;
+    zipImportReview = {
+      packageId: zipImportFile.name,
+      packageTitle: zipImportFile.name,
+      overwrite: zipImportOverwrite,
+      loading: true,
+      forcePolicyBypass: false,
+      decision: 'warn',
+      blocked: false,
+      blockedReason: '',
+      summary: 'Running ZIP import preflight checks...',
+      permissions: [],
+      qualitySummary: '',
+      qualityChecks: [],
+      dependencyChecks: [],
+      compatibilityChecks: [],
+      backupSummary: zipImportOverwrite ? 'Backup review pending...' : 'No existing package backup required for first import.',
+      backupChecks: [],
+      blockerItems: [],
+      onboarding: normalizeOnboardingReview(null),
+      lifecycleSafeguards: normalizeSafeguardReview(null),
+      localWorkspace: normalizeLocalWorkspaceBridge(null, localWorkspace),
+      source: 'loading',
+      fileName: zipImportFile.name,
+      fileSize: zipImportFile.size
+    };
+
+    try {
+      const response = await withTimeout(
+        preflightZipPackageImport(zipImportFile, {
+          overwrite: zipImportOverwrite,
+          localWorkspace
+        }),
+        12000,
+        'ZIP import preflight request timed out.'
+      );
+      zipImportReview = {
+        ...normalizeInstallPreflight(
+          response,
+          getZipImportPseudoPackage(response),
+          zipImportOverwrite,
+          '',
+          {
+            localWorkspaceFallback: localWorkspace
+          }
+        ),
+        fileName: zipImportFile.name,
+        fileSize: zipImportFile.size
+      };
+    } catch (err) {
+      zipImportReview = {
+        ...normalizeInstallPreflight(
+          null,
+          getZipImportPseudoPackage(),
+          zipImportOverwrite,
+          err.message
+            ? `Import preflight endpoint unavailable or failed (${err.message}). Verify the selected ZIP and overwrite setting before continuing.`
+            : 'Import preflight endpoint unavailable. Verify the selected ZIP and overwrite setting before continuing.',
+          {
+            localWorkspaceFallback: localWorkspace
+          }
+        ),
+        fileName: zipImportFile.name,
+        fileSize: zipImportFile.size,
+        source: 'fallback'
+      };
+    } finally {
+      zipImportPreflighting = false;
+    }
+  }
+
+  async function executeZipImport() {
+    clearFeedback();
+    if (!zipImportFile) {
+      error = 'Select a ZIP package before import.';
+      return;
+    }
+    if (!zipImportReview) {
+      error = 'Run ZIP import review before importing.';
+      return;
+    }
+    if (zipImportReview.blocked) {
+      error = 'ZIP import review is blocked. Resolve blockers before importing.';
+      return;
+    }
+
+    let localWorkspace = null;
+    try {
+      localWorkspace = resolveLocalWorkspacePayloadOrThrow();
+    } catch (err) {
+      error = err.message || 'Local workspace configuration is invalid.';
+      return;
+    }
+
+    zipImporting = true;
+    try {
+      const response = await withTimeout(
+        importZipPackage(zipImportFile, {
+          overwrite: zipImportOverwrite,
+          localWorkspace
+        }),
+        30000,
+        'ZIP package import timed out.'
+      );
+      const imported = response?.package || {};
+      const importedTitle = imported.title || imported.id || zipImportFile.name;
+      message = `ZIP package "${importedTitle}" imported successfully.`;
+      zipImportFile = null;
+      zipImportInputKey += 1;
+      zipImportOverwrite = false;
+      zipImportReview = null;
+      await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
+      activeCategory = CATEGORY.INSTALLED;
+    } catch (err) {
+      error = err.message || 'ZIP package import failed.';
+    } finally {
+      zipImporting = false;
+    }
   }
 
   function getManifestEditorApprovals(state) {
@@ -1499,15 +1897,16 @@
     try {
       const overwrite = options.overwrite === true;
       const forcePolicyBypass = options.forcePolicyBypass === true;
-      await apiFetch('/api/packages/registry/install', {
-        method: 'POST',
-        body: JSON.stringify({
-          sourceId: pkg.source?.id,
-          packageId: pkg.id,
-          zipUrl: pkg.zipUrl || '',
-          overwrite,
-          forcePolicyBypass
-        })
+      const localWorkspace = options.localWorkspace && typeof options.localWorkspace === 'object'
+        ? options.localWorkspace
+        : null;
+      await installRegistryPackage({
+        sourceId: pkg.source?.id,
+        packageId: pkg.id,
+        zipUrl: pkg.zipUrl || '',
+        overwrite,
+        forcePolicyBypass,
+        localWorkspace
       });
       message = overwrite
         ? `Package "${pkg.title}" updated successfully.`
@@ -2235,6 +2634,50 @@
           </button>
         </div>
 
+        <div class="source-hints">
+          <div>GitHub repository URL automatically resolves to `.../main/webos-store.json`.</div>
+          <div>GitHub blob URL is converted to raw content URL.</div>
+          <div>Direct raw JSON URL is also supported.</div>
+          {#if sourceForm.url.trim()}
+            <div class="source-preview">
+              <span>Resolved URL</span>
+              <code>{normalizeRegistryUrl(sourceForm.url)}</code>
+            </div>
+          {/if}
+        </div>
+
+        <div class="quick-install-profile">
+          <div class="quick-install-head">
+            <strong>Quick Install Profile</strong>
+            <span>Inventory remains canonical; local workspace bridge is optional.</span>
+          </div>
+          <label class="preflight-bypass">
+            <input
+              type="checkbox"
+              checked={installWorkspaceDraft.enabled}
+              onchange={(event) => setInstallWorkspaceField('enabled', event.currentTarget.checked)}
+            />
+            Enable Local Workspace Bridge
+          </label>
+          <div class="quick-install-grid">
+            <input
+              type="text"
+              value={installWorkspaceDraft.path}
+              oninput={(event) => setInstallWorkspaceField('path', event.currentTarget.value)}
+              placeholder="/absolute/path/in/allowed-roots"
+              disabled={!installWorkspaceDraft.enabled}
+            />
+            <select
+              value={installWorkspaceDraft.mode}
+              onchange={(event) => setInstallWorkspaceField('mode', event.currentTarget.value)}
+              disabled={!installWorkspaceDraft.enabled}
+            >
+              <option value="readwrite">readwrite</option>
+              <option value="read">read</option>
+            </select>
+          </div>
+        </div>
+
         {#if registrySources.length > 0}
           <div class="sources">
             {#each registrySources as source}
@@ -2245,6 +2688,168 @@
             {/each}
           </div>
         {/if}
+      </div>
+
+      <div class="block glass-effect">
+        <div class="block-head">
+          <div>
+            <h3>Import ZIP Package</h3>
+            <div class="runtime-log-empty">Upload a package ZIP directly when no registry source is available.</div>
+          </div>
+        </div>
+
+        <div class="zip-import-panel">
+          <div class="zip-import-grid">
+            {#key zipImportInputKey}
+              <input
+                type="file"
+                accept=".zip,application/zip,application/x-zip-compressed"
+                onchange={onZipImportFileChange}
+                disabled={zipImportPreflighting || zipImporting}
+              />
+            {/key}
+            <label class="preflight-bypass">
+              <input
+                type="checkbox"
+                checked={zipImportOverwrite}
+                onchange={(event) => setZipImportOverwrite(event.currentTarget.checked)}
+                disabled={zipImportPreflighting || zipImporting}
+              />
+              Overwrite existing package if IDs match
+            </label>
+          </div>
+
+          {#if zipImportFile}
+            <div class="source-hints">
+              <div>Selected: {zipImportFile.name} ({formatFileSize(zipImportFile.size)})</div>
+              <div>{zipImportOverwrite ? 'Overwrite is enabled; backend should snapshot existing package data before replacement.' : 'Overwrite is off; matching installed package IDs should be rejected.'}</div>
+            </div>
+          {/if}
+
+          <div class="wizard-actions">
+            <button
+              class="btn ghost"
+              onclick={runZipImportPreflight}
+              disabled={!zipImportFile || zipImportPreflighting || zipImporting}
+            >
+              {zipImportPreflighting ? 'Reviewing...' : 'Review Import'}
+            </button>
+            <button
+              class="btn primary"
+              onclick={executeZipImport}
+              disabled={!zipImportFile || !zipImportReview || zipImportReview.blocked || zipImportPreflighting || zipImporting}
+            >
+              <Upload size={14} />
+              {zipImporting ? 'Importing...' : 'Import ZIP'}
+            </button>
+          </div>
+
+          {#if zipImportReview}
+            <div class="preflight-panel">
+              <div class="preflight-head">
+                <div class="preflight-title">
+                  <strong>ZIP Import Review</strong>
+                  <span class="preflight-decision {zipImportReview.blocked ? 'blocked' : zipImportReview.decision}">
+                    {getInstallReviewDecisionLabel(zipImportReview)}
+                  </span>
+                </div>
+                <div class="runtime-log-empty">{zipImportReview.source === 'fallback' ? 'fallback review' : 'endpoint review'}</div>
+              </div>
+              {#if zipImportReview.loading}
+                <div class="runtime-log-empty">Loading import checks...</div>
+              {:else}
+                <div class="preflight-summary">{zipImportReview.summary || 'Review the selected ZIP before importing.'}</div>
+                {#if zipImportReview.blockedReason}
+                  <div class="preflight-blocked-reason">{zipImportReview.blockedReason}</div>
+                {/if}
+                <div class="preflight-grid">
+                  <div class="preflight-group">
+                    <div class="preflight-label">Selected File</div>
+                    <div class="ops-meta-list">
+                      <div>name: {zipImportReview.fileName || zipImportFile?.name || '-'}</div>
+                      <div>size: {formatFileSize(zipImportReview.fileSize || zipImportFile?.size)}</div>
+                      <div>overwrite: {zipImportReview.overwrite ? 'true' : 'false'}</div>
+                    </div>
+                  </div>
+
+                  <div class="preflight-group">
+                    <div class="preflight-label">Permissions</div>
+                    {#if zipImportReview.permissions.length === 0}
+                      <div class="runtime-log-empty">No permission data from preflight.</div>
+                    {:else}
+                      <div class="preflight-list">
+                        {#each zipImportReview.permissions as item}
+                          <div class="preflight-item">
+                            <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                            <span>{item.label}</span>
+                            {#if item.detail}
+                              <span class="preflight-item-detail">{item.detail}</span>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+
+                  <div class="preflight-group">
+                    <div class="preflight-label">Backup / Rollback</div>
+                    <div class="preflight-summary-inline">{zipImportReview.backupSummary || (zipImportReview.overwrite ? 'Overwrite should create a backup snapshot.' : 'No backup required for first import.')}</div>
+                    {#if zipImportReview.backupChecks.length > 0}
+                      <div class="preflight-list">
+                        {#each zipImportReview.backupChecks as item}
+                          <div class="preflight-item">
+                            <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                            <span>{item.label}</span>
+                            {#if item.detail}
+                              <span class="preflight-item-detail">{item.detail}</span>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+
+                  <div class="preflight-group">
+                    <div class="preflight-label">Data Boundary</div>
+                    <div class="preflight-summary-inline">
+                      {zipImportReview.localWorkspace?.status === 'inventory+local-workspace'
+                        ? 'inventory-app-data + local workspace bridge'
+                        : 'inventory-app-data only'}
+                    </div>
+                    {#if zipImportReview.localWorkspace?.status === 'inventory+local-workspace'}
+                      <div class="ops-meta-list">
+                        <div>mode: {zipImportReview.localWorkspace.mode || 'readwrite'}</div>
+                        <div>path: {zipImportReview.localWorkspace.path || '-'}</div>
+                      </div>
+                    {:else}
+                      <div class="runtime-log-empty">No local workspace bridge requested.</div>
+                    {/if}
+                  </div>
+
+                  <div class="preflight-group">
+                    <div class="preflight-label">Lifecycle Safeguards</div>
+                    <div class="preflight-summary-inline">{zipImportReview.lifecycleSafeguards?.summary || 'No lifecycle safeguards from preflight.'}</div>
+                    {#if zipImportReview.lifecycleSafeguards?.checks?.length > 0}
+                      <div class="preflight-list">
+                        {#each zipImportReview.lifecycleSafeguards.checks as item}
+                          <div class="preflight-item">
+                            <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                            <span>{item.label}</span>
+                            {#if item.detail}
+                              <span class="preflight-item-detail">{item.detail}</span>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                    {:else}
+                      <div class="runtime-log-empty">Import will rely on backend validation and audit logging.</div>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/if}
+        </div>
       </div>
 
       <div class="block glass-effect">
@@ -2438,6 +3043,22 @@
                   </div>
                 </div>
               {/if}
+              <div class="preflight-group">
+                <div class="preflight-label">Data Boundary</div>
+                <div class="preflight-summary-inline">
+                  {wizardReview.localWorkspace?.status === 'inventory+local-workspace'
+                    ? 'inventory-app-data + local workspace bridge'
+                    : 'inventory-app-data only'}
+                </div>
+                {#if wizardReview.localWorkspace?.status === 'inventory+local-workspace'}
+                  <div class="ops-meta-list">
+                    <div>mode: {wizardReview.localWorkspace.mode || 'readwrite'}</div>
+                    <div>path: {wizardReview.localWorkspace.path || '-'}</div>
+                  </div>
+                {:else}
+                  <div class="runtime-log-empty">No local workspace bridge requested.</div>
+                {/if}
+              </div>
               {#if wizardReview.onboarding?.steps?.length > 0 || wizardReview.onboarding?.commands?.length > 0}
                 <div class="preflight-group">
                   <div class="preflight-label">Third-Party Onboarding</div>
@@ -2518,9 +3139,12 @@
                 <div class="actions">
                   {#if pkg.installed}
                     {#if pkg.updatePolicy?.allowed}
-                      <button class="btn primary" onclick={() => openInstallReview(pkg, { overwrite: true })} disabled={installingPackageId === pkg.id || installReview?.loading}>
+                      <button class="btn primary" onclick={() => quickInstallPackage(pkg, { overwrite: true })} disabled={installingPackageId === pkg.id || installReview?.loading}>
                         <Download size={14} />
-                        {installingPackageId === pkg.id ? 'Updating...' : 'Update'}
+                        {installingPackageId === pkg.id ? 'Updating...' : 'Quick Update'}
+                      </button>
+                      <button class="btn ghost" onclick={() => openInstallReview(pkg, { overwrite: true })} disabled={installingPackageId === pkg.id || installReview?.loading}>
+                        Review
                       </button>
                     {:else}
                       <button class="btn ghost" disabled>Installed</button>
@@ -2528,9 +3152,12 @@
                   {:else if !pkg.zipUrl}
                     <button class="btn ghost" disabled>No Zip</button>
                   {:else}
-                    <button class="btn primary" onclick={() => openInstallReview(pkg)} disabled={installingPackageId === pkg.id || installReview?.loading}>
+                    <button class="btn primary" onclick={() => quickInstallPackage(pkg)} disabled={installingPackageId === pkg.id || installReview?.loading}>
                       <Download size={14} />
-                      {installingPackageId === pkg.id ? 'Installing...' : 'Install'}
+                      {installingPackageId === pkg.id ? 'Installing...' : 'Quick Install'}
+                    </button>
+                    <button class="btn ghost" onclick={() => openInstallReview(pkg)} disabled={installingPackageId === pkg.id || installReview?.loading}>
+                      Review
                     </button>
                   {/if}
                 </div>
@@ -2642,6 +3269,23 @@
                         </div>
 
                         <div class="preflight-group">
+                          <div class="preflight-label">Data Boundary</div>
+                          <div class="preflight-summary-inline">
+                            {installReview.localWorkspace?.status === 'inventory+local-workspace'
+                              ? 'inventory-app-data + local workspace bridge'
+                              : 'inventory-app-data only'}
+                          </div>
+                          {#if installReview.localWorkspace?.status === 'inventory+local-workspace'}
+                            <div class="ops-meta-list">
+                              <div>mode: {installReview.localWorkspace.mode || 'readwrite'}</div>
+                              <div>path: {installReview.localWorkspace.path || '-'}</div>
+                            </div>
+                          {:else}
+                            <div class="runtime-log-empty">No local workspace bridge requested.</div>
+                          {/if}
+                        </div>
+
+                        <div class="preflight-group">
                           <div class="preflight-label">Lifecycle Safeguards</div>
                           <div class="preflight-summary-inline">{installReview.lifecycleSafeguards?.summary || 'No lifecycle safeguards.'}</div>
                           {#if installReview.lifecycleSafeguards?.checks?.length > 0}
@@ -2690,20 +3334,35 @@
                       </div>
 
                       <div class="preflight-actions">
-                        <label class="preflight-bypass">
-                          <input
-                            type="checkbox"
-                            checked={installReview.forcePolicyBypass}
-                            onchange={(event) => setInstallReviewBypass(event.currentTarget.checked)}
-                          />
-                          Force policy bypass on execution
-                        </label>
+                        {#if installReview.blocked}
+                          {#if canBypassInstallReviewPolicy(installReview)}
+                            <label class="preflight-bypass">
+                              <input
+                                type="checkbox"
+                                checked={installReview.forcePolicyBypass}
+                                onchange={(event) => setInstallReviewBypass(event.currentTarget.checked)}
+                              />
+                              Force policy bypass on execution
+                            </label>
+                          {:else}
+                            <div class="runtime-log-empty">Policy bypass is unavailable for current blockers.</div>
+                          {/if}
+                        {/if}
                         <div class="preflight-buttons">
                           <button class="btn ghost" onclick={closeInstallReview} disabled={installingPackageId === pkg.id}>Cancel</button>
                           <button
                             class="btn primary"
                             onclick={executeInstallFromReview}
-                            disabled={installingPackageId === pkg.id || (installReview.blocked && !installReview.forcePolicyBypass)}
+                            disabled={
+                              installingPackageId === pkg.id ||
+                              (
+                                installReview.blocked &&
+                                (
+                                  !canBypassInstallReviewPolicy(installReview) ||
+                                  !installReview.forcePolicyBypass
+                                )
+                              )
+                            }
                           >
                             {installingPackageId === pkg.id
                               ? (installReview.overwrite ? 'Updating...' : 'Installing...')
@@ -2802,6 +3461,9 @@
                   <span>v{pkg.version}</span>
                   <span>{pkg.runtime}</span>
                   <span>cap:{pkg.appType || pkg.type || 'app'}</span>
+                  <span class="boundary-chip {getWorkspaceBridge(pkg).status === 'inventory+local-workspace' ? 'local' : 'inventory'}">
+                    boundary:{getWorkspaceBoundaryLabel(pkg)}
+                  </span>
                   <span>channel:{getLifecycleCurrentChannel(pkg)}</span>
                   <span class="health {getHealthStatus(pkg)}">health:{String(getHealthStatus(pkg)).toUpperCase()}</span>
                   {#if isServicePackage(pkg)}
@@ -3216,6 +3878,8 @@
                             <div>Current: {getLifecycle(pkg)?.current?.version || '-'}</div>
                             <div>Installed: {formatDateTime(getLifecycle(pkg)?.current?.installedAt)}</div>
                             <div>Source: {getLifecycle(pkg)?.current?.source || '-'}</div>
+                            <div>Boundary: {getWorkspaceBoundaryLabel(pkg)}</div>
+                            <div>Local Workspace: {getWorkspaceBridge(pkg)?.path || '-'}</div>
                             <div>Backups: {getAvailableBackups(pkg).length}</div>
                           </div>
                         {/if}
@@ -3490,6 +4154,93 @@
     gap: 8px;
   }
 
+  .source-hints {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.45);
+    padding: 8px 10px;
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    color: #cbd5e1;
+  }
+
+  .source-preview {
+    margin-top: 4px;
+    display: grid;
+    gap: 4px;
+  }
+
+  .source-preview span {
+    font-size: 11px;
+    color: #93c5fd;
+  }
+
+  .source-preview code {
+    font-size: 11px;
+    color: #bae6fd;
+    background: rgba(15, 23, 36, 0.75);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 8px;
+    padding: 6px 8px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .quick-install-profile {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.4);
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .quick-install-head {
+    display: grid;
+    gap: 3px;
+  }
+
+  .quick-install-head strong {
+    font-size: 13px;
+    color: #dbeafe;
+  }
+
+  .quick-install-head span {
+    font-size: 11px;
+    color: #93a7c0;
+  }
+
+  .quick-install-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 140px;
+    gap: 8px;
+  }
+
+  .quick-install-grid select {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.65);
+    color: #e2e8f0;
+    padding: 9px 10px;
+  }
+
+  .zip-import-panel {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    padding: 10px;
+    background: rgba(2, 6, 23, 0.35);
+    display: grid;
+    gap: 10px;
+  }
+
+  .zip-import-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+  }
+
   input {
     border: 1px solid rgba(148, 163, 184, 0.25);
     border-radius: 10px;
@@ -3746,6 +4497,16 @@
     font-size: 11px;
     color: var(--text-dim);
     background: rgba(148, 163, 184, 0.08);
+  }
+
+  .chips .boundary-chip.inventory {
+    color: #dbeafe;
+    background: rgba(56, 189, 248, 0.15);
+  }
+
+  .chips .boundary-chip.local {
+    color: #bbf7d0;
+    background: rgba(16, 185, 129, 0.2);
   }
 
   .chips .runtime {
@@ -4317,6 +5078,14 @@
     }
 
     .source-form {
+      grid-template-columns: 1fr;
+    }
+
+    .quick-install-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .zip-import-grid {
       grid-template-columns: 1fr;
     }
 

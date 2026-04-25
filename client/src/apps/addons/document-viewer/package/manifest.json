@@ -1,0 +1,48 @@
+{
+  "id": "doc-viewer",
+  "title": "Document Viewer",
+  "description": "Document and text preview addon.",
+  "version": "1.0.0",
+  "type": "app",
+  "runtime": {
+    "type": "sandbox-html",
+    "entry": "index.html"
+  },
+  "permissions": [
+    "app.data.read"
+  ],
+  "capabilities": [
+    "file.preview",
+    "document.search"
+  ],
+  "fileAssociations": [
+    {
+      "extensions": [
+        "pdf",
+        "txt",
+        "md",
+        "markdown",
+        "json",
+        "csv",
+        "log"
+      ],
+      "actions": [
+        "preview",
+        "open"
+      ],
+      "defaultAction": "open"
+    }
+  ],
+  "window": {
+    "width": 1100,
+    "height": 760,
+    "minWidth": 640,
+    "minHeight": 420
+  },
+  "migration": {
+    "currentSource": "client/src/apps/addons/document-viewer",
+    "currentRuntime": "builtin-component-dev",
+    "targetRuntime": "sandbox-html",
+    "status": "sandbox-package-entry"
+  }
+}

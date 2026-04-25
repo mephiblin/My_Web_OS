@@ -1,0 +1,58 @@
+{
+  "id": "editor",
+  "title": "Code Editor",
+  "description": "Host and package file editor addon.",
+  "version": "1.0.0",
+  "type": "app",
+  "runtime": {
+    "type": "sandbox-html",
+    "entry": "index.html"
+  },
+  "permissions": [
+    "app.data.read",
+    "app.data.write"
+  ],
+  "capabilities": [
+    "file.edit",
+    "package.file.edit"
+  ],
+  "fileAssociations": [
+    {
+      "extensions": [
+        "txt",
+        "md",
+        "markdown",
+        "json",
+        "js",
+        "ts",
+        "css",
+        "html",
+        "xml",
+        "yml",
+        "yaml",
+        "csv",
+        "log",
+        "svelte",
+        "sh",
+        "py"
+      ],
+      "actions": [
+        "open",
+        "edit"
+      ],
+      "defaultAction": "edit"
+    }
+  ],
+  "window": {
+    "width": 1100,
+    "height": 760,
+    "minWidth": 640,
+    "minHeight": 420
+  },
+  "migration": {
+    "currentSource": "client/src/apps/addons/code-editor",
+    "currentRuntime": "builtin-component-dev",
+    "targetRuntime": "sandbox-html",
+    "status": "sandbox-package-entry"
+  }
+}

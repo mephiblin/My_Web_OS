@@ -9,6 +9,24 @@
 
 ## Snapshot Summary
 
+### B0
+- B0 Addon Packageization and Distribution (워킹트리 반영, 2026-04-25)
+- ZIP import preflight API 추가: registry install과 같은 review/readiness 증거를 반환.
+- Package Center에 direct ZIP import 패널 추가: ZIP 선택, overwrite 선택, review 후 import.
+- ZIP import lifecycle에 local workspace bridge 증거 기록.
+- Git registry + direct ZIP import를 동등한 package artifact onboarding 경로로 문서화.
+- `editor`, `doc-viewer`, `model-viewer`의 package-first migration/ownership 방향 기록.
+- B1 Primary Addon Package-First Source Layout (워킹트리 반영, 2026-04-25)
+- `editor`, `doc-viewer`, `model-viewer`를 root wrapper + `components/` + `services/` + `package/` 구조로 분리.
+- B2 File Association Lifecycle Integration (워킹트리 반영, 2026-04-25)
+- File Station이 설치 패키지 앱의 `fileAssociations`와 sandbox launch 계약을 보존해서 열도록 보강.
+- `Open With`, `Always Open .ext With`, 기본 앱 해제, 패키지 삭제 시 stale 기본 연결 정리 추가.
+- B3 Primary Addon Sandbox Package Runtime (워킹트리 반영, 2026-04-25)
+- `doc-viewer`, `model-viewer`, `editor`를 inventory package runtime으로 배치하고, standard built-in addon보다 package launch를 우선하도록 registry merge 정책 보강.
+- Sandbox SDK `WebOS.files.rawUrl()` 및 grant-bound raw file endpoint 추가.
+- `doc-viewer`는 PDF/image/text, `editor`는 text read/write package runtime 사용 가능.
+- `model-viewer`는 package-local Three.js vendor 파일을 포함하여 GLTF/GLB/FBX/OBJ 렌더링, OrbitControls, wireframe/axes/fit/screenshot/inspection 지원.
+
 ### P0
 - Package Center installed operation console 개선 (커밋 반영)
 - install/update preflight review 도입 (커밋 반영)
@@ -311,6 +329,56 @@
   - `caddy validate`로 `docker/Caddyfile.acme` 문법 검증 통과.
   - `docker compose ... -f docker-compose.hardened.yml -f docker-compose.hardened-acme.yml config` 통과.
   - `npm run rehearsal:backup-restore` 실기동 통과(백업 생성 -> 복구 -> marker 검증, 백업 파일 사용자 소유권 유지).
+
+## Autonomous Loop 진행 메모 (2026-04-25, A0 Core/Addon Separation Hardening 완료)
+
+- 상태:
+  - `AGENTS.md`의 `A0-core-addon-hardening` 항목 완료 처리(워킹트리 기준).
+- 결정 고정:
+  - Station 앱(`download/photo/music/document/video-station`)은 현행 `appModel=system` 유지.
+- 문서 정합:
+  - `doc/reference/app-ownership-matrix.md`: post-split 기준으로 계약 버전/매트릭스/결정 로그 갱신.
+  - `doc/reference/app-development-model.md`: launch 계약(`component|sandbox`)과 ownership 모델(`system|standard|package`) 정합화, standard addon 단계적 격리 전환 명시.
+  - `doc/planning/app-install-file-workflow-direction.md`: 현재 isolation gap 명시 및 phased hardening gate(권한/데이터/승인/롤백/런타임 전환) 추가.
+- 검증:
+  - `npm test` 통과.
+  - `cd client && npm run build` 통과.
+  - `node --check server/routes/system.js` 통과.
+  - `node --check server/services/packageRegistryService.js` 통과.
+  - `node --check client/src/core/appOwnershipContract.js` 통과.
+  - `node --check client/src/core/appLaunchRegistry.js` 통과.
+
+## Autonomous Loop 진행 메모 (2026-04-25, R5/R8 운영 증적 갱신)
+
+- R5 Station 실사용 검증 스냅샷 완료:
+  - `tools/station-real-use-snapshot.js` 추가(StationShell 제한값 기반 headless 실측).
+  - 실데이터 루트(`/home/inri`) 측정 결과 문서화:
+    - `doc/operations/station-real-use-validation-2026-04-25.md`
+  - 주요 관측:
+    - scan truncation (`Directory scan limit reached (120)`)
+    - metadata cold/warm batch 지표(`cached/requested/fetched/failed/lastBatchMs`) 기록.
+- R8 실도메인 ACME 사전검증 갱신:
+  - `npm run hardening:acme:config` 통과.
+  - env 주입 포함 `caddy validate` 통과.
+  - 실도메인 최종 증적은 FQDN/외부 80·443 준비 전 블로커 상태로 문서화:
+    - `doc/operations/acme-real-domain-validation-2026-04-25.md`
+
+## Autonomous Loop 진행 메모 (2026-04-25, R6 개발자 스타터 확장 3종)
+
+- Package Center ecosystem templates 확장:
+  - `markdown-preview`
+  - `csv-viewer`
+  - `text-processor`
+- Package Center `Developer Tool Starters`에 3종 quick action 추가.
+- scaffold entry 보강:
+  - `markdown-preview`: app-owned data load/save + split preview
+  - `csv-viewer`: CSV import/parse/render + app-owned data load/save
+  - `text-processor`: uppercase/lowercase/trim/find-replace + app-owned data load/save
+- 통합 테스트 보강:
+  - `server/tests/package-personal-templates.integration.test.js`에서
+    템플릿 목록/스캐폴드/핵심 컨트롤 존재 검증 추가.
+- 검증:
+  - `npm test` 통과 (34/34).
 
 ## Reference Commits
 - `a105038`

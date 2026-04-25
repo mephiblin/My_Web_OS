@@ -104,6 +104,9 @@ test('personal ecosystem templates listing/scaffold and lifecycle backup+export 
   const todoAppId = `it-todo-template-${suffix}`;
   const apiTesterAppId = `it-api-tester-template-${suffix}`;
   const jsonFormatterAppId = `it-json-formatter-template-${suffix}`;
+  const markdownPreviewAppId = `it-markdown-preview-template-${suffix}`;
+  const csvViewerAppId = `it-csv-viewer-template-${suffix}`;
+  const textProcessorAppId = `it-text-processor-template-${suffix}`;
 
   try {
     const templatesRes = await requestJson(server.baseUrl, '/api/packages/ecosystem/templates', token);
@@ -117,6 +120,9 @@ test('personal ecosystem templates listing/scaffold and lifecycle backup+export 
     assert.equal(templateIds.has('json-formatter'), true, JSON.stringify(templatesRes.json));
     assert.equal(templateIds.has('api-tester'), true, JSON.stringify(templatesRes.json));
     assert.equal(templateIds.has('snippet-vault'), true, JSON.stringify(templatesRes.json));
+    assert.equal(templateIds.has('markdown-preview'), true, JSON.stringify(templatesRes.json));
+    assert.equal(templateIds.has('csv-viewer'), true, JSON.stringify(templatesRes.json));
+    assert.equal(templateIds.has('text-processor'), true, JSON.stringify(templatesRes.json));
 
     const memoScaffold = await requestJson(
       server.baseUrl,
@@ -182,6 +188,60 @@ test('personal ecosystem templates listing/scaffold and lifecycle backup+export 
     assert.match(jsonFormatterEntry, /id="validate-json"/, 'json-formatter scaffold must include JSON validation toggle');
     assert.match(jsonFormatterEntry, /FS_WRITE_OVERWRITE_APPROVAL_REQUIRED/, 'json-formatter scaffold must include overwrite-required error mapping');
 
+    const markdownPreviewScaffold = await requestJson(
+      server.baseUrl,
+      '/api/packages/ecosystem/templates/markdown-preview/scaffold',
+      token,
+      {
+        method: 'POST',
+        body: { appId: markdownPreviewAppId }
+      }
+    );
+    assert.equal(markdownPreviewScaffold.status, 201, JSON.stringify(markdownPreviewScaffold.json));
+    assert.equal(markdownPreviewScaffold.json?.package?.id, markdownPreviewAppId, JSON.stringify(markdownPreviewScaffold.json));
+
+    const markdownPreviewRoot = await appPaths.getAppRoot(markdownPreviewAppId);
+    const markdownPreviewEntryPath = path.join(markdownPreviewRoot, 'index.html');
+    const markdownPreviewEntry = await fs.readFile(markdownPreviewEntryPath, 'utf8');
+    assert.match(markdownPreviewEntry, /id="load-app-data"/, 'markdown-preview scaffold must include app-data load control');
+    assert.match(markdownPreviewEntry, /id="save-app-data"/, 'markdown-preview scaffold must include app-data save control');
+
+    const csvViewerScaffold = await requestJson(
+      server.baseUrl,
+      '/api/packages/ecosystem/templates/csv-viewer/scaffold',
+      token,
+      {
+        method: 'POST',
+        body: { appId: csvViewerAppId }
+      }
+    );
+    assert.equal(csvViewerScaffold.status, 201, JSON.stringify(csvViewerScaffold.json));
+    assert.equal(csvViewerScaffold.json?.package?.id, csvViewerAppId, JSON.stringify(csvViewerScaffold.json));
+
+    const csvViewerRoot = await appPaths.getAppRoot(csvViewerAppId);
+    const csvViewerEntryPath = path.join(csvViewerRoot, 'index.html');
+    const csvViewerEntry = await fs.readFile(csvViewerEntryPath, 'utf8');
+    assert.match(csvViewerEntry, /id="csv-input"/, 'csv-viewer scaffold must include csv input');
+    assert.match(csvViewerEntry, /id="render-csv"/, 'csv-viewer scaffold must include render control');
+
+    const textProcessorScaffold = await requestJson(
+      server.baseUrl,
+      '/api/packages/ecosystem/templates/text-processor/scaffold',
+      token,
+      {
+        method: 'POST',
+        body: { appId: textProcessorAppId }
+      }
+    );
+    assert.equal(textProcessorScaffold.status, 201, JSON.stringify(textProcessorScaffold.json));
+    assert.equal(textProcessorScaffold.json?.package?.id, textProcessorAppId, JSON.stringify(textProcessorScaffold.json));
+
+    const textProcessorRoot = await appPaths.getAppRoot(textProcessorAppId);
+    const textProcessorEntryPath = path.join(textProcessorRoot, 'index.html');
+    const textProcessorEntry = await fs.readFile(textProcessorEntryPath, 'utf8');
+    assert.match(textProcessorEntry, /id="replace-all"/, 'text-processor scaffold must include replace-all control');
+    assert.match(textProcessorEntry, /id="trim-lines"/, 'text-processor scaffold must include trim-lines control');
+
     const backupRes = await requestJson(server.baseUrl, `/api/packages/${todoAppId}/backup`, token, {
       method: 'POST',
       body: { note: 'template lifecycle backup test' }
@@ -202,6 +262,9 @@ test('personal ecosystem templates listing/scaffold and lifecycle backup+export 
     await cleanupAppArtifacts(todoAppId);
     await cleanupAppArtifacts(apiTesterAppId);
     await cleanupAppArtifacts(jsonFormatterAppId);
+    await cleanupAppArtifacts(markdownPreviewAppId);
+    await cleanupAppArtifacts(csvViewerAppId);
+    await cleanupAppArtifacts(textProcessorAppId);
     await server.close();
   }
 });

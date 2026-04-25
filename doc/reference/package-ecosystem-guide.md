@@ -1,6 +1,13 @@
 # Package Ecosystem Guide
 
 This guide is for community package authors and maintainers.
+For Git-based store publication and preset contracts, see:
+
+- `doc/reference/community-registry-and-presets.md`
+- `doc/presets/webos-store.preset.json`
+- `doc/presets/package-manifest.preset.json`
+- `doc/presets/ecosystem-template-catalog.preset.json`
+- `server/presets/ecosystem-template-catalog.json` (runtime builtin catalog)
 
 ## 1. Required Package Shape
 
@@ -14,6 +21,21 @@ This guide is for community package authors and maintainers.
   - `runtime.entry` for non-service packages
   - `permissions` list (optional but explicit is recommended)
 
+Supported installation paths:
+
+- Git registry install: publish `webos-store.json` using preset format (`doc/presets/webos-store.preset.json`) and include per-package `zipUrl`.
+- ZIP import install: upload a `.zip` package artifact through Package Center / package API.
+- Both paths should converge on the same package lifecycle model: manifest validation, install/update audit, backup before overwrite, rollback evidence, and Package Center visibility.
+- For ecosystem scaffold templates, use preset catalog format (`doc/presets/ecosystem-template-catalog.preset.json`).
+- Runtime loads tracked builtin catalog from `server/presets/ecosystem-template-catalog.json`.
+- Optional inventory override is `server/storage/inventory/system/ecosystem-template-catalog.json`.
+
+Developer convenience note:
+
+- Addon source can remain in `client/src/apps/addons/*` while a feature is being built and tested.
+- That does not make the addon a permanent core app.
+- The operational target for ordinary addons is package lifecycle ownership: install, update, remove, backup, rollback, and explicit data boundary state.
+
 ## 2. Validation Workflow
 
 Use both local and server-side checks:
@@ -23,8 +45,14 @@ Use both local and server-side checks:
 2. Server preflight checks:
    - `POST /api/packages/wizard/preflight`
    - `POST /api/packages/registry/preflight`
+   - ZIP import preflight when exposed by the server/package center flow
 3. Quality gate:
    - `POST /api/packages/ecosystem/templates/:templateId/quality-check`
+4. Registry index sanity:
+   - ensure `webos-store.json` follows preset fields and valid URLs
+5. Template catalog sanity:
+   - ensure `ecosystem-template-catalog` payload uses versioned preset shape
+   - ensure duplicate template IDs are rejected by contract checks
 
 ## 3. Runtime Capability Model
 
@@ -90,3 +118,84 @@ Policy notes:
 - Use root `npm test` as canonical server verification path.
 - Direct parallel multi-file `node --test` can intermittently fail due shared storage state races.
 - For focused file lists, prefer `node --test --test-concurrency=1 ...`.
+
+## 8. Git Store Publication (Recommended)
+
+1. Keep package source in Git repository.
+2. Publish zip artifact (commonly GitHub Releases).
+3. Update `webos-store.json` in repository root.
+4. Add repository URL in Package Center store source.
+
+## 9. ZIP Import Publication
+
+ZIP import is the direct package artifact path. It is useful for local testing, private sharing, and releases that do not need a public registry.
+
+Expected artifact:
+
+- root contains `manifest.json`
+- root contains runtime entry files referenced by the manifest
+- archive does not rely on generated runtime storage outside the package root
+
+Expected API/UI behavior:
+
+- preflight should inspect the ZIP manifest before write when available
+- overwrite/update should create a backup before replacing an existing package
+- import should record lifecycle source as ZIP/upload/import
+- risky overwrite should remain visible and auditable
+- imported package should appear in Package Center with the same operations as registry-installed packages
+
+## 10. File Association Install Experience
+
+For a package to feel like a native Web OS app, include `fileAssociations` in `manifest.json`.
+
+Example:
+
+```json
+{
+  "id": "better-image-viewer",
+  "title": "Better Image Viewer",
+  "runtime": {
+    "type": "sandbox-html",
+    "entry": "index.html"
+  },
+  "fileAssociations": [
+    {
+      "extensions": ["png", "jpg", "jpeg", "webp"],
+      "actions": ["open", "preview"],
+      "defaultAction": "open"
+    }
+  ]
+}
+```
+
+Expected operator behavior:
+
+- install package through registry or ZIP import
+- open File Station
+- right-click a matching file
+- choose `Open With <app>` or `Always Open .<ext> With <app>`
+- double-click matching files after default selection
+
+Removal behavior:
+
+- deleting the package removes stale user default file-open mappings for that package
+- built-in fallback apps continue to open supported file types
+
+## 11. Built-In Addon Replacement Policy
+
+Package apps may replace built-in `standard` addons when they use the same app id and are present in inventory.
+
+Current package-first replacements:
+
+- `doc-viewer`
+- `model-viewer`
+- `editor`
+
+Rules:
+
+- package replacement is allowed for `standard` addons only
+- package replacement is not allowed for `system` apps
+- replacement preserves the familiar app id used by File Station and Open With
+- the visible launch contract changes from component launch to sandbox launch
+
+This lets a default viewer/editor feel built-in while still being managed as an installable package.

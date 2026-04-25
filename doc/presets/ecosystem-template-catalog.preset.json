@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "namespace": "official",
+  "templates": [
+    {
+      "id": "empty-html",
+      "title": "Empty HTML App",
+      "category": "productivity",
+      "description": "Minimal sandbox-html app template.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": []
+      }
+    },
+    {
+      "id": "memo-app",
+      "title": "Memo App",
+      "category": "productivity",
+      "description": "Memo app template with app-owned data storage.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write", "ui.notification"]
+      }
+    },
+    {
+      "id": "todo-app",
+      "title": "Todo App",
+      "category": "productivity",
+      "description": "Todo app template with app-owned data storage.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "bookmark-manager",
+      "title": "Bookmark Manager",
+      "category": "productivity",
+      "description": "Bookmark manager template with app-owned data storage.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write", "window.open"]
+      }
+    },
+    {
+      "id": "calculator",
+      "title": "Calculator",
+      "category": "utility",
+      "description": "Simple calculator app template.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": []
+      }
+    },
+    {
+      "id": "clipboard-history",
+      "title": "Clipboard History",
+      "category": "utility",
+      "description": "Clipboard history template with app-owned data storage.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "widget-basic",
+      "title": "Widget Template",
+      "category": "widget",
+      "description": "Small dashboard widget template.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "widget",
+        "entry": "index.html",
+        "permissions": ["system.info"]
+      }
+    },
+    {
+      "id": "server-monitor",
+      "title": "Server Monitor",
+      "category": "system",
+      "description": "Server monitor template using system.info.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["system.info", "ui.notification"]
+      }
+    },
+    {
+      "id": "markdown-editor",
+      "title": "Markdown Editor",
+      "category": "productivity",
+      "description": "Markdown editor and preview template.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "json-formatter",
+      "title": "JSON Formatter",
+      "category": "developer",
+      "description": "JSON validation and formatting template.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "api-tester",
+      "title": "API Tester",
+      "category": "developer",
+      "description": "HTTP request testing template with request metadata.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "snippet-vault",
+      "title": "Snippet Vault",
+      "category": "developer",
+      "description": "Snippet archive template with tags and export support.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "markdown-preview",
+      "title": "Markdown Preview",
+      "category": "developer",
+      "description": "Markdown preview template with app-owned data storage.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "csv-viewer",
+      "title": "CSV Viewer",
+      "category": "developer",
+      "description": "CSV parsing and table rendering template.",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "text-processor",
+      "title": "Text Processor",
+      "category": "developer",
+      "description": "Text transform template (trim/find/replace/case).",
+      "defaults": {
+        "runtimeType": "sandbox-html",
+        "appType": "app",
+        "entry": "index.html",
+        "permissions": ["app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "python-experimental",
+      "title": "Python Experimental",
+      "category": "runtime",
+      "description": "Experimental process-python service template.",
+      "defaults": {
+        "runtimeType": "process-python",
+        "appType": "service",
+        "entry": "service.py",
+        "permissions": []
+      }
+    }
+  ]
+}

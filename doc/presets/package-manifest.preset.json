@@ -1,0 +1,20 @@
+{
+  "id": "your-app-id",
+  "title": "Your App",
+  "description": "Describe your app",
+  "version": "0.1.0",
+  "type": "app",
+  "runtime": {
+    "type": "sandbox-html",
+    "entry": "index.html"
+  },
+  "permissions": [],
+  "capabilities": [],
+  "fileAssociations": [],
+  "window": {
+    "width": 960,
+    "height": 720,
+    "minWidth": 480,
+    "minHeight": 320
+  }
+}

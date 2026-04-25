@@ -220,27 +220,76 @@ export async function fetchRegistryInstallPreflight(payload = {}) {
       sourceId: payload.sourceId || '',
       packageId: payload.packageId || '',
       zipUrl: payload.zipUrl || '',
-      overwrite: payload.overwrite === true
+      overwrite: payload.overwrite === true,
+      localWorkspace: payload.localWorkspace && typeof payload.localWorkspace === 'object'
+        ? payload.localWorkspace
+        : undefined
     })
   });
 }
 
-export async function wizardPreflightPackage(manifest, templateId) {
+export async function installRegistryPackage(payload = {}) {
+  return apiFetch('/api/packages/registry/install', {
+    method: 'POST',
+    body: JSON.stringify({
+      sourceId: payload.sourceId || '',
+      packageId: payload.packageId || '',
+      zipUrl: payload.zipUrl || '',
+      overwrite: payload.overwrite === true,
+      forcePolicyBypass: payload.forcePolicyBypass === true,
+      localWorkspace: payload.localWorkspace && typeof payload.localWorkspace === 'object'
+        ? payload.localWorkspace
+        : undefined
+    })
+  });
+}
+
+function buildZipImportFormData(file, options = {}) {
+  const formData = new FormData();
+  formData.append('package', file);
+  formData.append('overwrite', options.overwrite === true ? 'true' : 'false');
+  if (options.localWorkspace && typeof options.localWorkspace === 'object') {
+    formData.append('localWorkspace', JSON.stringify(options.localWorkspace));
+  }
+  return formData;
+}
+
+export async function preflightZipPackageImport(file, options = {}) {
+  return apiFetch('/api/packages/import/preflight', {
+    method: 'POST',
+    body: buildZipImportFormData(file, options)
+  });
+}
+
+export async function importZipPackage(file, options = {}) {
+  return apiFetch('/api/packages/import', {
+    method: 'POST',
+    body: buildZipImportFormData(file, options)
+  });
+}
+
+export async function wizardPreflightPackage(manifest, templateId, localWorkspace = null) {
   return apiFetch('/api/packages/wizard/preflight', {
     method: 'POST',
     body: JSON.stringify({
       manifest: manifest || {},
-      ...(templateId ? { templateId: String(templateId) } : {})
+      ...(templateId ? { templateId: String(templateId) } : {}),
+      ...(localWorkspace && typeof localWorkspace === 'object'
+        ? { localWorkspace }
+        : {})
     })
   });
 }
 
-export async function wizardCreatePackage(manifest, templateId = '') {
+export async function wizardCreatePackage(manifest, templateId = '', localWorkspace = null) {
   return apiFetch('/api/packages/wizard/create', {
     method: 'POST',
     body: JSON.stringify({
       manifest: manifest || {},
-      ...(templateId ? { templateId: String(templateId) } : {})
+      ...(templateId ? { templateId: String(templateId) } : {}),
+      ...(localWorkspace && typeof localWorkspace === 'object'
+        ? { localWorkspace }
+        : {})
     })
   });
 }

@@ -1,0 +1,46 @@
+{
+  "id": "model-viewer",
+  "title": "Model Viewer",
+  "description": "3D model preview addon for GLTF, GLB, FBX, and OBJ files.",
+  "version": "1.0.0",
+  "type": "app",
+  "runtime": {
+    "type": "sandbox-html",
+    "entry": "index.html"
+  },
+  "permissions": [
+    "app.data.read"
+  ],
+  "capabilities": [
+    "file.preview",
+    "model.inspect",
+    "model.screenshot"
+  ],
+  "fileAssociations": [
+    {
+      "extensions": [
+        "gltf",
+        "glb",
+        "fbx",
+        "obj"
+      ],
+      "actions": [
+        "preview",
+        "open"
+      ],
+      "defaultAction": "open"
+    }
+  ],
+  "window": {
+    "width": 1100,
+    "height": 760,
+    "minWidth": 640,
+    "minHeight": 420
+  },
+  "migration": {
+    "currentSource": "client/src/apps/addons/model-viewer",
+    "currentRuntime": "builtin-component-dev",
+    "targetRuntime": "sandbox-html",
+    "status": "sandbox-package-entry"
+  }
+}

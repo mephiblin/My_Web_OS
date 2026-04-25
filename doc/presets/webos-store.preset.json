@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "title": "My Web OS Community Store",
+  "packages": [
+    {
+      "id": "sample-app",
+      "title": "Sample App",
+      "description": "Short description",
+      "version": "0.1.0",
+      "author": "publisher",
+      "repository": "https://github.com/owner/repo",
+      "zipUrl": "https://github.com/owner/repo/releases/download/v0.1.0/sample-app-0.1.0.zip",
+      "manifestUrl": "https://raw.githubusercontent.com/owner/repo/main/manifest.json",
+      "icon": "LayoutGrid",
+      "permissions": [],
+      "capabilities": [],
+      "release": {
+        "channel": "stable",
+        "publishedAt": "2026-04-25T00:00:00.000Z",
+        "rolloutDelayMs": 0
+      }
+    }
+  ]
+}

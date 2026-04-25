@@ -4,6 +4,10 @@
 
 `AGENTS.md` active roadmap 기준으로 다음 작업을 정리한다.
 
+업데이트 메모 (2026-04-25):
+- `A0-core-addon-hardening`은 문서/검증 기준으로 워킹트리 완료 처리됨.
+- 다음 작업은 R5 실사용 검증 마감과 R8 실도메인 검증 항목에서 재할당한다.
+
 ## R0 / A11 상태
 
 완료됨(워킹트리 기준):
@@ -24,15 +28,17 @@
 
 ## 다음 우선순위 (R5 중심 + R8 실도메인 검증)
 
-1. R5 Station 실사용 검증 마감:
-   - 대용량 allowed root(실데이터)에서 scan limits/truncation/manual UX 체감 체크 기록,
-   - metadata cache hit/failure/batch latency 수동 검증 스냅샷 문서화.
-2. R8 실도메인 ACME 최종 검증:
+1. R5 Station 실사용 검증 마감: 완료(2026-04-25)
+   - 증적: `doc/operations/station-real-use-validation-2026-04-25.md`
+2. R8 실도메인 ACME 최종 검증: 실도메인 준비 전 대기
+   - 미실행 사유: 운영용 공인 도메인(FQDN) 미보유
    - 실제 FQDN + 외부 80/443 환경에서 `docker-compose.hardened-acme.yml` 발급 성공 로그 확보,
    - 외부망에서 `https://<domain>/health` 200 증거 확보.
+   - 사전검증 증적: `doc/operations/acme-real-domain-validation-2026-04-25.md`
 3. 앱 생태계 페이즈 전환 준비:
    - 코어는 bugfix/security/perf만 유지,
    - 신규 사용자 가치 개발은 package/addon 앱 백로그(R4~R6 확장)로 집중.
+   - 2026-04-25 반영: developer starter에 `markdown-preview`, `csv-viewer`, `text-processor` 추가.
 
 ## 운영 정책 결정 필요
 

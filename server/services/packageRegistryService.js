@@ -668,8 +668,26 @@ const packageRegistryService = {
 
     const merged = [];
     const seen = new Set();
+    const replacedBuiltinIds = new Set();
+    const sandboxById = new Map(sandboxApps.map((app) => [app.id, app]));
 
     for (const builtinApp of builtinApps.map(normalizeBuiltinApp)) {
+      const packageReplacement = sandboxById.get(builtinApp.id);
+      if (packageReplacement && builtinApp.appModel === APP_MODELS.STANDARD) {
+        merged.push({
+          ...packageReplacement,
+          replacesBuiltin: true,
+          replacedBuiltin: {
+            id: builtinApp.id,
+            appModel: builtinApp.appModel,
+            source: builtinApp.source,
+            runtime: builtinApp.runtime
+          }
+        });
+        seen.add(packageReplacement.id);
+        replacedBuiltinIds.add(packageReplacement.id);
+        continue;
+      }
       merged.push(builtinApp);
       seen.add(builtinApp.id);
     }
@@ -679,6 +697,9 @@ const packageRegistryService = {
         continue;
       }
       if (seen.has(sandboxApp.id)) {
+        if (replacedBuiltinIds.has(sandboxApp.id)) {
+          continue;
+        }
         console.warn(`[PACKAGES] Skipping sandbox app "${sandboxApp.id}" because a builtin app already uses that id.`);
         continue;
       }
