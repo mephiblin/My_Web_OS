@@ -8,6 +8,11 @@
 - `A0-core-addon-hardening`은 문서/검증 기준으로 워킹트리 완료 처리됨.
 - 다음 작업은 R5 실사용 검증 마감과 R8 실도메인 검증 항목에서 재할당한다.
 
+업데이트 메모 (2026-04-26):
+- package-first primary addon 런타임 이후 발견된 로딩/터미널/시스템 polling 안정화는 완료 기록으로 분리했다.
+  - 증적: `doc/operations/runtime-stability-notes-2026-04-26.md`
+- 신규 앱 가치 개발 전, 남은 우선순위는 실사용 수동 확인과 실도메인 ACME 최종 검증이다.
+
 ## R0 / A11 상태
 
 완료됨(워킹트리 기준):
@@ -39,8 +44,13 @@
    - 코어는 bugfix/security/perf만 유지,
    - 신규 사용자 가치 개발은 package/addon 앱 백로그(R4~R6 확장)로 집중.
    - 2026-04-25 반영: developer starter에 `markdown-preview`, `csv-viewer`, `text-processor` 추가.
+4. 실사용 수동 확인:
+   - Terminal: 백엔드 재시작 후 기존 창은 종료되고 새 창에서 새 shell이 열리는지 확인.
+   - Resource Monitor/Settings/System: 깨진 문자열이 남아 있지 않은지 확인.
+   - sandbox package apps: `doc-viewer`, `editor`, `model-viewer` 반복 실행 시 무한 로딩이 없는지 확인.
 
 ## 운영 정책 결정 필요
 
 - `server/storage/index.json` 포함 generated storage 파일은 기본적으로 커밋 제외.
+- `server/storage/media-library/`는 업로드/테스트 중 생성되는 로컬 미디어 라이브러리이므로 커밋 제외.
 - 예외: 테스트 fixture 증거 또는 의도된 시드 변경일 때만 포함.

@@ -182,10 +182,19 @@ Sandbox / Package:
 
 ## 6) Backlog Status
 
-Status: `B0 COMPLETE + B1 SOURCE LAYOUT COMPLETE + B2 FILE ASSOCIATION LIFECYCLE COMPLETE + B3 PRIMARY ADDON SANDBOX PACKAGE COMPLETE` (working tree, 2026-04-25).
+Status: `B0 COMPLETE + B1 SOURCE LAYOUT COMPLETE + B2 FILE ASSOCIATION LIFECYCLE COMPLETE + B3 PRIMARY ADDON SANDBOX PACKAGE COMPLETE + RUNTIME STABILITY PASS COMPLETE` (working tree, 2026-04-26).
 
 There is no next active backlog item assigned in this file after B3.
 When new work is assigned, register the item here before implementation.
+
+Current runtime stability baseline (2026-04-26):
+
+- `server/storage/index.json` and `server/storage/media-library/` are local generated runtime state and must stay out of commits.
+- Inventory fixtures required for bootstrap/tests remain trackable under `server/storage/inventory/`.
+- `/api/system/overview` and `/api/system/network-ips` use cache/coalescing to avoid UI polling from delaying app loading.
+- Sandbox package launch must not silently infinite-load; SDK ready retry and `SANDBOX_BRIDGE_READY_TIMEOUT` are the current contract.
+- Backend restart terminates existing Terminal PTY/local shell sessions; reconnect/new Terminal starts a new shell.
+- Latest stability evidence: `doc/operations/runtime-stability-notes-2026-04-26.md`.
 
 ### B0) Addon Packageization and Distribution (Completed Item)
 

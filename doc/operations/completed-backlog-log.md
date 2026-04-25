@@ -386,3 +386,40 @@
 - `4ab10d8`
 - `34f154c`
 - `a9e136e`
+
+## Runtime Stability / Local Test Cleanup (2026-04-26)
+
+- `.gitignore` 정리:
+  - root build ignore를 `/build/`처럼 anchor 처리하여 package/vendor 내부 `build` 폴더가 추적 가능하도록 정리.
+  - `server/storage/index.json`, `server/storage/media-library/`, `storage/rehearsal-backups/`, `.playwright-mcp/`를 로컬 runtime/generated state로 커밋 제외.
+  - `server/storage/inventory/.gitignore`는 테스트/부트스트랩 fixture(`system/apps.json`, `hello-sandbox`, `doc-viewer`, `editor`, `model-viewer`)가 계속 추적되도록 명시.
+- sandbox 로딩 안정화:
+  - sandbox SDK ready announce 재시도 추가.
+  - `SandboxAppFrame` bridge ready timeout 및 명시 오류 표시 추가.
+- system API polling 안정화:
+  - `/api/system/overview` short TTL cache + concurrent refresh coalescing.
+  - `/api/system/network-ips` cache + external IP lookup timeout 축소.
+- Terminal 안정화:
+  - backend PTY 생성 후 `terminal:ready` 이벤트 전송.
+  - frontend는 ready 전 입력을 막고 reconnect 시 새 local shell 시작을 안내.
+  - terminal env UTF-8 fallback 적용.
+- UI 깨진 문자열 정리:
+  - Resource Monitor, Docker Manager, Media Player, Log Viewer.
+- 문서:
+  - `doc/operations/runtime-stability-notes-2026-04-26.md`
+  - `README.md`
+  - `USER_README.md`
+  - `doc/reference/architecture-api-reference.md`
+  - `doc/operations/local-run-guide.md`
+  - `doc/operations/package-troubleshooting.md`
+  - `doc/operations/next-tasks-2026-04-25.md`
+- 검증:
+  - `node --check server/routes/system.js` 통과.
+  - `node --check server/services/terminal.js` 통과.
+  - `node --check server/static/webos-sandbox-sdk.js` 통과.
+  - `node --test server/tests/sandbox-sdk-contract.test.js` 통과.
+  - `npm test` 통과(62개).
+  - `cd client && npm run build` 통과.
+  - `npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json` 통과(`fails=0`, 기존 builtin warning 19개 유지).
+  - backend/frontend HTTP smoke 통과.
+  - Terminal socket/PTY 한글 출력 smoke 통과.

@@ -15,6 +15,7 @@
   let resizeHandler;
   let commandBuffer = '';
   let initialized = false;
+  let hasConnectedOnce = false;
 
   function isRiskyCommand(command) {
     const trimmed = String(command || '').trim();
@@ -32,12 +33,16 @@
     });
 
     socket.on('connect', () => {
-      term.writeln('\x1b[32mConnected to Web OS Terminal\x1b[0m');
+      initialized = false;
+      term.writeln(hasConnectedOnce
+        ? '\x1b[32mReconnected to Web OS Terminal. Starting a new local shell...\x1b[0m'
+        : '\x1b[32mConnected to Web OS Terminal\x1b[0m'
+      );
+      hasConnectedOnce = true;
       socket.emit('terminal:init', {
         cols: term.cols,
         rows: term.rows
       });
-      initialized = true;
       commandBuffer = '';
     });
 
@@ -52,6 +57,13 @@
 
     socket.on('terminal:output', (data) => {
       term.write(data);
+    });
+
+    socket.on('terminal:ready', ({ cwd } = {}) => {
+      initialized = true;
+      if (cwd) {
+        term.writeln(`\r\n\x1b[36m[terminal] local shell ready: ${cwd}\x1b[0m`);
+      }
     });
 
     socket.on('terminal:exit', ({ exitCode, signal }) => {
@@ -121,7 +133,7 @@
         cursor: '#58a6ff'
       },
       fontSize: 14,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: '"D2Coding", "Noto Sans Mono CJK KR", "Noto Sans Mono", Menlo, Monaco, "Courier New", monospace',
       scrollback: 5000
     });
 

@@ -1,21 +1,36 @@
-﻿# Dependency folders
-node_modules/
-client/node_modules/
+# Dependency folders
+/node_modules/
+/client/node_modules/
 
-# Environment variables (Sensitive)
+# Environment variables and local overrides
 .env
+.env.local
+.env.*.local
 .env.hardened
 
 # Build outputs
-dist/
-build/
-!client/src/apps/addons/model-viewer/package/vendor/three/build/
-!client/src/apps/addons/model-viewer/package/vendor/three/build/three.core.js
-!client/src/apps/addons/model-viewer/package/vendor/three/build/three.module.js
-storage/rehearsal-backups/
+# Keep these anchored so package/vendor folders named "build" remain trackable.
+/dist/
+/build/
+/client/dist/
+/client/dist-ssr/
 
-# IDE and System files
+# Runtime/generated local state
+/server/storage/index.json
+/server/storage/media-library/
+/storage/rehearsal-backups/
+/.playwright-mcp/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# IDE and OS files
 .vscode/
 .idea/
 .DS_Store
-*.log
+*.sw?

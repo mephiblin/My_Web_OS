@@ -19,6 +19,153 @@ const mediaLibraryPaths = require('../utils/mediaLibraryPaths');
 const router = express.Router();
 router.use(auth);
 
+const OVERVIEW_CACHE_TTL_MS = 1500;
+const OVERVIEW_STALE_TTL_MS = 10000;
+const NETWORK_IPS_CACHE_TTL_MS = 60000;
+const NETWORK_IPS_STALE_TTL_MS = 300000;
+let overviewCache = null;
+let overviewInflight = null;
+let networkIpsCache = null;
+let networkIpsInflight = null;
+
+async function collectSystemOverview() {
+  const [cpu, mem, fsSize, osInfo, gfx, net, cpuTemp] = await Promise.all([
+    si.currentLoad(),
+    si.mem(),
+    si.fsSize(),
+    si.osInfo(),
+    si.graphics(),
+    si.networkStats(),
+    si.cpuTemperature()
+  ]);
+
+  return {
+    cpu: cpu.currentLoad.toFixed(2),
+    cpuTemp: {
+      main: cpuTemp.main,
+      max: cpuTemp.max
+    },
+    memory: {
+      total: mem.total,
+      used: mem.used,
+      percentage: ((mem.used / mem.total) * 100).toFixed(2)
+    },
+    storage: fsSize.map((drive) => ({
+      fs: drive.fs,
+      size: drive.size,
+      used: drive.used,
+      use: drive.use
+    })),
+    os: {
+      distro: osInfo.distro,
+      release: osInfo.release,
+      platform: osInfo.platform
+    },
+    gpu: gfx.controllers.map((g) => ({
+      model: g.model,
+      vram: g.vram,
+      bus: g.bus,
+      temperatureGpu: g.temperatureGpu
+    })),
+    network: net.map((n) => ({
+      iface: n.iface,
+      rx_sec: n.rx_sec,
+      tx_sec: n.tx_sec
+    }))
+  };
+}
+
+function startOverviewRefresh() {
+  if (!overviewInflight) {
+    overviewInflight = collectSystemOverview()
+      .then((data) => {
+        overviewCache = {
+          data,
+          fetchedAt: Date.now()
+        };
+        return data;
+      })
+      .finally(() => {
+        overviewInflight = null;
+      });
+  }
+  return overviewInflight;
+}
+
+async function getSystemOverviewSnapshot() {
+  const now = Date.now();
+  const age = overviewCache ? now - overviewCache.fetchedAt : Infinity;
+
+  if (overviewCache && age <= OVERVIEW_CACHE_TTL_MS) {
+    return { data: overviewCache.data, cacheState: 'hit' };
+  }
+
+  if (overviewCache && age <= OVERVIEW_STALE_TTL_MS) {
+    startOverviewRefresh().catch((err) => {
+      console.warn('[SYSTEM] Failed to refresh system overview cache:', err.message);
+    });
+    return { data: overviewCache.data, cacheState: 'stale' };
+  }
+
+  const data = await startOverviewRefresh();
+  return { data, cacheState: 'miss' };
+}
+
+async function collectNetworkIps() {
+  const netInterfaces = await si.networkInterfaces();
+  const local = netInterfaces.find((i) => !i.internal && i.ip4 && i.operstate === 'up') || netInterfaces[0];
+
+  let external = 'Unknown';
+  try {
+    const response = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(1200) });
+    const data = await response.json();
+    external = data.ip;
+  } catch (_e) {
+    external = 'Unavailable';
+  }
+
+  return {
+    local: local ? local.ip4 : 'Unknown',
+    external
+  };
+}
+
+function startNetworkIpsRefresh() {
+  if (!networkIpsInflight) {
+    networkIpsInflight = collectNetworkIps()
+      .then((data) => {
+        networkIpsCache = {
+          data,
+          fetchedAt: Date.now()
+        };
+        return data;
+      })
+      .finally(() => {
+        networkIpsInflight = null;
+      });
+  }
+  return networkIpsInflight;
+}
+
+async function getNetworkIpsSnapshot() {
+  const now = Date.now();
+  const age = networkIpsCache ? now - networkIpsCache.fetchedAt : Infinity;
+
+  if (networkIpsCache && age <= NETWORK_IPS_CACHE_TTL_MS) {
+    return { data: networkIpsCache.data, cacheState: 'hit' };
+  }
+
+  if (networkIpsCache && age <= NETWORK_IPS_STALE_TTL_MS) {
+    startNetworkIpsRefresh().catch((err) => {
+      console.warn('[SYSTEM] Failed to refresh network IP cache:', err.message);
+    });
+    return { data: networkIpsCache.data, cacheState: 'stale' };
+  }
+
+  const data = await startNetworkIpsRefresh();
+  return { data, cacheState: 'miss' };
+}
+
 function handleStateKeyError(res, err) {
   if (err.code === 'STATE_KEY_UNSUPPORTED') {
     return res.status(400).json({
@@ -237,52 +384,15 @@ const uploadWP = multer({
  */
 router.get('/overview', async (req, res) => {
   try {
-    const [cpu, mem, fsSize, osInfo, gfx, net, cpuTemp] = await Promise.all([
-      si.currentLoad(),
-      si.mem(),
-      si.fsSize(),
-      si.osInfo(),
-      si.graphics(),
-      si.networkStats(),
-      si.cpuTemperature()
-    ]);
-
-    res.json({
-      cpu: cpu.currentLoad.toFixed(2),
-      cpuTemp: {
-        main: cpuTemp.main,
-        max: cpuTemp.max
-      },
-      memory: {
-        total: mem.total,
-        used: mem.used,
-        percentage: ((mem.used / mem.total) * 100).toFixed(2)
-      },
-      storage: fsSize.map((drive) => ({
-        fs: drive.fs,
-        size: drive.size,
-        used: drive.used,
-        use: drive.use
-      })),
-      os: {
-        distro: osInfo.distro,
-        release: osInfo.release,
-        platform: osInfo.platform
-      },
-      gpu: gfx.controllers.map((g) => ({
-        model: g.model,
-        vram: g.vram,
-        bus: g.bus,
-        temperatureGpu: g.temperatureGpu
-      })),
-      network: net.map((n) => ({
-        iface: n.iface,
-        rx_sec: n.rx_sec,
-        tx_sec: n.tx_sec
-      }))
-    });
+    const snapshot = await getSystemOverviewSnapshot();
+    res.setHeader('X-WebOS-Overview-Cache', snapshot.cacheState);
+    res.json(snapshot.data);
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    res.status(500).json({
+      error: true,
+      code: 'SYSTEM_OVERVIEW_FAILED',
+      message: err.message
+    });
   }
 });
 
@@ -309,24 +419,15 @@ router.get('/cpu', async (req, res) => {
  */
 router.get('/network-ips', async (req, res) => {
   try {
-    const netInterfaces = await si.networkInterfaces();
-    const local = netInterfaces.find((i) => !i.internal && i.ip4 && i.operstate === 'up') || netInterfaces[0];
-
-    let external = 'Unknown';
-    try {
-      const response = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
-      const data = await response.json();
-      external = data.ip;
-    } catch (_e) {
-      external = 'Unavailable';
-    }
-
-    res.json({
-      local: local ? local.ip4 : 'Unknown',
-      external
-    });
+    const snapshot = await getNetworkIpsSnapshot();
+    res.setHeader('X-WebOS-Network-IPs-Cache', snapshot.cacheState);
+    res.json(snapshot.data);
   } catch (err) {
-    res.status(500).json({ error: true, message: err.message });
+    res.status(500).json({
+      error: true,
+      code: 'SYSTEM_NETWORK_IPS_FAILED',
+      message: err.message
+    });
   }
 });
 

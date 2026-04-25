@@ -77,11 +77,17 @@ Sandbox SDK script:
 Basic include example (inside sandbox app HTML):
 
 ```html
-<script src="/api/sandbox/sdk.js"></script>
+<script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
 <script>
   window.WebOS.ready().then(() => window.WebOS.system.info().then(console.log));
 </script>
 ```
+
+Runtime notes:
+
+- The SDK announces `webos:ready` repeatedly for a short window until the parent frame sends context.
+- The parent frame must surface bridge timeout as an explicit error instead of leaving the app in infinite loading.
+- Package entries that require a file must handle missing `launchData.fileContext` with a visible message.
 
 ## 5. Release Safety Expectations
 

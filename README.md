@@ -144,9 +144,20 @@ Before committing:
 - check `git status --short`
 - verify runtime imports from `server/index.js` are present
   - especially `server/routes/ai.js`, `server/services/aiActionService.js`
-- avoid accidental generated storage churn (`server/storage/index.json`) unless intentional
+- keep generated local runtime state out of commits:
+  - `server/storage/index.json`
+  - `server/storage/media-library/`
+  - `storage/rehearsal-backups/`
+- inventory fixtures required for tests/bootstrap stay trackable under `server/storage/inventory/`
 
-## 7) Roadmap Execution
+## 7) Runtime Stability Notes
+
+- `/api/system/overview` is cached and coalesces concurrent refreshes to avoid repeated heavy `systeminformation` calls during widget/app polling.
+- `/api/system/network-ips` is cached; external IP lookup has a short timeout so Resource Monitor does not block on public network latency.
+- Sandbox package apps use `/api/sandbox/sdk.js`; the SDK repeats `webos:ready` briefly, and `SandboxAppFrame` shows an explicit bridge timeout instead of silent infinite loading.
+- Terminal uses Socket.io + `node-pty`. If the backend process restarts, existing local shell sessions are terminated; opening/reconnecting the Terminal starts a new shell.
+
+## 8) Roadmap Execution
 
 Use `AGENTS.md` roadmap and pick the first unfinished item unless the user requests chaining.
 
@@ -159,7 +170,7 @@ For each completed item report:
 - remaining risks
 - next recommended item
 
-## 8) Doc Lifecycle
+## 9) Doc Lifecycle
 
 - active: current implementation/operations baseline
 - snapshot: date-based progress record

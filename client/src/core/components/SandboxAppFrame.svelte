@@ -33,6 +33,7 @@
   let pendingApproval = $state(null);
   let recentDenied = $state(null);
   let lastLaunchDataKey = '';
+  let bridgeTimeout = null;
 
   const appId = $derived(app?.appId || app?.id || '');
   const declaredPermissions = $derived(new Set(Array.isArray(app?.permissions) ? app.permissions : []));
@@ -215,6 +216,43 @@
     }
   }
 
+  function buildContextPayload(launchData = app.data || null) {
+    return {
+      type: 'webos:context',
+      app: {
+        id: appId,
+        title: app.title,
+        description: app.description || '',
+        permissions: Array.isArray(app.permissions) ? app.permissions : [],
+        runtime: app.runtime,
+        sdkUrl: '/api/sandbox/sdk.js',
+        launchData
+      },
+      capabilities: capabilityCatalog,
+      apiPolicy
+    };
+  }
+
+  function sendContextToFrame(launchData = app.data || null) {
+    postToFrame(buildContextPayload(launchData));
+  }
+
+  function clearBridgeTimeout() {
+    if (!bridgeTimeout) return;
+    clearTimeout(bridgeTimeout);
+    bridgeTimeout = null;
+  }
+
+  function armBridgeTimeout() {
+    clearBridgeTimeout();
+    bridgeTimeout = setTimeout(() => {
+      if (bridgeReady) return;
+      loading = false;
+      lastError = 'Sandbox app did not report ready. Close and reopen the app, or check the package entry script.';
+      lastErrorCode = 'SANDBOX_BRIDGE_READY_TIMEOUT';
+    }, 9000);
+  }
+
   function getCapability(permission) {
     if (!permission) return null;
     return capabilityById[permission] || null;
@@ -360,20 +398,8 @@
         lastLaunchDataKey = getLaunchDataKey(launchData);
         bridgeReady = true;
         loading = false;
-        postToFrame({
-          type: 'webos:context',
-          app: {
-            id: appId,
-            title: app.title,
-            description: app.description || '',
-            permissions: Array.isArray(app.permissions) ? app.permissions : [],
-            runtime: app.runtime,
-            sdkUrl: '/api/sandbox/sdk.js',
-            launchData
-          },
-          capabilities: capabilityCatalog,
-          apiPolicy
-        });
+        clearBridgeTimeout();
+        sendContextToFrame(launchData);
         return;
       }
 
@@ -419,18 +445,18 @@
   });
 
   function handleLoad() {
-    if (!bridgeReady) {
-      loading = false;
-    }
+    if (!bridgeReady) armBridgeTimeout();
   }
 
   function handleFrameError() {
+    clearBridgeTimeout();
     loading = false;
     lastError = 'Failed to load sandbox app.';
     lastErrorCode = 'SANDBOX_FRAME_LOAD_FAILED';
   }
 
   onDestroy(() => {
+    clearBridgeTimeout();
     disposeFrame();
   });
 </script>

@@ -10,6 +10,8 @@
   var capabilities = [];
   var apiPolicy = null;
   var readyResolvers = [];
+  var readyAnnounceTimer = null;
+  var readyAnnounceCount = 0;
   var requestSeq = 0;
 
   function createError(code, message) {
@@ -38,6 +40,10 @@
 
   function markReady(payload) {
     context = payload && typeof payload === 'object' ? payload : {};
+    if (readyAnnounceTimer && typeof clearTimeout === 'function') {
+      clearTimeout(readyAnnounceTimer);
+    }
+    readyAnnounceTimer = null;
     var nextResolvers = readyResolvers.slice();
     readyResolvers.length = 0;
     for (var i = 0; i < nextResolvers.length; i += 1) {
@@ -71,6 +77,21 @@
         ticket.reject(createError('WEBOS_SDK_REQUEST_TIMEOUT', 'SDK request timed out.'));
       }, 12000);
     });
+  }
+
+  function announceReady() {
+    if (isReady()) return;
+    readyAnnounceCount += 1;
+    global.parent.postMessage({ type: 'webos:ready' }, '*');
+  }
+
+  function scheduleReadyAnnouncement() {
+    if (isReady() || readyAnnounceCount >= 20 || typeof setTimeout !== 'function') return;
+    readyAnnounceTimer = setTimeout(function onReadyRetry() {
+      readyAnnounceTimer = null;
+      announceReady();
+      scheduleReadyAnnouncement();
+    }, 500);
   }
 
   function requestWithPermission(permission, method, params) {
@@ -142,7 +163,8 @@
   }
 
   global.addEventListener('message', handleMessage);
-  global.parent.postMessage({ type: 'webos:ready' }, '*');
+  announceReady();
+  scheduleReadyAnnouncement();
 
   var sdk = {
     version: '1.0.0',

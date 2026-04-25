@@ -161,7 +161,7 @@
                 <span class="ports">({c.Ports})</span>
               {/if}
             </div>
-            <div class="status" style="color: {getStatusColor(c.Status)}">??{c.Status}</div>
+            <div class="status" style="color: {getStatusColor(c.Status)}">Status: {c.Status}</div>
             {#if parseHealth(c.Status) !== 'none'}
               <div class="status health {parseHealth(c.Status)}">health: {parseHealth(c.Status)}</div>
             {/if}

@@ -75,12 +75,19 @@ function initTerminalService(io) {
 
       const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
       
+      const terminalEnv = {
+        ...process.env,
+        LANG: process.env.LANG || 'C.UTF-8',
+        LC_ALL: process.env.LC_ALL || process.env.LANG || 'C.UTF-8',
+        TERM: process.env.TERM || 'xterm-256color'
+      };
+
       const ptyProcess = pty.spawn(shell, [], {
         name: 'xterm-color',
         cols: cols || 80,
         rows: rows || 24,
         cwd: process.env.HOME || process.env.USERPROFILE,
-        env: process.env
+        env: terminalEnv
       });
 
       const sessionId = socket.id;
@@ -107,6 +114,10 @@ function initTerminalService(io) {
         ).catch(() => {});
       });
 
+      socket.emit('terminal:ready', {
+        shell,
+        cwd: process.env.HOME || process.env.USERPROFILE || ''
+      });
       console.log(`Terminal session started for socket ${socket.id}`);
     });
 

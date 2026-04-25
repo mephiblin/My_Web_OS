@@ -1,10 +1,15 @@
+# Ignore runtime-installed packages and mutable inventory state by default.
 *
 !*/
 !.gitignore
 !.gitkeep
+
+# Canonical built-in app registry required for tests/bootstrap.
 !system/
 system/*
 !system/apps.json
+
+# Package fixtures required for tests and package-first built-in replacement.
 !apps/hello-sandbox/
 !apps/hello-sandbox/**
 !apps/doc-viewer/

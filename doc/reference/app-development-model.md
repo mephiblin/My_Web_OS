@@ -337,6 +337,7 @@ Current delivery status:
 
 - Sandbox SDK script: `/api/sandbox/sdk.js`
 - SDK context handshake: `webos:ready`, `webos:context`, `webos:response`
+- SDK ready handshake is retry-tolerant; host frame timeout should report an explicit bridge error rather than silent infinite loading.
 - API policy endpoint: `/api/system/app-api-policy`
 - Runtime capability catalog: `/api/packages/runtime/capabilities`
 - Sandbox capability map: `/api/sandbox/:appId/capabilities`

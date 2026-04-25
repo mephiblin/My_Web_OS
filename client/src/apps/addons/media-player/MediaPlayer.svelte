@@ -356,7 +356,7 @@
         crossorigin="anonymous"
       >
         {#if subtitleUrl}
-          <track kind="subtitles" src={subtitleUrl} srclang="ko" label="?�막" default />
+          <track kind="subtitles" src={subtitleUrl} srclang="ko" label="Korean subtitles" default />
         {/if}
       </video>
     {:else if isAudio}

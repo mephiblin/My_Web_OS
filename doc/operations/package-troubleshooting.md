@@ -68,3 +68,37 @@ Actions:
 
 1. Query `GET /api/system/app-api-policy?clientVersion=<x.y.z>`
 2. Align app client version with `minimumSupportedVersion` and major compatibility rules
+
+## 6. Sandbox App Stays Loading
+
+Symptoms:
+
+- window opens but package UI remains on loading
+- `SANDBOX_BRIDGE_READY_TIMEOUT`
+- app entry says it is waiting for file/context
+
+Actions:
+
+1. Confirm package entry includes `/api/sandbox/sdk.js`
+2. Confirm the entry calls or waits for `window.WebOS.ready()`
+3. Check browser console for SDK/script load errors
+4. Check backend route availability:
+   - `GET /api/sandbox/sdk.js`
+   - `GET /api/sandbox/:appId/capabilities`
+5. If file context is required, confirm File Station issued a valid grant.
+
+## 7. Terminal Disconnected
+
+Symptoms:
+
+- terminal shows disconnected
+- input no longer reaches local shell
+- backend was restarted or crashed
+
+Actions:
+
+1. Confirm backend is running:
+   - `GET /health`
+2. Close the old terminal window and open Terminal again.
+3. Treat the new connection as a new local shell; previous PTY state is not recovered after backend restart.
+4. If Korean output appears broken, check host locale/font availability; server sets UTF-8 terminal env fallback, but the browser still needs a font with Korean glyphs.

@@ -236,7 +236,7 @@
           <div class="section-title">CPU</div>
           <div class="big-value">{status.cpu}%</div>
           {#if status.cpuTemp?.main != null}
-            <div class="temp-line">?�� {status.cpuTemp.main}°C</div>
+            <div class="temp-line">Temp {status.cpuTemp.main}°C</div>
           {/if}
           <div class="chart-area" style="height: 100px;"><Line data={chartData} options={chartOptions} /></div>
         </div>
@@ -259,7 +259,7 @@
                 <div class="value-sm">{g.model}</div>
                 <div class="detail-row"><span>VRAM</span><span>{g.vram} MB</span></div>
                 {#if g.temperatureGpu != null}
-                  <div class="detail-row"><span class="temp">?�� {g.temperatureGpu}°C</span></div>
+                  <div class="detail-row"><span class="temp">Temp {g.temperatureGpu}°C</span></div>
                 {/if}
               </div>
             {:else}
@@ -289,8 +289,8 @@
               {#if n.rx_sec > 0 || n.tx_sec > 0}
                 <div class="net-item">
                   <div class="drive-name">{n.iface}</div>
-                  <div class="detail-row down">??{(n.rx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
-                  <div class="detail-row up">??{(n.tx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
+                  <div class="detail-row down">Down {(n.rx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
+                  <div class="detail-row up">Up {(n.tx_sec / 1024 / 1024).toFixed(2)} MB/s</div>
                 </div>
               {/if}
             {/each}
@@ -318,7 +318,7 @@
           <h3>CPU</h3>
           <div class="value">{status.cpu}%</div>
           {#if status.cpuTemp?.main != null}
-            <div class="temp">?�� {status.cpuTemp.main}°C</div>
+            <div class="temp">Temp {status.cpuTemp.main}°C</div>
           {/if}
         </div>
         <div class="card glass-effect">
@@ -331,7 +331,7 @@
           {#each status.gpu as g}
             <div class="value-sm">{g.model}</div>
             {#if g.temperatureGpu != null}
-              <div class="temp">?�� {g.temperatureGpu}°C</div>
+              <div class="temp">Temp {g.temperatureGpu}°C</div>
             {/if}
           {:else}
             <div class="stats">No GPU detected</div>

@@ -12,6 +12,12 @@ node server/index.js
 ```
 - 기본 포트: `3000`
 
+운영 메모:
+
+- 백엔드를 재시작하면 열려 있던 Terminal PTY/local shell 세션은 종료된다.
+- 프론트 터미널 창은 재연결 시 새 shell을 요청하지만, 기존 shell의 작업 상태는 복구되지 않는다.
+- `server/storage/index.json`과 `server/storage/media-library/`는 로컬 런타임 산출물이므로 Git 추적 대상이 아니다.
+
 `apps:registry:migrate`는 legacy `server/storage/apps.json`을
 `server/storage/inventory/system/apps.json`로 1회 이관하는 명령이다.
 legacy가 없으면 built-in seed로 `apps.json`을 생성한다.
@@ -142,6 +148,13 @@ netstat -ano | findstr ":3000"
 netstat -ano | findstr ":5173"
 ```
 `LISTENING`이면 정상.
+
+HTTP 기준 스모크:
+
+```bash
+node -e "fetch('http://127.0.0.1:3000/health').then(r=>{console.log('backend',r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
+node -e "fetch('http://127.0.0.1:5173').then(r=>{console.log('frontend',r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
+```
 
 ## Stop
 - 포그라운드: `Ctrl + C`

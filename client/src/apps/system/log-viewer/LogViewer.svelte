@@ -359,7 +359,7 @@
                   <td class="cell-action">
                     <div class="action-text">{log.action}</div>
                     {#if log.path || log.oldPath}
-                      <div class="action-sub">{log.path || `${log.oldPath} ??${log.newPath}`}</div>
+                      <div class="action-sub">{log.path || `${log.oldPath} -> ${log.newPath}`}</div>
                     {/if}
                   </td>
                 </tr>
