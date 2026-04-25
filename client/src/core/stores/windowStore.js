@@ -122,6 +122,16 @@ export function openWindow(app, data = null) {
   if (app.singleton) {
     const existing = currentWindows.find(w => w.appId === app.id);
     if (existing) {
+      windows.update(items => items.map(w => w.id === existing.id ? {
+        ...w,
+        ...app,
+        id: existing.id,
+        appId: existing.appId,
+        data,
+        title: app.title || w.title,
+        icon: app.icon || w.icon,
+        minimized: false
+      } : w));
       focusWindow(existing.id);
       return;
     }

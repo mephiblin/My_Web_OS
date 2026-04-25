@@ -390,6 +390,14 @@
     return () => window.removeEventListener('message', handleMessage);
   });
 
+  $effect(() => {
+    if (!bridgeReady) return;
+    postToFrame({
+      type: 'webos:launch-data',
+      launchData: app.data || null
+    });
+  });
+
   function handleLoad() {
     if (!bridgeReady) {
       loading = false;

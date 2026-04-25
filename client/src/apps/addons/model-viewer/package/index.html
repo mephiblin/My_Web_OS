@@ -95,6 +95,7 @@
       let axesVisible = true;
       let animationEnabled = false;
       let animationActions = [];
+      let loadToken = 0;
       const clock = new THREE.Clock();
 
       function setStatus(message, error = false) {
@@ -247,7 +248,7 @@
         }
       }
 
-      async function loadModel(url, extension) {
+      async function loadModel(url, extension, token) {
         let loadedObject = null;
         let animations = [];
         animationEnabled = false;
@@ -266,6 +267,10 @@
           loadedObject = await new OBJLoader().loadAsync(url);
         } else {
           throw new Error('Unsupported format: ' + extension);
+        }
+        if (token !== loadToken || disposed) {
+          disposeObject(loadedObject);
+          return;
         }
         if (model) {
           scene.remove(model);
@@ -296,13 +301,8 @@
         renderer?.render(scene, camera);
       }
 
-      async function boot() {
-        initScene();
-        await waitForViewportSize();
-        resize();
-        animate();
-        const context = await window.WebOS.ready();
-        const launchData = context?.app?.launchData || {};
+      async function loadFromLaunchData(launchData) {
+        const token = ++loadToken;
         const file = launchData?.fileContext?.file || {};
         const grant = launchData?.fileContext?.permissionContext || {};
         const path = file.path || launchData.path || '';
@@ -315,8 +315,17 @@
         downloadEl.href = rawUrl;
         downloadEl.download = fileName;
         setStatus('Loading ' + fileName + '...');
-        await loadModel(rawUrl, extension);
-        setStatus('');
+        await loadModel(rawUrl, extension, token);
+        if (token === loadToken && !disposed) setStatus('');
+      }
+
+      async function boot() {
+        initScene();
+        await waitForViewportSize();
+        resize();
+        animate();
+        const context = await window.WebOS.ready();
+        await loadFromLaunchData(context?.app?.launchData || {});
       }
 
       function cleanup() {
@@ -346,6 +355,8 @@
         const payload = event.data && typeof event.data === 'object' ? event.data : {};
         if (payload.type === 'webos:dispose') {
           cleanup();
+        } else if (payload.type === 'webos:launch-data') {
+          loadFromLaunchData(payload.launchData || {}).catch((err) => setStatus(err?.message || 'Failed to open model.', true));
         }
       });
 

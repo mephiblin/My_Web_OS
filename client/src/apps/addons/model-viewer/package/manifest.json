@@ -4,6 +4,7 @@
   "description": "3D model preview addon for GLTF, GLB, FBX, and OBJ files.",
   "version": "1.0.0",
   "type": "app",
+  "singleton": true,
   "runtime": {
     "type": "sandbox-html",
     "entry": "index.html"
