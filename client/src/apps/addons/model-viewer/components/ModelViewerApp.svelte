@@ -27,8 +27,26 @@
   let lastLoadedPath = $state('');
 
   let scene, camera, renderer, controls, model, mixer;
-  let clock = new THREE.Clock();
+  let lastFrameTime = 0;
   let frameId;
+
+  function shouldSuppressFbxWarning(args) {
+    const message = String(args?.[0] || '');
+    return message.includes('THREE.FBXLoader: unknown material type');
+  }
+
+  async function withSuppressedFbxWarnings(operation) {
+    const originalWarn = console.warn;
+    console.warn = (...args) => {
+      if (shouldSuppressFbxWarning(args)) return;
+      originalWarn.apply(console, args);
+    };
+    try {
+      return await operation();
+    } finally {
+      console.warn = originalWarn;
+    }
+  }
 
   function initScene() {
     scene = new THREE.Scene();
@@ -74,8 +92,10 @@
 
   function animate() {
     frameId = requestAnimationFrame(animate);
-    
-    const delta = clock.getDelta();
+
+    const now = performance.now();
+    const delta = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.1) : 0;
+    lastFrameTime = now;
     if (mixer && isPlaying) mixer.update(delta);
     
     if (controls) controls.update();
@@ -122,9 +142,9 @@
       } else if (extension === 'fbx') {
         loader = new FBXLoader();
         loader.setRequestHeader(headers);
-        loadedObject = await new Promise((resolve, reject) => {
+        loadedObject = await withSuppressedFbxWarnings(() => new Promise((resolve, reject) => {
           loader.load(fileUrl, resolve, undefined, reject);
-        });
+        }));
         animations = loadedObject.animations;
       } else if (extension === 'obj') {
         loader = new OBJLoader();

@@ -101,7 +101,7 @@
       let animationActions = [];
       let loadToken = 0;
       let currentLaunchData = null;
-      const clock = new THREE.Clock();
+      let lastFrameTime = 0;
 
       function setStatus(message, error = false) {
         statusEl.textContent = message;
@@ -112,6 +112,24 @@
       function extOf(path) {
         const name = String(path || '').split('/').pop() || '';
         return name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+      }
+
+      function shouldSuppressFbxWarning(args) {
+        const message = String(args?.[0] || '');
+        return message.includes('THREE.FBXLoader: unknown material type');
+      }
+
+      async function withSuppressedFbxWarnings(operation) {
+        const originalWarn = console.warn;
+        console.warn = (...args) => {
+          if (shouldSuppressFbxWarning(args)) return;
+          originalWarn.apply(console, args);
+        };
+        try {
+          return await operation();
+        } finally {
+          console.warn = originalWarn;
+        }
       }
 
       function initScene() {
@@ -152,7 +170,9 @@
       function animate() {
         if (disposed) return;
         frameId = requestAnimationFrame(animate);
-        const delta = clock.getDelta();
+        const now = performance.now();
+        const delta = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.1) : 0;
+        lastFrameTime = now;
         if (animationEnabled && mixer) mixer.update(delta);
         controls?.update();
         if (renderer && scene && camera) renderer.render(scene, camera);
@@ -160,7 +180,7 @@
 
       function startRenderLoop() {
         if (frameId || disposed) return;
-        clock.getDelta();
+        lastFrameTime = performance.now();
         animate();
       }
 
@@ -257,6 +277,7 @@
         }
         scene = null;
         camera = null;
+        lastFrameTime = 0;
         meshCountEl.textContent = '0';
         triCountEl.textContent = '0';
         matCountEl.textContent = '0';
@@ -353,7 +374,7 @@
           loadedObject = gltf.scene;
           animations = gltf.animations || [];
         } else if (extension === 'fbx') {
-          loadedObject = await new FBXLoader().loadAsync(cacheBustedUrl);
+          loadedObject = await withSuppressedFbxWarnings(() => new FBXLoader().loadAsync(cacheBustedUrl));
           animations = loadedObject.animations || [];
         } else if (extension === 'obj') {
           loadedObject = await new OBJLoader().loadAsync(cacheBustedUrl);
