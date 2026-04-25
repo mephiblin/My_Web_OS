@@ -53,6 +53,7 @@
       <button id="animation" disabled>Animation: Off</button>
       <button id="fit" title="Refit camera to the visible mesh bounds">Fit Mesh</button>
       <button id="home" title="Reset camera to the current model center">Home View</button>
+      <button id="reset" title="Recreate the renderer and reload the current model">Reset Renderer</button>
       <button id="shot">Screenshot</button>
       <a id="download" href="#" download>Download</a>
     </div>
@@ -78,6 +79,7 @@
       const animationEl = document.getElementById('animation');
       const fitEl = document.getElementById('fit');
       const homeEl = document.getElementById('home');
+      const resetEl = document.getElementById('reset');
       const shotEl = document.getElementById('shot');
       const downloadEl = document.getElementById('download');
 
@@ -98,6 +100,7 @@
       let animationEnabled = false;
       let animationActions = [];
       let loadToken = 0;
+      let currentLaunchData = null;
       const clock = new THREE.Clock();
 
       function setStatus(message, error = false) {
@@ -112,6 +115,7 @@
       }
 
       function initScene() {
+        disposed = false;
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0x050816);
         camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
@@ -151,7 +155,18 @@
         const delta = clock.getDelta();
         if (animationEnabled && mixer) mixer.update(delta);
         controls?.update();
-        renderer?.render(scene, camera);
+        if (renderer && scene && camera) renderer.render(scene, camera);
+      }
+
+      function startRenderLoop() {
+        if (frameId || disposed) return;
+        clock.getDelta();
+        animate();
+      }
+
+      function stopRenderLoop() {
+        if (frameId) cancelAnimationFrame(frameId);
+        frameId = null;
       }
 
       function applyWireframe(root, enabled) {
@@ -217,6 +232,37 @@
         });
       }
 
+      function releaseViewer(final = false) {
+        if (final) disposed = true;
+        stopRenderLoop();
+        resizeObserver?.disconnect?.();
+        resizeObserver = null;
+        mixer?.stopAllAction?.();
+        mixer = null;
+        if (model) {
+          scene?.remove?.(model);
+          disposeObject(model);
+          model = null;
+        }
+        controls?.dispose?.();
+        controls = null;
+        animationActions = [];
+        animationEnabled = false;
+        axes = null;
+        if (renderer) {
+          renderer.dispose?.();
+          renderer.forceContextLoss?.();
+          renderer.domElement?.remove?.();
+          renderer = null;
+        }
+        scene = null;
+        camera = null;
+        meshCountEl.textContent = '0';
+        triCountEl.textContent = '0';
+        matCountEl.textContent = '0';
+        materialsEl.innerHTML = '';
+      }
+
       function computeMeshBox(root) {
         const box = new THREE.Box3();
         let hasMesh = false;
@@ -277,6 +323,22 @@
         }
       }
 
+      async function waitFrames(count = 2) {
+        for (let i = 0; i < count; i += 1) {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+      }
+
+      async function resetViewerForLoad() {
+        releaseViewer(false);
+        await waitFrames(2);
+        if (disposed) return;
+        initScene();
+        await waitForViewportSize();
+        resize();
+        startRenderLoop();
+      }
+
       async function loadModel(url, extension, token) {
         let loadedObject = null;
         let animations = [];
@@ -285,29 +347,22 @@
         animationEl.disabled = true;
         animationEl.classList.remove('active');
         animationEl.textContent = 'Animation: Off';
+        const cacheBustedUrl = url + (url.includes('?') ? '&' : '?') + 'viewerLoad=' + encodeURIComponent(String(token) + '-' + Date.now());
         if (extension === 'gltf' || extension === 'glb') {
-          const gltf = await new GLTFLoader().loadAsync(url);
+          const gltf = await new GLTFLoader().loadAsync(cacheBustedUrl);
           loadedObject = gltf.scene;
           animations = gltf.animations || [];
         } else if (extension === 'fbx') {
-          loadedObject = await new FBXLoader().loadAsync(url);
+          loadedObject = await new FBXLoader().loadAsync(cacheBustedUrl);
           animations = loadedObject.animations || [];
         } else if (extension === 'obj') {
-          loadedObject = await new OBJLoader().loadAsync(url);
+          loadedObject = await new OBJLoader().loadAsync(cacheBustedUrl);
         } else {
           throw new Error('Unsupported format: ' + extension);
         }
         if (token !== loadToken || disposed) {
           disposeObject(loadedObject);
           return;
-        }
-        if (model) {
-          scene.remove(model);
-          disposeObject(model);
-        }
-        if (mixer) {
-          mixer.stopAllAction();
-          mixer = null;
         }
         model = loadedObject;
         scene.add(model);
@@ -332,6 +387,7 @@
 
       async function loadFromLaunchData(launchData) {
         const token = ++loadToken;
+        currentLaunchData = launchData || null;
         const file = launchData?.fileContext?.file || {};
         const grant = launchData?.fileContext?.permissionContext || {};
         const path = file.path || launchData.path || '';
@@ -344,40 +400,20 @@
         downloadEl.href = rawUrl;
         downloadEl.download = fileName;
         setStatus('Loading ' + fileName + '...');
+        await resetViewerForLoad();
+        if (token !== loadToken || disposed) return;
         await loadModel(rawUrl, extension, token);
         if (token === loadToken && !disposed) setStatus('');
       }
 
       async function boot() {
-        initScene();
-        await waitForViewportSize();
-        resize();
-        animate();
         const context = await window.WebOS.ready();
         await loadFromLaunchData(context?.app?.launchData || {});
       }
 
       function cleanup() {
         if (disposed) return;
-        disposed = true;
-        if (frameId) cancelAnimationFrame(frameId);
-        frameId = null;
-        resizeObserver?.disconnect?.();
-        resizeObserver = null;
-        mixer?.stopAllAction?.();
-        mixer = null;
-        if (model) {
-          scene?.remove?.(model);
-          disposeObject(model);
-          model = null;
-        }
-        controls?.dispose?.();
-        controls = null;
-        animationActions = [];
-        renderer?.dispose?.();
-        renderer?.forceContextLoss?.();
-        renderer?.domElement?.remove?.();
-        renderer = null;
+        releaseViewer(true);
       }
 
       window.addEventListener('message', (event) => {
@@ -414,7 +450,12 @@
       });
       fitEl.addEventListener('click', () => model && frameModel(model));
       homeEl.addEventListener('click', homeView);
+      resetEl.addEventListener('click', () => {
+        if (!currentLaunchData) return;
+        loadFromLaunchData(currentLaunchData).catch((err) => setStatus(err?.message || 'Failed to reset renderer.', true));
+      });
       shotEl.addEventListener('click', () => {
+        if (!renderer) return;
         renderer.render(scene, camera);
         const link = document.createElement('a');
         link.href = renderer.domElement.toDataURL('image/png');
