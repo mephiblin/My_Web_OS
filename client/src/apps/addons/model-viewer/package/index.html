@@ -50,6 +50,7 @@
       <div class="title" id="title">Model Viewer</div>
       <button id="wireframe">Wireframe</button>
       <button id="axes" class="active">Axes</button>
+      <button id="animation" disabled>Animation: Off</button>
       <button id="fit">Fit</button>
       <button id="shot">Screenshot</button>
       <a id="download" href="#" download>Download</a>
@@ -73,6 +74,7 @@
       const materialsEl = document.getElementById('materials');
       const wireframeEl = document.getElementById('wireframe');
       const axesEl = document.getElementById('axes');
+      const animationEl = document.getElementById('animation');
       const fitEl = document.getElementById('fit');
       const shotEl = document.getElementById('shot');
       const downloadEl = document.getElementById('download');
@@ -91,6 +93,8 @@
       let fileName = 'model';
       let wireframe = false;
       let axesVisible = true;
+      let animationEnabled = false;
+      let animationActions = [];
       const clock = new THREE.Clock();
 
       function setStatus(message, error = false) {
@@ -142,7 +146,7 @@
         if (disposed) return;
         frameId = requestAnimationFrame(animate);
         const delta = clock.getDelta();
-        if (mixer) mixer.update(delta);
+        if (animationEnabled && mixer) mixer.update(delta);
         controls?.update();
         renderer?.render(scene, camera);
       }
@@ -246,6 +250,11 @@
       async function loadModel(url, extension) {
         let loadedObject = null;
         let animations = [];
+        animationEnabled = false;
+        animationActions = [];
+        animationEl.disabled = true;
+        animationEl.classList.remove('active');
+        animationEl.textContent = 'Animation: Off';
         if (extension === 'gltf' || extension === 'glb') {
           const gltf = await new GLTFLoader().loadAsync(url);
           loadedObject = gltf.scene;
@@ -270,7 +279,16 @@
         scene.add(model);
         if (animations.length > 0) {
           mixer = new THREE.AnimationMixer(model);
-          animations.forEach((clip) => mixer.clipAction(clip).play());
+          animationActions = animations.map((clip) => {
+            const action = mixer.clipAction(clip);
+            action.enabled = true;
+            action.paused = true;
+            action.play();
+            return action;
+          });
+          mixer.setTime(0);
+          animationEl.disabled = false;
+          animationEl.textContent = `Animation: Off (${animations.length})`;
         }
         applyWireframe(model, wireframe);
         frameModel(model);
@@ -317,6 +335,7 @@
         }
         controls?.dispose?.();
         controls = null;
+        animationActions = [];
         renderer?.dispose?.();
         renderer?.forceContextLoss?.();
         renderer?.domElement?.remove?.();
@@ -332,6 +351,19 @@
         axesVisible = !axesVisible;
         axesEl.classList.toggle('active', axesVisible);
         if (axes) axes.visible = axesVisible;
+      });
+      animationEl.addEventListener('click', () => {
+        if (!mixer || animationActions.length === 0) return;
+        animationEnabled = !animationEnabled;
+        animationActions.forEach((action) => {
+          action.paused = !animationEnabled;
+        });
+        animationEl.classList.toggle('active', animationEnabled);
+        animationEl.textContent = animationEnabled ? `Animation: On (${animationActions.length})` : `Animation: Off (${animationActions.length})`;
+        if (!animationEnabled) {
+          mixer.setTime(0);
+          frameModel(model);
+        }
       });
       fitEl.addEventListener('click', () => model && frameModel(model));
       shotEl.addEventListener('click', () => {
