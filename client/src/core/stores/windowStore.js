@@ -5,6 +5,64 @@ import { windowDefaultsSettings } from './windowDefaultsStore.js';
 export const windows = writable([]);
 export const activeWindowId = writable(null);
 let isInitialized = false;
+const MAX_RESTORED_WINDOWS = 12;
+const TASKBAR_SAFE_HEIGHT = 56;
+
+function getViewportBounds() {
+  const width = typeof globalThis !== 'undefined' && Number.isFinite(globalThis.innerWidth)
+    ? globalThis.innerWidth
+    : 1280;
+  const height = typeof globalThis !== 'undefined' && Number.isFinite(globalThis.innerHeight)
+    ? globalThis.innerHeight
+    : 720;
+  return {
+    width,
+    height: Math.max(320, height - TASKBAR_SAFE_HEIGHT)
+  };
+}
+
+function clampNumber(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(Math.max(numeric, min), max);
+}
+
+function normalizeWindowPlacement(win, index = 0) {
+  const bounds = getViewportBounds();
+  const defaults = get(windowDefaultsSettings);
+  const width = clampNumber(win.width, defaults.defaultWidth, 280, Math.max(320, bounds.width));
+  const height = clampNumber(win.height, defaults.defaultHeight, 220, Math.max(260, bounds.height));
+  const maxX = Math.max(0, bounds.width - Math.min(width, bounds.width) - 16);
+  const maxY = Math.max(0, bounds.height - Math.min(height, bounds.height) - 16);
+  const fallbackX = 80 + (index % 8) * 32;
+  const fallbackY = 70 + (index % 8) * 32;
+
+  return {
+    ...win,
+    appId: win.appId || win.id,
+    x: clampNumber(win.x, fallbackX, 0, maxX),
+    y: clampNumber(win.y, fallbackY, 0, maxY),
+    width,
+    height
+  };
+}
+
+function normalizeRestoredWindows(restoredWindows = []) {
+  return restoredWindows
+    .slice(-MAX_RESTORED_WINDOWS)
+    .map((win, index) => normalizeWindowPlacement(win, index));
+}
+
+function nextWindowPosition(items, width, height) {
+  const bounds = getViewportBounds();
+  const maxX = Math.max(0, bounds.width - Math.min(width, bounds.width) - 16);
+  const maxY = Math.max(0, bounds.height - Math.min(height, bounds.height) - 16);
+  const slot = items.filter((item) => item.desktopId === get(currentDesktopId)).length % 8;
+  return {
+    x: Math.min(100 + slot * 30, maxX),
+    y: Math.min(90 + slot * 30, maxY)
+  };
+}
 
 export const initWindows = async () => {
   try {
@@ -16,8 +74,12 @@ export const initWindows = async () => {
 
     const json = await res.json();
     if (json.data && json.data.windows) {
-      windows.set(json.data.windows.map(w => ({ ...w, appId: w.appId || w.id })));
-      activeWindowId.set(json.data.active || null);
+      const restoredWindows = normalizeRestoredWindows(json.data.windows);
+      const restoredActive = restoredWindows.some((w) => w.id === json.data.active)
+        ? json.data.active
+        : restoredWindows.at(-1)?.id || null;
+      windows.set(restoredWindows);
+      activeWindowId.set(restoredActive);
       isInitialized = true;
     }
   } catch (e) {
@@ -68,16 +130,19 @@ export function openWindow(app, data = null) {
   windows.update(items => {
     const maxZ = items.length > 0 ? Math.max(...items.map(w => w.zIndex)) : 50;
     const newId = `${app.id}-${Date.now()}`;
+    const width = Number.isFinite(Number(mergedWindowConfig.width)) ? Number(mergedWindowConfig.width) : defaults.defaultWidth;
+    const height = Number.isFinite(Number(mergedWindowConfig.height)) ? Number(mergedWindowConfig.height) : defaults.defaultHeight;
+    const position = nextWindowPosition(items, width, height);
 
     const newWindow = {
       ...app,
       id: newId, // Use unique ID as the primary 'id'
       appId: app.id, // Keep original app ID for component lookup
       data,
-      x: 100 + items.length * 30,
-      y: 100 + items.length * 30,
-      width: Number.isFinite(Number(mergedWindowConfig.width)) ? Number(mergedWindowConfig.width) : defaults.defaultWidth,
-      height: Number.isFinite(Number(mergedWindowConfig.height)) ? Number(mergedWindowConfig.height) : defaults.defaultHeight,
+      x: position.x,
+      y: position.y,
+      width,
+      height,
       minimized: false,
       maximized: false,
       zIndex: maxZ + 1,
