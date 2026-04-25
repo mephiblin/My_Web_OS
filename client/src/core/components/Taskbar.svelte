@@ -1,15 +1,15 @@
 <script>
-  import { Shield, Search, Settings, Bell, LayoutGrid, Bot, AlertTriangle, XCircle, CheckCircle, Loader, Terminal, Ear, Play } from 'lucide-svelte';
+  import { Shield, Search, Bell, LayoutGrid, Bot, AlertTriangle, XCircle, CheckCircle, Loader, Terminal, Ear, Play } from 'lucide-svelte';
   import { windows, activeWindowId, focusWindow, toggleMinimize } from '../stores/windowStore.js';
   import { desktops, currentDesktopId, switchDesktop, layoutEditMode, toggleLayoutEditMode } from '../stores/desktopStore.js';
   import { notifications } from '../stores/notificationStore.js';
   import { openSpotlight } from '../stores/spotlightStore.js';
   import { taskbarSettings } from '../stores/taskbarStore.js';
   import { agentStore } from '../stores/agentStore.js';
+  import { i18n, translateWith } from '../i18n/index.js';
 
   let {
     time,
-    onOpenSettings,
     onToggleNotifications,
     isNotificationCenterOpen,
     onToggleStartMenu,
@@ -54,6 +54,14 @@
     return Bot;
   }
 
+  function cycleDesktop() {
+    const list = Array.isArray($desktops) ? $desktops : [];
+    if (list.length === 0) return;
+    const currentIndex = list.findIndex((item) => Number(item.id) === Number($currentDesktopId));
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % list.length;
+    switchDesktop(list[nextIndex].id);
+  }
+
   $effect(() => {
     onStartButtonReady?.(startButtonEl);
   });
@@ -64,46 +72,18 @@
     <button
       class="start-menu-btn {isStartMenuOpen ? 'active' : ''}"
       onclick={onToggleStartMenu}
-      title="Start Menu"
-      aria-label="Start Menu"
+      title={translateWith($i18n, 'taskbar.startMenu', {}, 'Start Menu')}
+      aria-label={translateWith($i18n, 'taskbar.startMenu', {}, 'Start Menu')}
       bind:this={startButtonEl}
     >
       <Shield size={iconPixel + 2} />
     </button>
   {/if}
-  {#if $agentStore.visible}
-    <button
-      class="start-menu-btn agent-task-btn {$agentStore.isOpen ? 'active' : ''}"
-      onclick={() => agentStore.togglePanel()}
-      title="Agent Chat"
-      aria-label="Agent Chat"
-      style="--agent-status-color: {agentStatusColor};"
-    >
-      <span class:spin={$agentStore.status === 'thinking'}>
-        {#if agentIcon === Ear}
-          <Ear size={iconPixel + 1} />
-        {:else if agentIcon === Loader}
-          <Loader size={iconPixel + 1} />
-        {:else if agentIcon === Play}
-          <Play size={iconPixel + 1} />
-        {:else if agentIcon === CheckCircle}
-          <CheckCircle size={iconPixel + 1} />
-        {:else if agentIcon === AlertTriangle}
-          <AlertTriangle size={iconPixel + 1} />
-        {:else if agentIcon === XCircle}
-          <XCircle size={iconPixel + 1} />
-        {:else if agentIcon === Terminal}
-          <Terminal size={iconPixel + 1} />
-        {:else}
-          <Bot size={iconPixel + 1} />
-        {/if}
-      </span>
-    </button>
-  {/if}
-
   {#if $taskbarSettings.showDesktopSwitcher}
     <div class="desktop-switcher">
-      <span class="desktop-num">{$currentDesktopId}</span>
+      <button class="desktop-num" type="button" onclick={cycleDesktop} title={translateWith($i18n, 'taskbar.nextDesktop', {}, 'Next desktop')}>
+        {$currentDesktopId}
+      </button>
       {#each $desktops as desktop}
         <button 
           class="desktop-btn {$currentDesktopId === desktop.id ? 'active' : ''}"
@@ -115,9 +95,9 @@
       <button
         class="layout-edit-btn {$layoutEditMode ? 'active' : ''}"
         onclick={toggleLayoutEditMode}
-        title="Desktop layout edit mode"
+        title={translateWith($i18n, 'taskbar.layoutEditMode', {}, 'Desktop layout edit mode')}
       >
-        Edit
+        {translateWith($i18n, 'taskbar.edit', {}, 'Edit')}
       </button>
     </div>
   {/if}
@@ -125,7 +105,7 @@
   {#if $taskbarSettings.showSearch}
     <button class="taskbar-search" type="button" onclick={openSpotlight}>
       <Search size={$taskbarSettings.compactMode ? 13 : 14} />
-      <span>Search...</span>
+      <span>{translateWith($i18n, 'taskbar.searchPlaceholder', {}, 'Search...')}</span>
     </button>
   {/if}
 
@@ -153,11 +133,37 @@
 
   {#if $taskbarSettings.showSystemTray}
     <div class="system-tray">
-      <button class="tray-btn" onclick={onOpenSettings} title="Settings">
-        <Settings size={iconPixel} />
-      </button>
+      {#if $agentStore.visible}
+        <button
+          class="tray-btn agent-task-btn {$agentStore.isOpen ? 'active' : ''}"
+          onclick={() => agentStore.togglePanel()}
+          title={translateWith($i18n, 'taskbar.agentChat', {}, 'Agent Chat')}
+          aria-label={translateWith($i18n, 'taskbar.agentChat', {}, 'Agent Chat')}
+          style="--agent-status-color: {agentStatusColor};"
+        >
+          <span class:spin={$agentStore.status === 'thinking'}>
+            {#if agentIcon === Ear}
+              <Ear size={iconPixel + 1} />
+            {:else if agentIcon === Loader}
+              <Loader size={iconPixel + 1} />
+            {:else if agentIcon === Play}
+              <Play size={iconPixel + 1} />
+            {:else if agentIcon === CheckCircle}
+              <CheckCircle size={iconPixel + 1} />
+            {:else if agentIcon === AlertTriangle}
+              <AlertTriangle size={iconPixel + 1} />
+            {:else if agentIcon === XCircle}
+              <XCircle size={iconPixel + 1} />
+            {:else if agentIcon === Terminal}
+              <Terminal size={iconPixel + 1} />
+            {:else}
+              <Bot size={iconPixel + 1} />
+            {/if}
+          </span>
+        </button>
+      {/if}
       
-      <button class="tray-btn {isNotificationCenterOpen ? 'active' : ''}" onclick={onToggleNotifications} title="Notifications">
+      <button class="tray-btn {isNotificationCenterOpen ? 'active' : ''}" onclick={onToggleNotifications} title={translateWith($i18n, 'taskbar.notifications', {}, 'Notifications')}>
         <div class="icon-wrapper">
           <Bell size={iconPixel} />
           {#if unreadCount > 0}
@@ -233,7 +239,26 @@
   }
 
   .desktop-switcher { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-right: 1px solid rgba(255,255,255,0.1); }
-  .desktop-num { font-size: 11px; font-weight: 600; color: white; opacity: 0.6; margin-right: 2px; }
+  .desktop-num {
+    font-size: 11px;
+    font-weight: 600;
+    color: white;
+    opacity: 0.72;
+    margin-right: 2px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    height: 22px;
+    min-width: 22px;
+    padding: 0 6px;
+    cursor: pointer;
+  }
+  .desktop-num:hover,
+  .desktop-num:focus-visible {
+    background: rgba(255,255,255,0.12);
+    opacity: 1;
+    outline: none;
+  }
   .desktop-btn { 
     position: relative;
     width: 6px; 

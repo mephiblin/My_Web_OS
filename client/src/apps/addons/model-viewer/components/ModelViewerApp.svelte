@@ -14,7 +14,7 @@
   let canvas = $state(null);
   let loading = $state(true);
   let error = $state(null);
-  let statusMessage = $state('Initializing Scene...');
+  let statusMessage = $state('장면 초기화 중...');
   let hasAnimations = $state(false);
   let isPlaying = $state(true);
   let wireframeEnabled = $state(false);
@@ -106,14 +106,14 @@
 
   async function loadModel(path) {
     if (!path) {
-      error = "No file path provided";
+      error = "파일 경로가 없습니다.";
       loading = false;
       return;
     }
 
     loading = true;
     error = null;
-    statusMessage = "Loading Model...";
+    statusMessage = "모델 불러오는 중...";
     hasAnimations = false;
     materialRows = [];
     meshCount = 0;
@@ -134,7 +134,7 @@
         loader.setRequestHeader(headers);
         const gltf = await new Promise((resolve, reject) => {
           loader.load(fileUrl, resolve, (xhr) => {
-            statusMessage = `Downloading: ${Math.round((xhr.loaded / xhr.total) * 100)}%`;
+            statusMessage = `다운로드: ${Math.round((xhr.loaded / xhr.total) * 100)}%`;
           }, reject);
         });
         loadedObject = gltf.scene;
@@ -153,7 +153,7 @@
           loader.load(fileUrl, resolve, undefined, reject);
         });
       } else {
-        throw new Error(`Unsupported format: ${extension}`);
+        throw new Error(`지원하지 않는 형식입니다: ${extension}`);
       }
 
       if (loadedObject) {
@@ -222,7 +222,7 @@
       }
 
     } catch (err) {
-      error = `Failed to load model: ${err.message}`;
+      error = `모델을 불러오지 못했습니다: ${err.message}`;
     } finally {
       loading = false;
     }
@@ -263,7 +263,7 @@
       link.click();
       document.body.removeChild(link);
     } catch (err) {
-      error = `Failed to save screenshot: ${err.message}`;
+      error = `스크린샷 저장에 실패했습니다: ${err.message}`;
     }
   }
 
@@ -304,18 +304,18 @@
     <div class="overlay glass-modal error">
       <AlertCircle size={48} class="error-icon" />
       <span class="error-text">{error}</span>
-      <button class="retry-btn" onclick={() => loadModel(data.path)}>Retry</button>
+      <button class="retry-btn" onclick={() => loadModel(data.path)}>다시 시도</button>
     </div>
   {/if}
 
   <div class="controls-panel glass-effect">
     <div class="file-info">
       <Box size={16} />
-      <span class="filename">{data?.path?.split('/').pop() || 'Untitled 3D Scene'}</span>
+      <span class="filename">{data?.path?.split('/').pop() || '제목 없는 3D 장면'}</span>
     </div>
     <div class="actions">
       {#if hasAnimations}
-        <button onclick={() => isPlaying = !isPlaying} title={isPlaying ? "Pause Animation" : "Play Animation"}>
+        <button onclick={() => isPlaying = !isPlaying} title={isPlaying ? "애니메이션 일시정지" : "애니메이션 재생"}>
           {#if isPlaying}
             <Pause size={16} />
           {:else}
@@ -324,31 +324,31 @@
         </button>
         <div class="separator"></div>
       {/if}
-      <button onclick={toggleWireframe} class:active={wireframeEnabled} title="Wireframe"><Grid3X3 size={16} /></button>
-      <button onclick={toggleAxes} class:active={axesEnabled} title="Axes"><ScanEye size={16} /></button>
-      <button onclick={() => showInspector = !showInspector} class:active={showInspector} title="Inspector"><Info size={16} /></button>
-      <button onclick={saveScreenshot} title="Save Screenshot"><Camera size={16} /></button>
-      <button onclick={() => { if (controls) controls.reset(); }} title="Reset View"><RotateCcw size={16} /></button>
-      <button onclick={handleResize} title="Fit to Screen"><Maximize2 size={16} /></button>
+      <button onclick={toggleWireframe} class:active={wireframeEnabled} title="와이어프레임"><Grid3X3 size={16} /></button>
+      <button onclick={toggleAxes} class:active={axesEnabled} title="축 표시"><ScanEye size={16} /></button>
+      <button onclick={() => showInspector = !showInspector} class:active={showInspector} title="검사기"><Info size={16} /></button>
+      <button onclick={saveScreenshot} title="스크린샷 저장"><Camera size={16} /></button>
+      <button onclick={() => { if (controls) controls.reset(); }} title="뷰 초기화"><RotateCcw size={16} /></button>
+      <button onclick={handleResize} title="화면에 맞춤"><Maximize2 size={16} /></button>
     </div>
   </div>
 
   {#if showInspector}
     <aside class="inspector-panel glass-effect">
-      <div class="inspector-header">Inspection</div>
+      <div class="inspector-header">검사</div>
       <div class="inspector-grid">
-        <div class="metric"><span>Meshes</span><strong>{meshCount}</strong></div>
-        <div class="metric"><span>Triangles</span><strong>{triangleCount}</strong></div>
-        <div class="metric"><span>Materials</span><strong>{materialRows.length}</strong></div>
+        <div class="metric"><span>메시</span><strong>{meshCount}</strong></div>
+        <div class="metric"><span>삼각형</span><strong>{triangleCount}</strong></div>
+        <div class="metric"><span>재질</span><strong>{materialRows.length}</strong></div>
       </div>
       <div class="material-list">
         {#if materialRows.length === 0}
-          <div class="empty-materials">No material data.</div>
+          <div class="empty-materials">재질 정보가 없습니다.</div>
         {:else}
           {#each materialRows as material (material.id)}
             <div class="material-row">
               <div class="name">{material.name}</div>
-              <div class="meta">{material.type} · Color {material.color} · Map {material.map}</div>
+              <div class="meta">{material.type} · 색상 {material.color} · 맵 {material.map}</div>
             </div>
           {/each}
         {/if}

@@ -5,30 +5,34 @@
   import { openWindow } from './stores/windowStore.js';
   import { addToast } from './stores/toastStore.js';
   import * as fsApi from '../apps/system/file-explorer/api.js';
+  import { i18n, localizeAppTitle, translateWith } from './i18n/index.js';
 
   let inputEl = $state(null);
   let results = $state([]);
   let selectedIndex = $state(0);
 
   // Mock apps list (in a real app, this should be a global store of apps)
-  const apps = [
-    { id: 'files', title: 'File Station', icon: File },
-    { id: 'terminal', title: 'Terminal', icon: Command },
-    { id: 'monitor', title: 'Resource Monitor', icon: Settings, singleton: true },
-    { id: 'docker', title: 'Docker', icon: AppWindow, singleton: true },
-    { id: 'download-station', title: 'Download Station', icon: ArrowDownToLine, singleton: true },
-    { id: 'photo-station', title: 'Photo Station', icon: Image, singleton: true },
-    { id: 'music-station', title: 'Music Station', icon: Music, singleton: true },
-    { id: 'document-station', title: 'Document Station', icon: FileText, singleton: true },
-    { id: 'video-station', title: 'Video Station', icon: Video, singleton: true },
-    { id: 'control-panel', title: 'Settings', icon: Settings, singleton: true }
-  ];
+  const apps = $derived.by(() => {
+    const items = [
+      { id: 'files', title: 'File Station', icon: File },
+      { id: 'terminal', title: 'Terminal', icon: Command },
+      { id: 'monitor', title: 'Resource Monitor', icon: Settings, singleton: true },
+      { id: 'docker', title: 'Docker', icon: AppWindow, singleton: true },
+      { id: 'download-station', title: 'Download Station', icon: ArrowDownToLine, singleton: true },
+      { id: 'photo-station', title: 'Photo Station', icon: Image, singleton: true },
+      { id: 'music-station', title: 'Music Station', icon: Music, singleton: true },
+      { id: 'document-station', title: 'Document Station', icon: FileText, singleton: true },
+      { id: 'video-station', title: 'Video Station', icon: Video, singleton: true },
+      { id: 'control-panel', title: 'Settings', icon: Settings, singleton: true }
+    ];
+    return items.map((item) => ({ ...item, title: localizeAppTitle(item, $i18n) }));
+  });
 
-  const actions = [
-    { id: 'logout', title: 'Log Out', icon: LogOut, type: 'action' },
-    { id: 'reboot', title: 'Reboot', icon: RefreshCw, type: 'action' },
-    { id: 'shutdown', title: 'Shut Down', icon: Power, type: 'action' }
-  ];
+  const actions = $derived([
+    { id: 'logout', title: translateWith($i18n, 'spotlight.action.logout', {}, 'Log Out'), icon: LogOut, type: 'action' },
+    { id: 'reboot', title: translateWith($i18n, 'spotlight.action.reboot', {}, 'Reboot'), icon: RefreshCw, type: 'action' },
+    { id: 'shutdown', title: translateWith($i18n, 'spotlight.action.shutdown', {}, 'Shut Down'), icon: Power, type: 'action' }
+  ]);
 
   $effect(() => {
     if ($spotlightVisible && inputEl) {
@@ -46,8 +50,8 @@
       return;
     }
 
-    const appResults = apps.filter(a => a.title.toLowerCase().includes(q));
-    const actionResults = actions.filter(a => a.title.toLowerCase().includes(q));
+    const appResults = $apps.filter(a => a.title.toLowerCase().includes(q));
+    const actionResults = $actions.filter(a => a.title.toLowerCase().includes(q));
     
     results = [...appResults, ...actionResults];
     selectedIndex = 0;
@@ -59,7 +63,9 @@
         const mappedFiles = fileResults.map(f => ({
           id: f.path,
           title: f.name,
-          type: f.type === 'dir' ? 'Folder' : 'File',
+          type: f.type === 'dir'
+            ? translateWith($i18n, 'spotlight.folderType', {}, 'Folder')
+            : translateWith($i18n, 'spotlight.fileType', {}, 'File'),
           icon: f.type === 'dir' ? Folder : File,
           path: f.path
         }));
@@ -89,11 +95,19 @@
 
   function executeResult(item) {
     if (item.type === 'action') {
-      addToast(`${item.title} action triggered (Mock)`, 'info');
-    } else if (item.type === 'File') {
-      openWindow({ id: 'editor', title: `Editor - ${item.title}`, icon: File }, { path: item.path });
-    } else if (item.type === 'Folder') {
-      openWindow({ id: 'files', title: 'File Station', icon: Folder }); // Opening folder directly may require state passing. Usually ok to just open File Station.
+      addToast(translateWith($i18n, 'spotlight.actionTriggered', { title: item.title }, `${item.title} action triggered (Mock)`), 'info');
+    } else if (item.type === translateWith($i18n, 'spotlight.fileType', {}, 'File')) {
+      openWindow({
+        id: 'editor',
+        title: translateWith($i18n, 'spotlight.editorTitlePrefix', { title: item.title }, `Editor - ${item.title}`),
+        icon: File
+      }, { path: item.path });
+    } else if (item.type === translateWith($i18n, 'spotlight.folderType', {}, 'Folder')) {
+      openWindow({
+        id: 'files',
+        title: localizeAppTitle({ id: 'files', title: 'File Station' }, $i18n),
+        icon: Folder
+      });
     } else {
       openWindow(item);
     }
@@ -107,7 +121,7 @@
       class="spotlight-box glass-effect"
       role="dialog"
       aria-modal="true"
-      aria-label="Spotlight Search"
+      aria-label={translateWith($i18n, 'spotlight.ariaLabel', {}, 'Spotlight Search')}
       tabindex="-1"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
@@ -117,7 +131,7 @@
         <input 
           bind:this={inputEl}
           bind:value={$spotlightQuery}
-          placeholder="Spotlight Search..."
+          placeholder={translateWith($i18n, 'spotlight.placeholder', {}, 'Spotlight Search...')}
           spellcheck="false"
         />
         <div class="shortcut">
@@ -138,13 +152,13 @@
                 <ResultIcon size={20} />
               </div>
               <span class="title">{result.title}</span>
-              <span class="type">{result.type || 'App'}</span>
+              <span class="type">{result.type || translateWith($i18n, 'spotlight.appType', {}, 'App')}</span>
             </button>
           {/each}
         </div>
       {:else if $spotlightQuery}
         <div class="no-results">
-          <p>No results for "{$spotlightQuery}"</p>
+          <p>{translateWith($i18n, 'spotlight.noResults', { query: $spotlightQuery }, `No results for "${$spotlightQuery}"`)}</p>
         </div>
       {/if}
     </div>

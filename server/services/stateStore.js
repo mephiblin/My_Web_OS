@@ -7,10 +7,12 @@ const DEFAULT_SETTINGS = {
   blurIntensity: 20,
   transparency: 0.05,
   accentColor: '#58a6ff',
+  language: 'en',
   wallpaperType: 'css',
   wallpaper: 'linear-gradient(135deg, #1e2a3a 0%, #0d1117 100%)',
   wallpaperId: 'default',
-  wallpaperFit: 'cover'
+  wallpaperFit: 'cover',
+  desktopIconScale: 1
 };
 
 const DEFAULT_WINDOWS = {
@@ -40,7 +42,9 @@ const DEFAULT_DESKTOPS = {
 const DEFAULT_START_MENU = {
   pinnedAppIds: [],
   recentAppIds: [],
-  layout: 'default'
+  layout: 'default',
+  keepOpenOnDesktopClick: false,
+  presentation: 'drawer'
 };
 
 const DEFAULT_TASKBAR = {
@@ -167,10 +171,12 @@ function normalizeSettings(value) {
     blurIntensity: asNumber(value.blurIntensity, DEFAULT_SETTINGS.blurIntensity),
     transparency: asNumber(value.transparency, DEFAULT_SETTINGS.transparency),
     accentColor: asString(value.accentColor, DEFAULT_SETTINGS.accentColor),
+    language: asString(value.language, DEFAULT_SETTINGS.language).toLowerCase(),
     wallpaperType,
     wallpaper: asString(value.wallpaper, DEFAULT_SETTINGS.wallpaper),
     wallpaperId: asString(value.wallpaperId, DEFAULT_SETTINGS.wallpaperId),
-    wallpaperFit
+    wallpaperFit,
+    desktopIconScale: asNumberInRange(value.desktopIconScale, DEFAULT_SETTINGS.desktopIconScale, 0.8, 1.25)
   };
 }
 
@@ -254,7 +260,10 @@ function normalizeShortcuts(value) {
         name,
         path: itemPath,
         isDirectory: Boolean(item.isDirectory),
-        ext: asString(item.ext, name.split('.').pop().toLowerCase())
+        ext: asString(item.ext, name.split('.').pop().toLowerCase()),
+        desktopId: asNumber(item.desktopId, 1),
+        gridX: asNumber(item.gridX, -1) >= 0 ? asNumber(item.gridX, -1) : null,
+        gridY: asNumber(item.gridY, -1) >= 0 ? asNumber(item.gridY, -1) : null
       };
     })
     .filter(Boolean);
@@ -306,11 +315,16 @@ function normalizeStartMenu(value) {
   const layout = ['default', 'compact', 'wide'].includes(value.layout)
     ? value.layout
     : DEFAULT_START_MENU.layout;
+  const presentation = ['drawer', 'windows'].includes(value.presentation)
+    ? value.presentation
+    : DEFAULT_START_MENU.presentation;
 
   return {
     pinnedAppIds: normalizeStringList(value.pinnedAppIds),
     recentAppIds: normalizeStringList(value.recentAppIds),
-    layout
+    layout,
+    keepOpenOnDesktopClick: value.keepOpenOnDesktopClick === true,
+    presentation
   };
 }
 

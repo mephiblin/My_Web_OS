@@ -8,6 +8,7 @@ const si = require('systeminformation');
 const auth = require('../middleware/auth');
 const auditService = require('../services/auditService');
 const packageRegistryService = require('../services/packageRegistryService');
+const languagePackService = require('../services/languagePackService');
 const { APP_API_POLICY, checkCompatibility } = require('../services/appApiPolicy');
 const storageService = require('../services/storageService');
 const stateStore = require('../services/stateStore');
@@ -296,6 +297,15 @@ function sendMediaLibraryError(res, err) {
   });
 }
 
+function sendLanguagePackError(res, err) {
+  return res.status(err.status || 500).json({
+    error: true,
+    code: err.code || 'LANGUAGE_PACK_INTERNAL_ERROR',
+    message: err.message || 'Language pack operation failed.',
+    details: err.details || null
+  });
+}
+
 function getWallpaperKindByExtension(extension) {
   if (WALLPAPER_IMAGE_EXTENSIONS.has(extension)) return 'image';
   if (WALLPAPER_VIDEO_EXTENSIONS.has(extension)) return 'video';
@@ -375,6 +385,26 @@ const uploadWP = multer({
     } catch (err) {
       cb(err);
     }
+  }
+});
+
+const uploadLanguagePack = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: languagePackService.LANGUAGE_PACK_UPLOAD_MAX_BYTES
+  },
+  fileFilter: (_req, file, cb) => {
+    const extension = path.extname(String(file.originalname || '')).toLowerCase();
+    if (extension !== '.json') {
+      return cb(
+        languagePackService.createLanguagePackError(
+          400,
+          'LANGUAGE_PACK_UPLOAD_UNSUPPORTED_FILE',
+          'Language pack upload supports only .json files.'
+        )
+      );
+    }
+    return cb(null, true);
   }
 });
 
@@ -728,6 +758,103 @@ router.post('/wallpapers/import', async (req, res) => {
       res,
       createMediaLibraryError(500, 'MEDIA_LIBRARY_IMPORT_FAILED', err.message || 'Wallpaper import failed.')
     );
+  }
+});
+
+/**
+ * GET /api/system/language-packs
+ * List builtin and uploaded language packs for core desktop UI.
+ */
+router.get('/language-packs', async (_req, res) => {
+  try {
+    const packs = await languagePackService.listLanguagePacks();
+    return res.json({
+      success: true,
+      data: packs
+    });
+  } catch (err) {
+    return sendLanguagePackError(res, err);
+  }
+});
+
+/**
+ * POST /api/system/language-packs/upload
+ * Upload runtime language pack JSON file.
+ */
+router.post('/language-packs/upload', (req, res) => {
+  uploadLanguagePack.single('file')(req, res, async (err) => {
+    try {
+      if (err) {
+        if (err.code && String(err.code).startsWith('LANGUAGE_PACK_')) {
+          return sendLanguagePackError(res, err);
+        }
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return sendLanguagePackError(
+            res,
+            languagePackService.createLanguagePackError(
+              400,
+              'LANGUAGE_PACK_UPLOAD_TOO_LARGE',
+              `Language pack file must be <= ${languagePackService.LANGUAGE_PACK_UPLOAD_MAX_BYTES} bytes.`
+            )
+          );
+        }
+        return sendLanguagePackError(
+          res,
+          languagePackService.createLanguagePackError(
+            500,
+            'LANGUAGE_PACK_UPLOAD_FAILED',
+            err.message || 'Language pack upload failed.'
+          )
+        );
+      }
+
+      if (!req.file) {
+        return sendLanguagePackError(
+          res,
+          languagePackService.createLanguagePackError(
+            400,
+            'LANGUAGE_PACK_UPLOAD_FILE_REQUIRED',
+            'Upload file is required.'
+          )
+        );
+      }
+
+      const savedPack = await languagePackService.saveUploadedLanguagePackFromBuffer(req.file.buffer);
+      await auditService.log(
+        'SYSTEM',
+        'Upload Language Pack',
+        {
+          user: req.user?.username,
+          code: savedPack.code,
+          fileName: savedPack.fileName,
+          source: savedPack.source
+        },
+        'INFO'
+      );
+
+      return res.status(201).json({
+        success: true,
+        data: savedPack
+      });
+    } catch (routeErr) {
+      return sendLanguagePackError(res, routeErr);
+    }
+  });
+});
+
+/**
+ * GET /api/system/language-packs/:code
+ * Get one language pack payload for runtime i18n usage.
+ */
+router.get('/language-packs/:code', async (req, res) => {
+  try {
+    const pack = await languagePackService.getLanguagePack(req.params.code);
+    return res.json({
+      success: true,
+      data: pack
+    });
+  } catch (err) {
+    return sendLanguagePackError(res, err);
   }
 });
 

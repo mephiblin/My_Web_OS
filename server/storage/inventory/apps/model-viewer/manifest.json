@@ -1,7 +1,7 @@
 {
   "id": "model-viewer",
-  "title": "Model Viewer",
-  "description": "3D model preview addon for GLTF, GLB, FBX, and OBJ files.",
+  "title": "모델 뷰어",
+  "description": "GLTF/GLB/FBX/OBJ 3D 모델 미리보기 애드온",
   "version": "1.0.0",
   "type": "app",
   "singleton": true,
@@ -47,7 +47,7 @@
   "contributes": {
     "fileContextMenu": [
       {
-        "label": "Open in Model Viewer",
+        "label": "모델 뷰어로 열기",
         "action": "open",
         "extensions": [
           "gltf",
@@ -60,7 +60,7 @@
     "fileCreateTemplates": [],
     "previewProviders": [
       {
-        "label": "3D Model Preview",
+        "label": "3D 모델 미리보기",
         "extensions": [
           "gltf",
           "glb",
@@ -71,7 +71,7 @@
     ],
     "thumbnailProviders": [
       {
-        "label": "3D Model Thumbnail",
+        "label": "3D 모델 썸네일",
         "extensions": [
           "gltf",
           "glb",

@@ -3,18 +3,51 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Document Viewer</title>
+    <title>문서 뷰어</title>
     <style>
       :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
-      body { margin: 0; height: 100vh; display: grid; grid-template-rows: 48px 1fr; background: #111827; color: #e5e7eb; }
-      header { display: flex; align-items: center; gap: 12px; padding: 0 14px; background: #0f172a; border-bottom: 1px solid #253044; }
+      body {
+        margin: 0;
+        height: 100vh;
+        display: grid;
+        grid-template-rows: 50px 1fr;
+        background: radial-gradient(circle at 15% 0%, #1d2f4f 0%, #0e1729 44%, #070d18 100%);
+        color: #e5e7eb;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 14px;
+        background: rgba(15, 23, 42, 0.58);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+      }
       .title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
       .badge { border: 1px solid #475569; border-radius: 999px; padding: 3px 8px; color: #cbd5e1; font-size: 12px; }
-      input { width: min(340px, 42vw); border: 1px solid #334155; border-radius: 8px; background: #020617; color: #e5e7eb; padding: 8px 10px; }
+      input {
+        width: min(340px, 42vw);
+        border: 1px solid rgba(148, 163, 184, 0.34);
+        border-radius: 8px;
+        background: rgba(2, 6, 23, 0.72);
+        color: #e5e7eb;
+        padding: 8px 10px;
+      }
       main { min-height: 0; overflow: hidden; }
       iframe, img { width: 100%; height: 100%; border: 0; display: block; }
-      img { object-fit: contain; background: #020617; }
-      pre { height: 100%; box-sizing: border-box; margin: 0; overflow: auto; padding: 18px; white-space: pre-wrap; line-height: 1.55; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      img { object-fit: contain; background: rgba(2, 6, 23, 0.74); }
+      pre {
+        height: 100%;
+        box-sizing: border-box;
+        margin: 0;
+        overflow: auto;
+        padding: 18px;
+        white-space: pre-wrap;
+        line-height: 1.55;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: rgba(2, 6, 23, 0.56);
+      }
       mark { background: #facc15; color: #111827; border-radius: 3px; padding: 0 2px; }
       .empty, .error { display: grid; place-items: center; height: 100%; padding: 24px; text-align: center; color: #94a3b8; }
       .error { color: #fca5a5; }
@@ -22,11 +55,11 @@
   </head>
   <body>
     <header>
-      <div class="title" id="title">Document Viewer</div>
+      <div class="title" id="title">문서 뷰어</div>
       <span class="badge" id="mode">sandbox</span>
-      <input id="search" placeholder="Search text files..." disabled />
+      <input id="search" placeholder="텍스트 파일 검색..." disabled />
     </header>
-    <main id="content"><div class="empty">Waiting for file context...</div></main>
+    <main id="content"><div class="empty">파일 컨텍스트를 기다리는 중...</div></main>
     <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const titleEl = document.getElementById('title');
@@ -68,15 +101,15 @@
           const path = file.path || launchData.path || '';
           const grantId = grant.grantId || '';
           const ext = extOf(path);
-          titleEl.textContent = file.name || path.split('/').pop() || 'Document Viewer';
-          modeEl.textContent = ext || 'file';
+          titleEl.textContent = file.name || path.split('/').pop() || '문서 뷰어';
+          modeEl.textContent = ext || '파일';
           if (!path || !grantId) {
-            showError('File path or grant is missing.');
+            showError('파일 경로 또는 권한이 없습니다.');
             return;
           }
           const rawUrl = window.WebOS.files.rawUrl({ path, grantId });
           if (ext === 'pdf') {
-            contentEl.innerHTML = '<iframe title="PDF preview" src="' + rawUrl + '"></iframe>';
+            contentEl.innerHTML = '<iframe title="PDF 미리보기" src="' + rawUrl + '"></iframe>';
             return;
           }
           if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
@@ -89,7 +122,7 @@
           searchEl.addEventListener('input', () => renderText(searchEl.value));
           renderText();
         } catch (err) {
-          showError(err?.message || 'Failed to open document.');
+          showError(err?.message || '문서를 열지 못했습니다.');
         }
       }
 

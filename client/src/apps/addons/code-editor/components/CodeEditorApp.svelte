@@ -65,7 +65,7 @@
         applyLanguageByPath(target.path);
       }
     } catch (err) {
-      addToast(err?.message || 'Failed to load file', 'error');
+      addToast(err?.message || '파일을 불러오지 못했습니다.', 'error');
       console.error(err);
     }
   }
@@ -75,7 +75,7 @@
     const target = getActiveTarget();
     if (!target?.path) return;
     if (target.mode === 'host' && target.accessMode === 'read') {
-      addToast('This file is opened in read-only mode.', 'error');
+      addToast('이 파일은 읽기 전용 모드로 열렸습니다.', 'error');
       return;
     }
 
@@ -92,13 +92,13 @@
         });
       }
       if (result.success || !result.error) {
-        addToast('File saved successfully!', 'success');
+        addToast('파일을 저장했습니다.', 'success');
       } else {
-        addToast(result.message || 'Error saving file', 'error');
+        addToast(result.message || '파일 저장 중 오류가 발생했습니다.', 'error');
       }
     } catch (err) {
       if (target.mode === 'host' && err?.code === 'FS_WRITE_OVERWRITE_APPROVAL_REQUIRED') {
-        const confirmed = globalThis.confirm('Overwrite existing file?');
+        const confirmed = globalThis.confirm('기존 파일을 덮어쓸까요?');
         if (!confirmed) return;
         try {
           const overwriteResult = await editorApi.saveFile(target.path, editor.getValue(), {
@@ -112,17 +112,17 @@
             }
           });
           if (overwriteResult.success || !overwriteResult.error) {
-            addToast('File saved successfully!', 'success');
+            addToast('파일을 저장했습니다.', 'success');
             return;
           }
-          addToast(overwriteResult.message || 'Error saving file', 'error');
+          addToast(overwriteResult.message || '파일 저장 중 오류가 발생했습니다.', 'error');
           return;
         } catch (overwriteErr) {
-          addToast(overwriteErr?.message || 'Overwrite save failed', 'error');
+          addToast(overwriteErr?.message || '덮어쓰기 저장에 실패했습니다.', 'error');
           return;
         }
       }
-      addToast(err?.message || 'Server connection failed', 'error');
+      addToast(err?.message || '서버 연결에 실패했습니다.', 'error');
       console.error(err);
     }
   }
@@ -167,7 +167,7 @@
       {/if}
     </span>
     <button onclick={saveFile} class="save-btn">
-      <Save size={16} /> Save
+      <Save size={16} /> 저장
     </button>
   </div>
   <div class="editor-container" bind:this={editorContainer}></div>

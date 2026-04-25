@@ -5,7 +5,9 @@ const DEFAULT_START_MENU_STATE = {
   query: '',
   pinnedAppIds: [],
   recentAppIds: [],
-  layout: 'default'
+  layout: 'default',
+  keepOpenOnDesktopClick: false,
+  presentation: 'drawer'
 };
 
 const store = writable(DEFAULT_START_MENU_STATE);
@@ -42,12 +44,18 @@ export function hydrateStartMenuState(persisted = {}) {
   const nextPinned = Array.isArray(persisted?.pinnedAppIds) ? persisted.pinnedAppIds : [];
   const nextRecent = Array.isArray(persisted?.recentAppIds) ? persisted.recentAppIds : [];
   const nextLayout = ['default', 'compact', 'wide'].includes(persisted?.layout) ? persisted.layout : 'default';
+  const keepOpenOnDesktopClick = persisted?.keepOpenOnDesktopClick === true;
+  const presentation = ['drawer', 'windows'].includes(String(persisted?.presentation || ''))
+    ? String(persisted.presentation)
+    : 'drawer';
 
   update((state) => ({
     ...state,
     pinnedAppIds: nextPinned,
     recentAppIds: nextRecent,
-    layout: nextLayout
+    layout: nextLayout,
+    keepOpenOnDesktopClick,
+    presentation
   }));
 }
 
@@ -118,12 +126,30 @@ export function setStartMenuLayout(layout) {
   }));
 }
 
+export function toggleStartMenuKeepOpenOnDesktopClick() {
+  update((state) => ({
+    ...state,
+    keepOpenOnDesktopClick: !state.keepOpenOnDesktopClick
+  }));
+}
+
+export function toggleStartMenuPresentation() {
+  update((state) => ({
+    ...state,
+    presentation: state.presentation === 'windows' ? 'drawer' : 'windows'
+  }));
+}
+
 export function getStartMenuPersistencePayload() {
   const state = get(store);
   return {
     pinnedAppIds: state.pinnedAppIds,
     recentAppIds: state.recentAppIds,
-    layout: state.layout
+    layout: state.layout,
+    keepOpenOnDesktopClick: state.keepOpenOnDesktopClick === true,
+    presentation: ['drawer', 'windows'].includes(String(state.presentation || ''))
+      ? String(state.presentation)
+      : 'drawer'
   };
 }
 

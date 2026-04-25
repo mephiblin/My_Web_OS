@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Model Viewer</title>
+    <title>모델 뷰어</title>
     <script type="importmap">
       {
         "imports": {
@@ -40,29 +40,29 @@
   <body>
     <div id="viewport"></div>
     <aside class="panel" id="panel">
-      <h2>Inspection</h2>
+      <h2>검사</h2>
       <div class="metrics">
-        <div class="metric"><span>Meshes</span><strong id="mesh-count">0</strong></div>
-        <div class="metric"><span>Triangles</span><strong id="tri-count">0</strong></div>
-        <div class="metric"><span>Materials</span><strong id="mat-count">0</strong></div>
+        <div class="metric"><span>메시</span><strong id="mesh-count">0</strong></div>
+        <div class="metric"><span>삼각형</span><strong id="tri-count">0</strong></div>
+        <div class="metric"><span>재질</span><strong id="mat-count">0</strong></div>
       </div>
       <div id="materials"></div>
     </aside>
     <div class="toolbar">
-	      <div class="title" id="title">Model Viewer</div>
-	      <button id="wireframe">Wireframe</button>
-	      <button id="axes" class="active">Axes</button>
-	      <span class="anim-status" id="animation-status">Animation: None</span>
-	      <button id="anim-play" disabled>Play</button>
-	      <button id="anim-pause" disabled>Pause</button>
-	      <button id="anim-stop" disabled>Stop</button>
-	      <button id="fit" title="Refit camera to the visible mesh bounds">Fit Mesh</button>
-      <button id="home" title="Reset camera to the current model center">Home View</button>
-      <button id="reset" title="Recreate the renderer and reload the current model">Reset Renderer</button>
-      <button id="shot">Screenshot</button>
-      <a id="download" href="#" download>Download</a>
+	      <div class="title" id="title">모델 뷰어</div>
+	      <button id="wireframe">와이어프레임</button>
+	      <button id="axes" class="active">축</button>
+	      <span class="anim-status" id="animation-status">애니메이션: 없음</span>
+	      <button id="anim-play" disabled>재생</button>
+	      <button id="anim-pause" disabled>일시정지</button>
+	      <button id="anim-stop" disabled>정지</button>
+	      <button id="fit" title="보이는 메시 경계에 맞춰 카메라를 재정렬">메시 맞춤</button>
+      <button id="home" title="현재 모델 중심으로 카메라를 초기화">홈 뷰</button>
+      <button id="reset" title="렌더러를 다시 만들고 현재 모델을 재로딩">렌더러 초기화</button>
+      <button id="shot">스크린샷</button>
+      <a id="download" href="#" download>다운로드</a>
     </div>
-    <div class="overlay" id="overlay"><div class="card" id="status">Waiting for file context...</div></div>
+    <div class="overlay" id="overlay"><div class="card" id="status">파일 컨텍스트를 기다리는 중...</div></div>
     <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script type="module">
       import * as THREE from 'three';
@@ -231,8 +231,8 @@
         matCountEl.textContent = String(materialSet.size);
         materialsEl.innerHTML = Array.from(materialSet).map((mat) => {
           const color = mat.color?.getHexString ? '#' + mat.color.getHexString() : '-';
-          return '<div class="material"><div class="name">' + escapeHtml(mat.name || 'Unnamed') + '</div><div class="meta">' + escapeHtml(mat.type || '-') + ' · Color ' + escapeHtml(color) + ' · Map ' + (mat.map ? 'yes' : 'no') + '</div></div>';
-        }).join('') || '<div class="material"><div class="meta">No material data.</div></div>';
+          return '<div class="material"><div class="name">' + escapeHtml(mat.name || '이름 없음') + '</div><div class="meta">' + escapeHtml(mat.type || '-') + ' · 색상 ' + escapeHtml(color) + ' · 맵 ' + (mat.map ? '있음' : '없음') + '</div></div>';
+        }).join('') || '<div class="material"><div class="meta">재질 정보가 없습니다.</div></div>';
       }
 
       function escapeHtml(value) {
@@ -271,7 +271,7 @@
 
 	      function updateAnimationControls(enabled = false, state = 'stopped', count = 0) {
 	        animationState = state;
-	        animationStatusEl.textContent = enabled ? `Animation: ${state} (${count})` : 'Animation: None';
+	        animationStatusEl.textContent = enabled ? `애니메이션: ${state} (${count})` : '애니메이션: 없음';
 	        animPlayEl.disabled = !enabled || state === 'playing';
 	        animPauseEl.disabled = !enabled || state !== 'playing';
 	        animStopEl.disabled = !enabled || state === 'stopped';
@@ -438,7 +438,7 @@
         } else if (extension === 'obj') {
           loadedObject = await new OBJLoader().loadAsync(cacheBustedUrl);
         } else {
-          throw new Error('Unsupported format: ' + extension);
+          throw new Error('지원하지 않는 형식입니다: ' + extension);
         }
         if (token !== loadToken || disposed) {
           disposeObject(loadedObject);
@@ -476,10 +476,10 @@
         fileName = file.name || path.split('/').pop() || 'model';
         titleEl.textContent = fileName;
         rawUrl = window.WebOS.files.rawUrl({ path, grantId });
-        if (!rawUrl) throw new Error('File path or grant is missing.');
+        if (!rawUrl) throw new Error('파일 경로 또는 권한이 없습니다.');
         downloadEl.href = rawUrl;
         downloadEl.download = fileName;
-        setStatus('Loading ' + fileName + '...');
+        setStatus(fileName + ' 불러오는 중...');
         await ensureSceneReady();
         if (token !== loadToken || disposed) return;
         disposeCurrentModel();
@@ -502,7 +502,7 @@
         if (payload.type === 'webos:dispose') {
           cleanup();
         } else if (payload.type === 'webos:launch-data') {
-          loadFromLaunchData(payload.launchData || {}).catch((err) => setStatus(err?.message || 'Failed to open model.', true));
+          loadFromLaunchData(payload.launchData || {}).catch((err) => setStatus(err?.message || '모델을 열지 못했습니다.', true));
         }
       });
 
@@ -524,7 +524,7 @@
       resetEl.addEventListener('click', () => {
         if (!currentLaunchData) return;
         releaseViewer(false);
-        loadFromLaunchData(currentLaunchData).catch((err) => setStatus(err?.message || 'Failed to reset renderer.', true));
+        loadFromLaunchData(currentLaunchData).catch((err) => setStatus(err?.message || '렌더러 초기화에 실패했습니다.', true));
       });
       shotEl.addEventListener('click', () => {
         if (!renderer) return;
@@ -537,7 +537,7 @@
       window.addEventListener('resize', resize);
       window.addEventListener('pagehide', cleanup);
       window.addEventListener('beforeunload', cleanup);
-      boot().catch((err) => setStatus(err?.message || 'Failed to open model.', true));
+      boot().catch((err) => setStatus(err?.message || '모델을 열지 못했습니다.', true));
     </script>
   </body>
 </html>

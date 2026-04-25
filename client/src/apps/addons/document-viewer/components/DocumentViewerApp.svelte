@@ -7,7 +7,7 @@
   let { data = {} } = $props();
 
   let docPath = $derived(data?.path || '');
-  let fileName = $derived(docPath.split('/').pop() || 'Document');
+  let fileName = $derived(docPath.split('/').pop() || '문서');
   let extension = $derived(fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '');
   let isPdf = $derived(extension === 'pdf');
   let isTextDoc = $derived(new Set(['txt', 'md', 'markdown', 'json', 'js', 'ts', 'css', 'html', 'xml', 'yml', 'yaml', 'csv', 'log']).has(extension));
@@ -73,7 +73,7 @@
       currentMatchIndex = 0;
     } catch (err) {
       textContent = '';
-      textError = err?.message || 'Failed to load text document.';
+      textError = err?.message || '텍스트 문서를 불러오지 못했습니다.';
     } finally {
       loadingText = false;
     }
@@ -137,16 +137,16 @@
     <div class="file-info">
       <FileText size={18} />
       <span class="file-name">{fileName}</span>
-      <span class="file-ext">{extension || 'file'}</span>
+      <span class="file-ext">{extension || '파일'}</span>
     </div>
 
     <div class="toolbar-center">
       <div class="search-box">
         <Search size={14} />
-        <input type="text" placeholder="Search in document..." bind:value={searchQuery} disabled={!isPdf && !isTextDoc} />
+        <input type="text" placeholder="문서에서 검색..." bind:value={searchQuery} disabled={!isPdf && !isTextDoc} />
       </div>
       <div class="search-nav">
-        <button class="action-btn" onclick={goToPreviousMatch} disabled={!searchQuery.trim() || !matchOffsets.length} title="Previous match">
+        <button class="action-btn" onclick={goToPreviousMatch} disabled={!searchQuery.trim() || !matchOffsets.length} title="이전 결과">
           <ChevronLeft size={16} />
         </button>
         <span class="search-count">
@@ -156,34 +156,34 @@
             -
           {/if}
         </span>
-        <button class="action-btn" onclick={goToNextMatch} disabled={!searchQuery.trim() || !matchOffsets.length} title="Next match">
+        <button class="action-btn" onclick={goToNextMatch} disabled={!searchQuery.trim() || !matchOffsets.length} title="다음 결과">
           <ChevronRight size={16} />
         </button>
       </div>
     </div>
 
     <div class="actions">
-      <button class="action-btn" onclick={() => page = Math.max(1, page - 1)} disabled={!isPdf} title="Previous page">
+      <button class="action-btn" onclick={() => page = Math.max(1, page - 1)} disabled={!isPdf} title="이전 페이지">
         <ChevronLeft size={18} />
       </button>
-      <span class="page-indicator">{isPdf ? `Page ${page}` : '-'}</span>
-      <button class="action-btn" onclick={() => page += 1} disabled={!isPdf} title="Next page">
+      <span class="page-indicator">{isPdf ? `${page}페이지` : '-'}</span>
+      <button class="action-btn" onclick={() => page += 1} disabled={!isPdf} title="다음 페이지">
         <ChevronRight size={18} />
       </button>
-      <button class="action-btn" onclick={zoomOut} disabled={!isPdf} title="Zoom out">
+      <button class="action-btn" onclick={zoomOut} disabled={!isPdf} title="축소">
         <ZoomOut size={18} />
       </button>
       <span class="zoom-indicator">{zoomLevel}%</span>
-      <button class="action-btn" onclick={zoomIn} disabled={!isPdf} title="Zoom in">
+      <button class="action-btn" onclick={zoomIn} disabled={!isPdf} title="확대">
         <ZoomIn size={18} />
       </button>
-      <button class="action-btn" onclick={resetView} title="Reset view">
+      <button class="action-btn" onclick={resetView} title="뷰 초기화">
         <RotateCcw size={18} />
       </button>
-      <button class="action-btn" onclick={toggleFullscreen} title="Fullscreen">
+      <button class="action-btn" onclick={toggleFullscreen} title="전체 화면">
         <Maximize size={18} />
       </button>
-      <button class="action-btn" onclick={handleDownload} title="Download">
+      <button class="action-btn" onclick={handleDownload} title="다운로드">
         <Download size={18} />
       </button>
     </div>
@@ -193,11 +193,11 @@
     {#if !docPath}
       <div class="empty-state">
         <FileText size={48} />
-        <p>No document selected.</p>
+        <p>선택된 문서가 없습니다.</p>
       </div>
     {:else if isTextDoc}
       {#if loadingText}
-        <div class="empty-state"><p>Loading text content...</p></div>
+        <div class="empty-state"><p>텍스트 내용을 불러오는 중...</p></div>
       {:else if textError}
         <div class="empty-state error"><p>{textError}</p></div>
       {:else}

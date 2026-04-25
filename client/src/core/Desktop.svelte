@@ -1,12 +1,38 @@
 <script>
   import { onMount } from 'svelte';
-  import { Shield, Monitor, Files, Terminal as TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send, Folder, File, Trash2, ExternalLink } from 'lucide-svelte';
-  import { windows, activeWindowId, openWindow, closeWindow, focusWindow, toggleMinimize, initWindows } from './stores/windowStore.js';
+  import {
+    AppWindow,
+    Boxes,
+    Braces,
+    Clapperboard,
+    Cuboid,
+    DatabaseZap,
+    File,
+    Folder,
+    FolderOpen,
+    Gauge,
+    Headphones,
+    Image as ShortcutImageIcon,
+    ImageUp,
+    ListChecks,
+    MonitorCog,
+    PackageOpen,
+    PanelsTopLeft,
+    ScrollText,
+    SearchCheck,
+    SendHorizontal,
+    SlidersHorizontal,
+    SquareTerminal,
+    Trash2,
+    Video as ShortcutVideoIcon,
+    ExternalLink
+  } from 'lucide-svelte';
+  import { windows, activeWindowId, openWindow, closeWindow, focusWindow, initWindows } from './stores/windowStore.js';
   import { contextMenu, openContextMenu, closeContextMenu, contextMenuSettings } from './stores/contextMenuStore.js';
   import { currentDesktopId, initDesktops, layoutEditMode } from './stores/desktopStore.js';
   import { snapGhost } from './stores/snapStore.js';
   import { widgets } from './stores/widgetStore.js';
-  import { shortcuts, initShortcuts, removeShortcut } from './stores/shortcutStore.js';
+  import { shortcuts, initShortcuts, addShortcut, removeShortcut, setShortcutGridPosition } from './stores/shortcutStore.js';
   import Window from './Window.svelte';
   import SandboxAppFrame from './components/SandboxAppFrame.svelte';
   import DashboardWidget from './components/DashboardWidget.svelte';
@@ -14,7 +40,7 @@
   import Agent from './components/Agent.svelte';
   import { agentStore } from './stores/agentStore.js';
   import Spotlight from './Spotlight.svelte';
-  import { openSpotlight, toggleSpotlight } from './stores/spotlightStore.js';
+  import { openSpotlight } from './stores/spotlightStore.js';
   import Taskbar from './components/Taskbar.svelte';
   import StartMenu from './components/StartMenu.svelte';
   import NotificationCenter from './components/NotificationCenter.svelte';
@@ -28,13 +54,81 @@
   import { installWebOSBridge } from '../utils/webosBridge.js';
   import { loadBuiltinComponent, resolveWindowLaunch } from './appLaunchRegistry.js';
   import { normalizeAppModel, deriveOwnerTier, normalizeLaunchContract, normalizeDataBoundary } from './appOwnershipContract.js';
+  import { i18n, localizeAppTitle, translateWith } from './i18n/index.js';
 
   const iconMap = {
-    Shield, Monitor, Files, TerminalIcon, Settings, Container, LayoutGrid, Video, Image, Search, Send
+    Box: Cuboid,
+    Code2: Braces,
+    Container: Boxes,
+    FileText: ScrollText,
+    Files: FolderOpen,
+    Image: ImageUp,
+    LayoutGrid: PackageOpen,
+    Monitor: Gauge,
+    Music2: Headphones,
+    Search: SearchCheck,
+    Send: SendHorizontal,
+    Settings: SlidersHorizontal,
+    Shield: ListChecks,
+    TerminalIcon: SquareTerminal,
+    Video: Clapperboard
   };
 
-  function resolveIconComponent(iconName) {
-    return iconMap[iconName] || LayoutGrid;
+  const iconMapByAppId = {
+    'control-panel': MonitorCog,
+    'doc-viewer': ScrollText,
+    'document-station': ScrollText,
+    'download-station': DatabaseZap,
+    docker: Boxes,
+    editor: Braces,
+    files: FolderOpen,
+    logs: ListChecks,
+    monitor: Gauge,
+    'model-viewer': Cuboid,
+    'music-station': Headphones,
+    'package-center': PackageOpen,
+    photo: ImageUp,
+    'photo-station': ImageUp,
+    player: Clapperboard,
+    settings: SlidersHorizontal,
+    terminal: SquareTerminal,
+    transfer: SendHorizontal,
+    'video-station': Clapperboard,
+    'widget-store': PanelsTopLeft
+  };
+
+  function clampNumber(value, fallback, min, max) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    if (numeric < min) return min;
+    if (numeric > max) return max;
+    return numeric;
+  }
+
+  function getDesktopIconScale(value) {
+    return clampNumber(value, 1, 0.8, 1.25);
+  }
+
+  function buildDesktopGridStyle(scaleValue) {
+    const scale = getDesktopIconScale(scaleValue);
+    return [
+      `--desktop-icon-cell-w: ${Math.round(78 * scale)}px`,
+      `--desktop-icon-cell-h: ${Math.round(84 * scale)}px`,
+      `--desktop-icon-box: ${Math.round(48 * scale)}px`,
+      `--desktop-icon-glyph: ${Math.round(27 * scale)}px`,
+      `--desktop-icon-label-w: ${Math.round(82 * scale)}px`,
+      `--desktop-icon-label-size: ${Math.max(11, Math.round(12 * scale))}px`,
+      `--desktop-icon-gap: ${Math.max(3, Math.round(5 * scale))}px`
+    ].join('; ');
+  }
+
+  const desktopGridStyle = $derived(buildDesktopGridStyle($systemSettings.desktopIconScale));
+
+  function resolveIconComponent(app) {
+    const appId = String(app?.id || '').trim();
+    if (iconMapByAppId[appId]) return iconMapByAppId[appId];
+    const iconName = app?.icon || app?.iconName || 'AppWindow';
+    return iconMap[iconName] || AppWindow;
   }
 
   function getAppModelBadgeLabel(appModel) {
@@ -43,28 +137,35 @@
     return 'APP';
   }
 
-  function normalizeDesktopApp(app) {
+  function normalizeDesktopApp(app, i18nContext) {
     const iconType = app?.iconType === 'image' && app?.iconUrl ? 'image' : 'lucide';
     const appModel = normalizeAppModel(app);
     const ownerTier = deriveOwnerTier(appModel);
     const launch = normalizeLaunchContract(app);
+    const localizedTitle = localizeAppTitle(app, i18nContext);
     return {
       ...app,
+      title: localizedTitle,
       appModel,
       ownerTier,
       dataBoundary: normalizeDataBoundary(app, launch, ownerTier),
       appModelBadge: getAppModelBadgeLabel(appModel),
       launch,
       iconType,
-      iconComponent: resolveIconComponent(app?.icon || app?.iconName || 'LayoutGrid')
+      iconComponent: resolveIconComponent(app)
     };
   }
 
-  let apps = $state([]);
+  let rawApps = $state([]);
+  const apps = $derived.by(() => rawApps.map((app) => normalizeDesktopApp(app, $i18n)));
+  const appById = $derived.by(() => new Map(apps.map((app) => [String(app.id), app])));
   let startButtonEl = $state(null);
   let loadedBuiltinComponents = $state({});
   let builtinComponentErrors = $state({});
-  
+  let draggingShortcutId = $state('');
+  let appGridEl = $state(null);
+  const DEFAULT_DESKTOP_ROWS = 8;
+
   async function loadApps() {
     try {
       const data = await apiFetch('/api/system/apps');
@@ -73,7 +174,7 @@
         return;
       }
 
-      apps = data.map((app) => normalizeDesktopApp(app));
+      rawApps = data;
     } catch (err) {
       console.error('Failed to load apps:', err);
     }
@@ -141,6 +242,7 @@
 
   // Filter windows by current desktop
   const visibleWindows = $derived($windows.filter(w => w.desktopId === $currentDesktopId));
+  const visibleShortcuts = $derived($shortcuts.filter((item) => Number(item?.desktopId || 1) === Number($currentDesktopId)));
 
   $effect(() => {
     // Apply initial settings to document root
@@ -154,17 +256,151 @@
 
   function openShortcut(shortcut) {
     if ($layoutEditMode) return;
+    if (shortcut?.kind === 'app' && shortcut?.appId) {
+      openAppById(shortcut.appId);
+      return;
+    }
     const launch = buildShortcutLaunch(shortcut);
-    const iconMapByKey = { Folder, Image, Video, File };
+    const iconMapByKey = { Folder, Image: ShortcutImageIcon, Video: ShortcutVideoIcon, File };
     const icon = iconMapByKey[launch.iconKey] || File;
     openWindow({ ...launch.app, icon }, launch.data);
   }
 
   function handleShortcutContext(e, shortcutId) {
     e.preventDefault();
+    if (!$layoutEditMode) {
+      closeContextMenu();
+      return;
+    }
     openContextMenu(e.clientX, e.clientY, [
-      { label: 'Remove Shortcut', icon: Trash2, action: () => removeShortcut(shortcutId), danger: true }
+      {
+        label: translateWith($i18n, 'desktop.removeShortcut', {}, 'Remove Shortcut'),
+        icon: Trash2,
+        action: () => removeShortcut(shortcutId),
+        danger: true
+      }
     ]);
+  }
+
+  function handleStartMenuCreateShortcut(app) {
+    if (!app) return;
+    addShortcut({
+      shortcutType: 'app',
+      appId: app.id,
+      name: app.title,
+      iconType: app.iconType,
+      iconUrl: app.iconUrl,
+      icon: app.icon,
+      desktopId: $currentDesktopId
+    });
+  }
+
+  function handleShortcutDragStart(event, shortcutId) {
+    if (!$layoutEditMode) return;
+    draggingShortcutId = String(shortcutId || '');
+    event.dataTransfer?.setData('text/plain', draggingShortcutId);
+    event.dataTransfer?.setData('application/x-webos-shortcut-id', draggingShortcutId);
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+    }
+  }
+
+  function handleShortcutDragOver(event) {
+    if (!$layoutEditMode) return;
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+  }
+
+  function getShortcutGridPlacement(shortcut, index = 0) {
+    const gridX = Number.isFinite(Number(shortcut?.gridX))
+      ? Math.max(0, Math.floor(Number(shortcut.gridX)))
+      : Math.max(0, Math.floor(index / DEFAULT_DESKTOP_ROWS));
+    const gridY = Number.isFinite(Number(shortcut?.gridY))
+      ? Math.max(0, Math.floor(Number(shortcut.gridY)))
+      : Math.max(0, index % DEFAULT_DESKTOP_ROWS);
+    return { gridX, gridY };
+  }
+
+  function getShortcutPositionStyle(shortcut, index = 0) {
+    const placement = getShortcutGridPlacement(shortcut, index);
+    return `--grid-x:${placement.gridX}; --grid-y:${placement.gridY};`;
+  }
+
+  function resolveGridSnapFromEvent(event) {
+    const gridEl = appGridEl;
+    if (!gridEl) return { gridX: 0, gridY: 0 };
+    const rect = gridEl.getBoundingClientRect();
+    const style = window.getComputedStyle(gridEl);
+    const cellW = Number.parseFloat(style.getPropertyValue('--desktop-icon-cell-w')) || 78;
+    const cellH = Number.parseFloat(style.getPropertyValue('--desktop-icon-cell-h')) || 84;
+    const localX = Math.max(0, event.clientX - rect.left);
+    const localY = Math.max(0, event.clientY - rect.top);
+    return {
+      gridX: Math.max(0, Math.floor(localX / cellW)),
+      gridY: Math.max(0, Math.floor(localY / cellH))
+    };
+  }
+
+  function placeShortcutByDropEvent(event, shortcutId) {
+    const shortcutKey = String(shortcutId || '').trim();
+    if (!shortcutKey) return;
+    const snapped = resolveGridSnapFromEvent(event);
+    setShortcutGridPosition(shortcutKey, snapped.gridX, snapped.gridY);
+  }
+
+  function handleShortcutDropOnShortcut(event, targetShortcut, targetIndex) {
+    if (!$layoutEditMode) return;
+    event.preventDefault();
+    const payloadId = event.dataTransfer?.getData('application/x-webos-shortcut-id')
+      || event.dataTransfer?.getData('text/plain')
+      || draggingShortcutId;
+    if (!payloadId) return;
+    const targetPlacement = getShortcutGridPlacement(targetShortcut, targetIndex);
+    setShortcutGridPosition(payloadId, targetPlacement.gridX, targetPlacement.gridY);
+    draggingShortcutId = '';
+  }
+
+  function handleShortcutDropOnGrid(event) {
+    if (!$layoutEditMode) return;
+    event.preventDefault();
+    const payloadId = event.dataTransfer?.getData('application/x-webos-shortcut-id')
+      || event.dataTransfer?.getData('text/plain')
+      || draggingShortcutId;
+    placeShortcutByDropEvent(event, payloadId);
+    draggingShortcutId = '';
+  }
+
+  function resolveShortcutVisual(shortcut) {
+    if (shortcut?.kind === 'app' && shortcut?.appId) {
+      const linkedApp = appById.get(String(shortcut.appId));
+      if (linkedApp) {
+        return {
+          kind: 'app',
+          iconType: linkedApp.iconType,
+          iconUrl: linkedApp.iconUrl,
+          iconComponent: linkedApp.iconComponent
+        };
+      }
+      return {
+        kind: 'app',
+        iconType: shortcut.iconType === 'image' && shortcut.iconUrl ? 'image' : 'lucide',
+        iconUrl: shortcut.iconUrl || '',
+        iconComponent: iconMap[shortcut.iconName] || AppWindow
+      };
+    }
+
+    if (shortcut?.isDirectory) {
+      return { kind: 'dir', iconType: 'lucide', iconComponent: Folder };
+    }
+    if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(shortcut?.ext)) {
+      return { kind: 'file', iconType: 'lucide', iconComponent: ShortcutImageIcon };
+    }
+    if (['mp4', 'webm', 'mov'].includes(shortcut?.ext)) {
+      return { kind: 'file', iconType: 'lucide', iconComponent: ShortcutVideoIcon };
+    }
+    return { kind: 'file', iconType: 'lucide', iconComponent: File };
   }
 
   function getBgStyle(fit) {
@@ -190,11 +426,6 @@
   }
 
   function handleOpenStartMenuApp(app) {
-    registerRecentApp(app?.id);
-    openWindow(app);
-  }
-
-  function openDesktopApp(app) {
     registerRecentApp(app?.id);
     openWindow(app);
   }
@@ -245,7 +476,7 @@
     } catch (err) {
       builtinComponentErrors = {
         ...builtinComponentErrors,
-        [key]: err?.message || 'Failed to load app component.'
+        [key]: err?.message || translateWith($i18n, 'desktop.failedLoadComponent', {}, 'Failed to load app component.')
       };
     }
   }
@@ -281,9 +512,13 @@
 
   <div
     class="app-grid {$layoutEditMode ? 'layout-edit-mode' : ''}"
+    style={desktopGridStyle}
+    bind:this={appGridEl}
     role="button"
     tabindex="-1"
     onclick={() => { closeContextMenu(); closeStartMenu(); }}
+    ondragover={handleShortcutDragOver}
+    ondrop={handleShortcutDropOnGrid}
     onkeydown={(event) => {
       if (event.key === 'Escape') {
         closeContextMenu();
@@ -291,41 +526,48 @@
       }
     }}
   >
-    {#if $layoutEditMode}
-      <div class="layout-edit-banner">Layout Edit Mode: app launch is temporarily disabled.</div>
-    {/if}
-    {#each apps as app}
-      <button class="app-icon" ondblclick={() => !$layoutEditMode && openDesktopApp(app)}>
-        <div class="icon-box glass-effect">
-          <span class="app-model-badge" title={`Model: ${app.appModel}`}>{app.appModelBadge}</span>
-          {#if app.iconType === 'image' && app.iconUrl}
-            <img class="app-icon-image" src={app.iconUrl} alt={app.title} loading="lazy" />
-          {:else}
-            {@const AppIcon = app.iconComponent}
-            <AppIcon size={32} />
-          {/if}
-        </div>
-        <span>{app.title}</span>
-      </button>
-    {/each}
-
-    {#each $shortcuts as shortcut (shortcut.id)}
-      <button 
-        class="app-icon shortcut" 
+    {#each visibleShortcuts as shortcut, shortcutIndex (shortcut.id)}
+      <button
+        class="app-icon shortcut"
+        style={getShortcutPositionStyle(shortcut, shortcutIndex)}
         ondblclick={() => !$layoutEditMode && openShortcut(shortcut)}
         oncontextmenu={(e) => handleShortcutContext(e, shortcut.id)}
+        draggable={$layoutEditMode}
+        ondragstart={(event) => handleShortcutDragStart(event, shortcut.id)}
+        ondragend={() => (draggingShortcutId = '')}
+        ondragover={handleShortcutDragOver}
+        ondrop={(event) => handleShortcutDropOnShortcut(event, shortcut, shortcutIndex)}
       >
-        <div class="icon-box glass-effect {shortcut.isDirectory ? 'dir' : 'file'}">
-          {#if shortcut.isDirectory}
-            <Folder size={32} />
-          {:else if ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(shortcut.ext)}
-            <Image size={32} />
-          {:else if ['mp4', 'webm', 'mov'].includes(shortcut.ext)}
-            <Video size={32} />
+        <div class="icon-box glass-effect {resolveShortcutVisual(shortcut).kind === 'dir' ? 'dir' : resolveShortcutVisual(shortcut).kind === 'app' ? 'app' : 'file'}">
+          {#if resolveShortcutVisual(shortcut).iconType === 'image' && resolveShortcutVisual(shortcut).iconUrl}
+            <img class="app-icon-image" src={resolveShortcutVisual(shortcut).iconUrl} alt={shortcut.name} loading="lazy" />
           {:else}
-            <File size={32} />
+            {@const ShortcutIcon = resolveShortcutVisual(shortcut).iconComponent}
+            <ShortcutIcon size={28} />
           {/if}
           <div class="shortcut-badge"><ExternalLink size={10} /></div>
+          {#if $layoutEditMode}
+            <span
+              class="shortcut-remove-btn"
+              role="button"
+              tabindex="0"
+              onclick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                removeShortcut(shortcut.id);
+              }}
+              onkeydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  removeShortcut(shortcut.id);
+                }
+              }}
+              title={translateWith($i18n, 'desktop.removeShortcut', {}, 'Remove Shortcut')}
+            >
+              <Trash2 size={11} />
+            </span>
+          {/if}
         </div>
         <span>{shortcut.name}</span>
       </button>
@@ -344,7 +586,7 @@
             <h2>{win.title}</h2>
             <p>{getBuiltinComponentError(resolvedLaunch.componentKey)}</p>
           {:else}
-            <p>Loading {win.title}...</p>
+            <p>{translateWith($i18n, 'desktop.loadingApp', { title: win.title }, `Loading ${win.title}...`)}</p>
           {/if}
         </div>
       {:else if resolvedLaunch.launch.mode === 'sandbox' || win.runtime === 'sandbox'}
@@ -352,42 +594,46 @@
       {:else}
         <div style="padding: 20px; color: var(--text-dim);">
           <h2>{win.title}</h2>
-          <p>This application is currently under development.</p>
+          <p>{translateWith($i18n, 'desktop.appUnderDevelopment', {}, 'This application is currently under development.')}</p>
         </div>
       {/if}
     </Window>
   {/each}
 
   {#if $contextMenu.visible}
-    <ContextMenu 
-      x={$contextMenu.x} 
-      y={$contextMenu.y} 
-      items={$contextMenu.items} 
-      close={closeContextMenu} 
+    <ContextMenu
+      x={$contextMenu.x}
+      y={$contextMenu.y}
+      items={$contextMenu.items}
+      close={closeContextMenu}
     />
   {/if}
 
   {#if $snapGhost.visible}
-    <div 
-      class="snap-ghost" 
+    <div
+      class="snap-ghost"
       style="left: {$snapGhost.x}px; top: {$snapGhost.y}px; width: {$snapGhost.width}px; height: {$snapGhost.height}px;"
     ></div>
   {/if}
 
   <Spotlight />
-  <StartMenu apps={apps} onOpenApp={handleOpenStartMenuApp} {startButtonEl} />
+  <StartMenu
+    apps={apps}
+    onOpenApp={handleOpenStartMenuApp}
+    onCreateDesktopShortcut={handleStartMenuCreateShortcut}
+    {startButtonEl}
+  />
   <NotificationCenter bind:isOpen={isNotificationCenterOpen} />
-  
+
   <Agent />
 
-  <Taskbar 
-    {time} 
+  <Taskbar
+    {time}
     isNotificationCenterOpen={isNotificationCenterOpen}
     isStartMenuOpen={$startMenuState.isOpen}
     onStartButtonReady={(el) => (startButtonEl = el)}
     onToggleStartMenu={toggleStartMenu}
     onToggleNotifications={() => isNotificationCenterOpen = !isNotificationCenterOpen}
-    onOpenSettings={() => openWindow({ id: 'control-panel', title: 'Settings', icon: Settings, singleton: true })}
   />
 </div>
 
@@ -395,126 +641,131 @@
   .desktop { width: 100vw; height: 100vh; position: relative; background: #000; overflow: hidden; }
   .wallpaper { position: absolute; inset: 0; opacity: 0.8; width: 100%; height: 100%; object-fit: cover; z-index: 0; pointer-events: none; }
   .wallpaper[style*="linear-gradient"] { opacity: 0.8; }
-  
+
   .widget-layer {
     position: absolute;
     inset: 0;
     pointer-events: none;
     z-index: 10;
   }
-  .app-grid { 
-    position: absolute; 
-    top: 30px; 
-    left: 20px; 
-    display: grid; 
-    grid-template-rows: repeat(auto-fill, 96px); 
-    grid-auto-flow: column;
-    gap: 8px;
+  .app-grid {
+    position: absolute;
+    top: 24px;
+    left: 18px;
+    width: calc(100% - 36px);
     height: calc(100% - 100px);
-    pointer-events: none;
-  }
-  .layout-edit-banner {
-    grid-column: 1 / -1;
-    border: 1px solid rgba(88, 166, 255, 0.4);
-    background: rgba(88, 166, 255, 0.12);
-    color: #c5ddff;
-    padding: 8px 10px;
-    border-radius: 8px;
-    font-size: 12px;
-    margin-bottom: 6px;
+    pointer-events: auto;
   }
   .app-grid.layout-edit-mode .app-icon {
-    animation: wobble 0.35s ease-in-out 2;
+    animation: icon-jiggle 0.72s ease-in-out infinite;
+    transform-origin: 50% 72%;
   }
-  @keyframes wobble {
-    0% { transform: rotate(0deg); }
-    25% { transform: rotate(-1deg); }
-    75% { transform: rotate(1deg); }
-    100% { transform: rotate(0deg); }
+  .app-grid.layout-edit-mode .app-icon:nth-child(2n) {
+    animation-delay: -0.18s;
+    animation-duration: 0.66s;
   }
-  .app-icon { 
-    background: transparent; 
-    border: none; 
-    color: white; 
-    display: flex; 
-    flex-direction: column; 
-    align-items: center; 
-    gap: 6px; 
-    width: 90px; 
-    height: 90px;
-    cursor: pointer; 
+  .app-grid.layout-edit-mode .app-icon:nth-child(3n) {
+    animation-delay: -0.32s;
+    animation-duration: 0.78s;
+  }
+  @keyframes icon-jiggle {
+    0%, 100% { transform: rotate(-1.3deg) translateY(0); }
+    50% { transform: rotate(1.3deg) translateY(-1px); }
+  }
+  .app-icon {
+    position: absolute;
+    left: calc(var(--grid-x, 0) * var(--desktop-icon-cell-w, 78px));
+    top: calc(var(--grid-y, 0) * var(--desktop-icon-cell-h, 84px));
+    background: transparent;
+    border: none;
+    color: white;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    width: var(--desktop-icon-cell-w, 78px);
+    height: var(--desktop-icon-cell-h, 84px);
+    cursor: pointer;
     pointer-events: auto;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: color 0.2s cubic-bezier(0.4, 0, 0.2, 1), filter 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
-  .icon-box { 
-    width: 56px; 
-    height: 56px; 
+  .icon-box {
+    width: var(--desktop-icon-box, 48px);
+    height: var(--desktop-icon-box, 48px);
     position: relative;
-    display: flex; 
-    align-items: center; 
-    justify-content: center; 
-    border-radius: 14px; 
-    transition: all 0.2s; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    transition: all 0.2s;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
   }
+  .icon-box :global(svg) {
+    width: var(--desktop-icon-glyph, 27px);
+    height: var(--desktop-icon-glyph, 27px);
+  }
   .app-icon-image {
-    width: 32px;
-    height: 32px;
+    width: var(--desktop-icon-glyph, 27px);
+    height: var(--desktop-icon-glyph, 27px);
     object-fit: contain;
     border-radius: 8px;
   }
-  .app-model-badge {
-    position: absolute;
-    top: -6px;
-    right: -6px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 22px;
-    height: 14px;
-    padding: 0 4px;
-    border-radius: 999px;
-    border: 1px solid rgba(197, 221, 255, 0.35);
-    background: rgba(8, 24, 45, 0.82);
-    color: #c5ddff;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0;
-    text-transform: uppercase;
-    line-height: 1;
-    pointer-events: none;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  }
-  .app-icon:hover .icon-box { 
-    transform: scale(1.08) translateY(-2px); 
+  .app-icon:hover .icon-box {
+    transform: scale(1.08) translateY(-2px);
     background: rgba(255, 255, 255, 0.12);
     border-color: rgba(255, 255, 255, 0.3);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4), 0 0 15px rgba(88, 166, 255, 0.2);
   }
   .icon-box.dir { color: #58a6ff; }
   .icon-box.file { color: #f0f6fc; }
-  
-  .shortcut-badge { 
-    position: absolute; 
-    bottom: -4px; right: -4px; 
-    background: var(--accent-blue); 
-    color: white; 
-    border-radius: 4px; 
-    width: 16px; height: 16px; 
-    display: flex; align-items: center; justify-content: center; 
+  .icon-box.app { color: #d5e8ff; }
+
+  .shortcut-badge {
+    position: absolute;
+    bottom: -4px; right: -4px;
+    background: var(--accent-blue);
+    color: white;
+    border-radius: 4px;
+    width: 16px; height: 16px;
+    display: flex; align-items: center; justify-content: center;
     box-shadow: 0 2px 4px rgba(0,0,0,0.5);
   }
+  .shortcut-remove-btn {
+    position: absolute;
+    top: -6px;
+    left: -6px;
+    width: 16px;
+    height: 16px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 170, 170, 0.6);
+    background: rgba(90, 8, 8, 0.9);
+    color: #ffd5d5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    z-index: 2;
+  }
+  .shortcut-remove-btn:hover {
+    background: rgba(125, 12, 12, 0.95);
+  }
 
-  .app-icon span { 
-    font-size: 13px; color: white; text-shadow: 0 1px 3px rgba(0,0,0,0.8); text-align: center;
-    max-width: 90px;
+  .app-icon span {
+    font-size: var(--desktop-icon-label-size, 12px); color: white; text-shadow: 0 1px 3px rgba(0,0,0,0.8); text-align: center;
+    max-width: var(--desktop-icon-label-w, 82px);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  
+  @media (prefers-reduced-motion: reduce) {
+    .app-grid.layout-edit-mode .app-icon {
+      animation: none;
+    }
+  }
+
   .snap-ghost {
     position: absolute;
     background: rgba(var(--accent-blue-rgb, 0, 120, 215), 0.2);

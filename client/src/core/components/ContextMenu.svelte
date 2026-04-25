@@ -51,7 +51,7 @@
 </div>
 
 <style>
-  .context-menu { position: fixed; min-width: 160px; padding: 6px; border-radius: 8px; z-index: 10000; display: flex; flex-direction: column; }
+  .context-menu { position: fixed; min-width: 160px; padding: 6px; border-radius: 8px; z-index: 12000; display: flex; flex-direction: column; }
   .context-menu button { background: transparent; border: none; color: var(--text-main); padding: 8px 12px; font-size: 13px; display: flex; align-items: center; gap: 10px; border-radius: 4px; cursor: pointer; text-align: left; }
   .context-menu.compact button { padding: 6px 10px; font-size: 12px; gap: 8px; }
   .context-menu.cozy button { padding: 9px 12px; font-size: 13px; gap: 10px; }

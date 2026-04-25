@@ -135,7 +135,7 @@ export async function listTransferJobs() {
     throw toApiError(
       err,
       'TRANSFER_LIST_FAILED',
-      'Failed to load transfer jobs. Transfer backend API may be unavailable.'
+      '전송 작업 목록을 불러오지 못했습니다. 전송 백엔드 API를 확인하세요.'
     );
   }
 }
@@ -145,7 +145,7 @@ export async function retryTransferJob(jobId) {
   if (!id) {
     throw {
       code: 'TRANSFER_RETRY_INVALID_ID',
-      message: 'Transfer job id is required.'
+      message: '전송 작업 ID가 필요합니다.'
     };
   }
 
@@ -161,7 +161,7 @@ export async function retryTransferJob(jobId) {
     throw toApiError(
       err,
       'TRANSFER_RETRY_FAILED',
-      'Failed to retry transfer job.'
+      '전송 작업 재시도에 실패했습니다.'
     );
   }
 }
@@ -182,7 +182,7 @@ export async function clearTransferJobs(statuses = ['completed', 'failed', 'canc
     throw toApiError(
       err,
       'TRANSFER_CLEAR_FAILED',
-      'Failed to clear transfer job history.'
+      '전송 작업 기록 정리에 실패했습니다.'
     );
   }
 }
@@ -208,7 +208,7 @@ export async function createUrlDownloadJob(payload) {
     throw toApiError(
       err,
       'TRANSFER_CREATE_URL_FAILED',
-      'Failed to create URL download job. Check transfer backend API support.'
+      'URL 다운로드 작업 생성에 실패했습니다. 전송 백엔드 API 지원 여부를 확인하세요.'
     );
   }
 }
@@ -234,7 +234,7 @@ export async function createLocalCopyJob(payload) {
     throw toApiError(
       err,
       'TRANSFER_CREATE_COPY_FAILED',
-      'Failed to create local copy job. Check source path, destination, and backend API support.'
+      '로컬 복사 작업 생성에 실패했습니다. 원본 경로/대상 경로와 백엔드 API를 확인하세요.'
     );
   }
 }
@@ -244,7 +244,7 @@ export async function cancelTransferJob(jobId) {
   if (!id) {
     throw {
       code: 'TRANSFER_CANCEL_INVALID_ID',
-      message: 'Transfer job id is required.'
+      message: '전송 작업 ID가 필요합니다.'
     };
   }
 
@@ -263,7 +263,7 @@ export async function cancelTransferJob(jobId) {
   throw toApiError(
     lastError,
     'TRANSFER_CANCEL_FAILED',
-    'Failed to cancel transfer job. The backend may not support cancellation for this job.'
+    '전송 작업 취소에 실패했습니다. 이 작업은 백엔드에서 취소를 지원하지 않을 수 있습니다.'
   );
 }
 

@@ -4,6 +4,7 @@
   import { setSnapGhost, hideSnapGhost } from './stores/snapStore.js';
   import { taskbarSettings } from './stores/taskbarStore.js';
   import { windowDefaultsSettings } from './stores/windowDefaultsStore.js';
+  import { i18n, translateWith } from './i18n/index.js';
 
   let { window: win, active = false, children } = $props();
 
@@ -28,6 +29,74 @@
       ? Number(win.window.titleBarHeight)
       : $windowDefaultsSettings.titleBarHeight
   );
+  const PERMISSION_RISK = {
+    'app.data.list': 'low',
+    'app.data.read': 'low',
+    'app.data.write': 'medium',
+    'host.file.read': 'medium',
+    'host.file.write': 'high',
+    'ui.notification': 'low',
+    'window.open': 'medium',
+    'system.info': 'medium'
+  };
+  const RISK_ORDER = { low: 1, medium: 2, high: 3 };
+  const sandboxBadge = $derived.by(() => buildSandboxWindowBadge(win));
+  const appModelClass = $derived(`app-model-${toCssToken(win?.appModel || 'unknown')}`);
+  const appIdClass = $derived(`app-id-${toCssToken(win?.appId || win?.id || 'unknown')}`);
+
+  function toCssToken(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'unknown';
+  }
+
+  function isSandboxWindow(target) {
+    const launchMode = String(target?.launch?.mode || '').toLowerCase();
+    const runtime = String(target?.runtime || target?.runtimeType || target?.runtimeProfile?.runtimeType || '').toLowerCase();
+    return launchMode === 'sandbox'
+      || runtime === 'sandbox'
+      || runtime === 'sandbox-html'
+      || Boolean(target?.sandbox?.entryUrl);
+  }
+
+  function getPermissionRisk(permission) {
+    const normalized = String(permission || '').trim();
+    if (!normalized) return 'low';
+    if (PERMISSION_RISK[normalized]) return PERMISSION_RISK[normalized];
+    if (normalized.startsWith('host.file.write') || normalized.includes('shell') || normalized.includes('command')) return 'high';
+    if (normalized.startsWith('host.') || normalized.startsWith('system.') || normalized.startsWith('terminal.')) return 'medium';
+    return 'low';
+  }
+
+  function getHighestRisk(permissions) {
+    return permissions.reduce((highest, permission) => {
+      const risk = getPermissionRisk(permission);
+      return RISK_ORDER[risk] > RISK_ORDER[highest] ? risk : highest;
+    }, 'low');
+  }
+
+  function buildSandboxWindowBadge(target) {
+    if (!isSandboxWindow(target)) return null;
+    const permissions = Array.isArray(target?.permissions)
+      ? target.permissions.map((permission) => String(permission || '').trim()).filter(Boolean)
+      : [];
+    const risk = getHighestRisk(permissions);
+    const permissionSummary = permissions.length > 0
+      ? permissions.map((permission) => `${permission} (${getPermissionRisk(permission).toUpperCase()})`).join(', ')
+      : translateWith($i18n, 'window.sandboxNoPermissions', {}, 'No declared host permissions');
+    const upperRisk = risk.toUpperCase();
+
+    return {
+      label: permissions.length > 0
+        ? translateWith($i18n, 'window.sandboxBadgeWithRisk', { risk: upperRisk }, `Sandbox · ${upperRisk}`)
+        : translateWith($i18n, 'window.sandboxBadge', {}, 'Sandbox'),
+      risk,
+      title: translateWith($i18n, 'window.sandboxBadgeTitle', { permissions: permissionSummary }, `Sandbox app. ${permissionSummary}.`)
+    };
+  }
 
   $effect(() => {
     if (!dragging && !resizing) {
@@ -148,7 +217,7 @@
 
 <div
   bind:this={winEl}
-  class="window glass-effect window-shadow {active ? 'active' : ''} {win.minimized ? 'minimized' : ''} {win.maximized ? 'maximized' : ''} {dragging || resizing ? 'interacting' : ''}"
+  class="window glass-effect window-shadow {appModelClass} {appIdClass} {active ? 'active' : ''} {win.minimized ? 'minimized' : ''} {win.maximized ? 'maximized' : ''} {dragging || resizing ? 'interacting' : ''}"
   style="transform: {win.maximized ? 'none' : `translate3d(${localX}px, ${localY}px, 0)`}; width: {win.maximized ? '100%' : localWidth + 'px'}; height: {win.maximized ? `calc(100% - ${taskbarHeight}px)` : localHeight + 'px'}; z-index: {win.zIndex}"
   role="dialog"
   aria-label={win.title}
@@ -175,7 +244,12 @@
         {@const TitleIcon = iconComponent}
         <TitleIcon size={16} />
       {/if}
-      <span>{win.title}</span>
+      <span class="title-text">{win.title}</span>
+      {#if sandboxBadge}
+        <span class="sandbox-title-badge risk-{sandboxBadge.risk}" title={sandboxBadge.title}>
+          {sandboxBadge.label}
+        </span>
+      {/if}
     </div>
     <div class="controls">
       <button onclick={(e) => { e.stopPropagation(); toggleMinimize(win.id); }}><Minus size={14} /></button>
@@ -194,7 +268,7 @@
     <div
       class="resize-handle"
       role="button"
-      aria-label="Resize window"
+      aria-label={translateWith($i18n, 'window.resizeAriaLabel', {}, 'Resize window')}
       tabindex="-1"
       onmousedown={handleResizeStart}
       onkeydown={(event) => {
@@ -276,7 +350,45 @@
     gap: 8px;
     font-size: 13px;
     font-weight: 500;
+    min-width: 0;
+    flex: 1;
   }
+
+  .title-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sandbox-title-badge {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 999px;
+    padding: 2px 7px;
+    background: rgba(15, 23, 42, 0.55);
+    color: #cbd5e1;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    line-height: 1.2;
+  }
+
+  .sandbox-title-badge.risk-medium {
+    border-color: rgba(251, 191, 36, 0.38);
+    background: rgba(113, 63, 18, 0.38);
+    color: #fde68a;
+  }
+
+  .sandbox-title-badge.risk-high {
+    border-color: rgba(248, 113, 113, 0.42);
+    background: rgba(127, 29, 29, 0.42);
+    color: #fecaca;
+  }
+
   .title-icon-image {
     width: 16px;
     height: 16px;
@@ -287,6 +399,7 @@
   .controls {
     display: flex;
     gap: 4px;
+    flex-shrink: 0;
   }
 
   .controls button {

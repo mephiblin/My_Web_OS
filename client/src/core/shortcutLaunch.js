@@ -3,6 +3,14 @@ const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov']);
 const DOCUMENT_EXTENSIONS = new Set(['pdf']);
 
 export function buildShortcutLaunch(shortcut = {}) {
+  if (shortcut.kind === 'app' && shortcut.appId) {
+    return {
+      app: { id: shortcut.appId, title: shortcut.name || shortcut.appId },
+      iconKey: 'AppWindow',
+      data: null
+    };
+  }
+
   if (shortcut.isDirectory) {
     return {
       app: { id: 'files', title: 'File Station' },

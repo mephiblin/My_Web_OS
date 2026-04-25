@@ -70,7 +70,7 @@
   }));
 
   function showError(message, code = 'TRANSFER_UI_ERROR') {
-    const text = message || 'Transfer operation failed.';
+    const text = message || '전송 작업에 실패했습니다.';
     operationError = text;
     addToast(text, 'error');
     notifications.add({
@@ -85,6 +85,23 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '-';
     return date.toLocaleString();
+  }
+
+  function statusLabel(status) {
+    const value = normalizeOpsStatus(status);
+    if (value === 'queued' || value === 'pending') return '대기중';
+    if (value === 'running') return '진행중';
+    if (value === 'completed') return '완료';
+    if (value === 'failed') return '실패';
+    if (value === 'canceled') return '취소됨';
+    return '알 수 없음';
+  }
+
+  function typeLabel(type) {
+    const value = String(type || '').trim().toLowerCase();
+    if (value === 'url-download') return 'URL 다운로드';
+    if (value === 'local-copy') return '로컬 복사';
+    return '기타';
   }
 
   function statusClass(status) {
@@ -129,7 +146,7 @@
       jobs = Array.isArray(result.jobs) ? result.jobs : [];
       summary = result?.summary || summary;
       lastSyncAt = Date.now();
-      if (!silent) addToast('Transfer jobs refreshed', 'success');
+      if (!silent) addToast('전송 작업 목록을 새로고침했습니다.', 'success');
     } catch (err) {
       showError(err?.message, err?.code);
     } finally {
@@ -152,20 +169,20 @@
     try {
       if (createMode === 'url-download') {
         if (!urlForm.url.trim() || !urlForm.destinationDir.trim()) {
-          showError('URL and destination directory are required.', 'TRANSFER_CREATE_URL_INVALID_INPUT');
+          showError('URL과 대상 디렉터리는 필수입니다.', 'TRANSFER_CREATE_URL_INVALID_INPUT');
           return;
         }
         await createUrlDownloadJob(urlForm);
-        addToast('URL download job created', 'success');
-        notifications.add({ title: 'Transfer', message: 'URL download job queued.', type: 'success' });
+        addToast('URL 다운로드 작업을 생성했습니다.', 'success');
+        notifications.add({ title: 'Transfer', message: 'URL 다운로드 작업이 큐에 등록되었습니다.', type: 'success' });
       } else {
         if (!copyForm.sourcePath.trim() || !copyForm.destinationDir.trim()) {
-          showError('Source path and destination directory are required.', 'TRANSFER_CREATE_COPY_INVALID_INPUT');
+          showError('원본 경로와 대상 디렉터리는 필수입니다.', 'TRANSFER_CREATE_COPY_INVALID_INPUT');
           return;
         }
         await createLocalCopyJob(copyForm);
-        addToast('Local copy job created', 'success');
-        notifications.add({ title: 'Transfer', message: 'Local copy job queued.', type: 'success' });
+        addToast('로컬 복사 작업을 생성했습니다.', 'success');
+        notifications.add({ title: 'Transfer', message: '로컬 복사 작업이 큐에 등록되었습니다.', type: 'success' });
       }
 
       resetCurrentForm();
@@ -179,7 +196,7 @@
 
   async function handleCancelJob(job) {
     if (!job?.id) {
-      showError('Invalid transfer job id.', 'TRANSFER_CANCEL_INVALID_ID');
+      showError('유효하지 않은 전송 작업 ID입니다.', 'TRANSFER_CANCEL_INVALID_ID');
       return;
     }
     const nextSet = new Set(cancelingIds);
@@ -189,10 +206,10 @@
 
     try {
       await cancelTransferJob(job.id);
-      addToast(`Cancelled job ${job.id}`, 'success');
+      addToast(`작업 ${job.id} 취소 요청을 보냈습니다.`, 'success');
       notifications.add({
         title: 'Transfer',
-        message: `Cancel requested for job ${job.id}.`,
+        message: `작업 ${job.id} 취소를 요청했습니다.`,
         type: 'info'
       });
       await refreshJobs(true);
@@ -207,7 +224,7 @@
 
   async function handleRetryJob(job) {
     if (!job?.id) {
-      showError('Invalid transfer job id.', 'TRANSFER_RETRY_INVALID_ID');
+      showError('유효하지 않은 전송 작업 ID입니다.', 'TRANSFER_RETRY_INVALID_ID');
       return;
     }
     const nextSet = new Set(retryingIds);
@@ -217,10 +234,10 @@
 
     try {
       await retryTransferJob(job.id);
-      addToast(`Retry queued for ${job.id}`, 'success');
+      addToast(`작업 ${job.id} 재시도를 큐에 등록했습니다.`, 'success');
       notifications.add({
         title: 'Transfer',
-        message: `Retry queued for job ${job.id}.`,
+        message: `작업 ${job.id} 재시도를 등록했습니다.`,
         type: 'success'
       });
       await refreshJobs(true);
@@ -238,7 +255,7 @@
     operationError = '';
     try {
       const result = await clearTransferJobs(['completed', 'failed', 'canceled']);
-      addToast(`Cleared ${Number(result?.removed || 0)} transfer jobs`, 'success');
+      addToast(`완료된 전송 작업 ${Number(result?.removed || 0)}개를 정리했습니다.`, 'success');
       await refreshJobs(true);
     } catch (err) {
       showError(err?.message, err?.code);
@@ -267,22 +284,22 @@
     <div class="title-wrap">
       <ArrowDownToLine size={17} />
       <h2>Transfer Manager</h2>
-      <span class="meta">Queued {summary.queued} / Running {runningJobs.length} / Failed {failedJobs.length}</span>
+      <span class="meta">대기 {summary.queued} / 진행 {runningJobs.length} / 실패 {failedJobs.length}</span>
     </div>
 
     <div class="head-actions">
       <button class="ghost-btn" onclick={() => refreshJobs(false)} disabled={refreshing}>
         {#if refreshing}
           <Loader2 size={14} class="spin" />
-          Refreshing
+          새로고침 중
         {:else}
           <RefreshCw size={14} />
-          Refresh
+          새로고침
         {/if}
       </button>
       <span class="sync-time">
         <Clock3 size={13} />
-        Last sync: {formatDateTime(lastSyncAt)}
+        마지막 동기화: {formatDateTime(lastSyncAt)}
       </span>
     </div>
   </section>
@@ -298,11 +315,11 @@
     <div class="mode-switch">
       <button class:active={createMode === 'url-download'} onclick={() => (createMode = 'url-download')}>
         <Download size={14} />
-        URL Download
+        URL 다운로드
       </button>
       <button class:active={createMode === 'local-copy'} onclick={() => (createMode = 'local-copy')}>
         <Copy size={14} />
-        Local Copy
+        로컬 복사
       </button>
     </div>
 
@@ -313,26 +330,26 @@
           <input type="text" bind:value={urlForm.url} placeholder="https://example.com/archive.zip" />
         </label>
         <label>
-          Destination Directory
+          대상 디렉터리
           <input type="text" bind:value={urlForm.destinationDir} placeholder="/home/user/Downloads" />
         </label>
         <label>
-          Optional File Name
+          파일명 (선택)
           <input type="text" bind:value={urlForm.fileName} placeholder="archive.zip" />
         </label>
       </div>
     {:else}
       <div class="form-grid">
         <label>
-          Source Path
+          원본 경로
           <input type="text" bind:value={copyForm.sourcePath} placeholder="/home/user/source/file.iso" />
         </label>
         <label>
-          Destination Directory
+          대상 디렉터리
           <input type="text" bind:value={copyForm.destinationDir} placeholder="/home/user/target" />
         </label>
         <label>
-          Optional File Name
+          파일명 (선택)
           <input type="text" bind:value={copyForm.fileName} placeholder="file-copy.iso" />
         </label>
       </div>
@@ -342,10 +359,10 @@
       <button class="create-btn" onclick={handleCreateJob} disabled={creating}>
         {#if creating}
           <Loader2 size={14} class="spin" />
-          Creating...
+          생성 중...
         {:else}
           <FolderInput size={14} />
-          Create Job
+          작업 생성
         {/if}
       </button>
     </div>
@@ -353,29 +370,29 @@
 
   <section class="jobs-panel glass-effect">
     <div class="jobs-head">
-      <div class="jobs-title">Jobs</div>
+      <div class="jobs-title">작업 목록</div>
       <div class="jobs-tools">
         <div class="status-filter">
-          <button class:active={activeFilter === 'all'} onclick={() => (activeFilter = 'all')}>All</button>
-          <button class:active={activeFilter === 'running'} onclick={() => (activeFilter = 'running')}>Running</button>
-          <button class:active={activeFilter === 'failed'} onclick={() => (activeFilter = 'failed')}>Failed</button>
-          <button class:active={activeFilter === 'completed'} onclick={() => (activeFilter = 'completed')}>Completed</button>
-          <button class:active={activeFilter === 'canceled'} onclick={() => (activeFilter = 'canceled')}>Canceled</button>
+          <button class:active={activeFilter === 'all'} onclick={() => (activeFilter = 'all')}>전체</button>
+          <button class:active={activeFilter === 'running'} onclick={() => (activeFilter = 'running')}>진행중</button>
+          <button class:active={activeFilter === 'failed'} onclick={() => (activeFilter = 'failed')}>실패</button>
+          <button class:active={activeFilter === 'completed'} onclick={() => (activeFilter = 'completed')}>완료</button>
+          <button class:active={activeFilter === 'canceled'} onclick={() => (activeFilter = 'canceled')}>취소됨</button>
         </div>
         <button class="ghost-btn clear-btn" onclick={handleClearHistory} disabled={clearing}>
           {#if clearing}
             <Loader2 size={13} class="spin" />
-            Clearing...
+            정리 중...
           {:else}
             <Trash2 size={13} />
-            Clear Finished
+            완료 작업 정리
           {/if}
         </button>
       </div>
     </div>
 
     {#if filteredJobs.length === 0}
-      <div class="empty">No transfer jobs found.</div>
+      <div class="empty">전송 작업이 없습니다.</div>
     {:else}
       <div class="job-list">
         {#each filteredJobs as job}
@@ -384,13 +401,13 @@
               <div class="job-main">
                 <div class="job-line">
                   <span class="job-id">{job.id}</span>
-                  <span class="job-type">{job.type}</span>
-                  <span class="status {statusClass(job.status)}">{job.status || 'unknown'}</span>
+                  <span class="job-type">{typeLabel(job.type)}</span>
+                  <span class="status {statusClass(job.status)}">{statusLabel(job.status)}</span>
                 </div>
                 <div class="job-path">{job.sourcePath || job.url || '-'}</div>
-                <div class="job-path">to {job.destinationDir || '-'}</div>
+                <div class="job-path">대상: {job.destinationDir || '-'}</div>
                 {#if job.fileName}
-                  <div class="job-path">as {job.fileName}</div>
+                  <div class="job-path">파일명: {job.fileName}</div>
                 {/if}
               </div>
 
@@ -403,10 +420,10 @@
                   >
                     {#if cancelingIds.has(job.id)}
                       <Loader2 size={13} class="spin" />
-                      Canceling...
+                      취소 중...
                     {:else}
                       <CircleX size={13} />
-                      Cancel
+                      취소
                     {/if}
                   </button>
                 {/if}
@@ -418,10 +435,10 @@
                   >
                     {#if retryingIds.has(job.id)}
                       <Loader2 size={13} class="spin" />
-                      Retrying...
+                      재시도 중...
                     {:else}
                       <RotateCcw size={13} />
-                      Retry
+                      재시도
                     {/if}
                   </button>
                 {/if}
@@ -443,7 +460,7 @@
               </div>
             {/if}
 
-            <div class="job-time">Updated: {formatDateTime(job.updatedAt || job.createdAt)}</div>
+            <div class="job-time">갱신 시각: {formatDateTime(job.updatedAt || job.createdAt)}</div>
           </article>
         {/each}
       </div>

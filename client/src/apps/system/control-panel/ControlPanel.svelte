@@ -9,8 +9,15 @@
   import { windowDefaultsSettings } from '../../../core/stores/windowDefaultsStore.js';
   import { apiFetch } from '../../../utils/api.js';
   import { startMenuState, setStartMenuLayout, initStartMenuState } from '../../../core/stores/startMenuStore.js';
+  import { i18n, normalizeLanguageCode, refreshLanguagePacks, supportedLanguages, translateWith } from '../../../core/i18n/index.js';
   import FilePicker from '../../../core/components/FilePicker.svelte';
-  import { fetchWallpaperLibraryItems, uploadWallpaperFile, importWallpaperFromLocalPath } from './api.js';
+  import {
+    fetchLanguagePackList,
+    fetchWallpaperLibraryItems,
+    importWallpaperFromLocalPath,
+    uploadLanguagePackFile,
+    uploadWallpaperFile
+  } from './api.js';
 
   let activeTab = $state('personalization');
   let wallpaperList = $state([]);
@@ -23,12 +30,14 @@
   let openWithAppId = $state('');
   let desktopApps = $state([]);
   let fileInput = $state(null);
-  
-  const tabs = [
-    { id: 'personalization', title: 'Personalization', icon: Palette },
-    { id: 'system', title: 'System', icon: Monitor },
-    { id: 'about', title: 'About', icon: Info }
-  ];
+  let languagePackInput = $state(null);
+  let isUploadingLanguagePack = $state(false);
+
+  const tabs = $derived([
+    { id: 'personalization', title: translateWith($i18n, 'controlPanel.tab.personalization', {}, 'Personalization'), icon: Palette },
+    { id: 'system', title: translateWith($i18n, 'controlPanel.tab.system', {}, 'System'), icon: Monitor },
+    { id: 'about', title: translateWith($i18n, 'controlPanel.tab.about', {}, 'About'), icon: Info }
+  ]);
 
   async function fetchWallpapers() {
     isLoadingList = true;
@@ -80,7 +89,8 @@
       wallpaperType: String($systemSettings.wallpaperType || 'css'),
       wallpaper: String($systemSettings.wallpaper || ''),
       wallpaperId: String($systemSettings.wallpaperId || ''),
-      wallpaperFit: String($systemSettings.wallpaperFit || 'cover')
+      wallpaperFit: String($systemSettings.wallpaperFit || 'cover'),
+      desktopIconScale: getDesktopIconScale($systemSettings.desktopIconScale)
     };
   }
 
@@ -108,7 +118,8 @@
       wallpaperType: String(preset.settings.wallpaperType || 'css'),
       wallpaper: String(preset.settings.wallpaper || ''),
       wallpaperId: String(preset.settings.wallpaperId || ''),
-      wallpaperFit: String(preset.settings.wallpaperFit || 'cover')
+      wallpaperFit: String(preset.settings.wallpaperFit || 'cover'),
+      desktopIconScale: getDesktopIconScale(preset.settings.desktopIconScale)
     });
     addToast(`Applied "${preset.name}"`, 'success');
   }
@@ -172,11 +183,81 @@
     addToast(`Removed Open With default for .${target}`, 'info');
   }
 
+  function getDesktopIconScale(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 1;
+    if (numeric < 0.8) return 0.8;
+    if (numeric > 1.25) return 1.25;
+    return numeric;
+  }
+
+  const desktopIconScalePercent = $derived(Math.round(getDesktopIconScale($systemSettings.desktopIconScale) * 100));
+
+  function setDesktopIconScale(value) {
+    systemSettings.updateSettings({ desktopIconScale: getDesktopIconScale(value) });
+  }
+
+  function isDesktopIconScale(value) {
+    return Math.abs(getDesktopIconScale($systemSettings.desktopIconScale) - value) < 0.01;
+  }
+
+  function updateDesktopLanguage(languageCode) {
+    const nextLanguage = normalizeLanguageCode(languageCode);
+    if (nextLanguage === normalizeLanguageCode($systemSettings.language)) return;
+    systemSettings.updateSettings({ language: nextLanguage });
+    addToast(translateWith($i18n, 'controlPanel.language.saved', {}, 'Desktop language changed.'), 'success');
+  }
+
+  async function reloadLanguagePacks({ toastOnSuccess = false } = {}) {
+    try {
+      const packs = await fetchLanguagePackList();
+      await refreshLanguagePacks();
+      if (toastOnSuccess) {
+        addToast(
+          translateWith($i18n, 'controlPanel.language.reloadSuccess', { count: packs.length }, `Language pack list refreshed (${packs.length})`),
+          'success'
+        );
+      }
+    } catch (error) {
+      addToast(error?.message || translateWith($i18n, 'controlPanel.language.reloadFailed', {}, 'Failed to refresh language packs.'), 'error');
+    }
+  }
+
+  async function handleLanguagePackUpload(event) {
+    const file = event?.currentTarget?.files?.[0];
+    if (!file) return;
+
+    isUploadingLanguagePack = true;
+    try {
+      const payload = await uploadLanguagePackFile(file);
+      await reloadLanguagePacks();
+
+      const uploadedCode = String(
+        payload?.data?.code || payload?.code || payload?.data?.pack?.code || ''
+      ).trim().toLowerCase();
+      if (uploadedCode) {
+        systemSettings.updateSettings({ language: normalizeLanguageCode(uploadedCode) });
+      }
+      addToast(
+        payload?.message || translateWith($i18n, 'controlPanel.language.uploadSuccess', {}, 'Language pack uploaded.'),
+        'success'
+      );
+    } catch (error) {
+      addToast(error?.message || translateWith($i18n, 'controlPanel.language.uploadFailed', {}, 'Language pack upload failed.'), 'error');
+    } finally {
+      isUploadingLanguagePack = false;
+      if (event?.currentTarget) {
+        event.currentTarget.value = '';
+      }
+    }
+  }
+
   onMount(() => {
     fetchWallpapers();
     themePresets.init();
     loadDesktopApps();
     initStartMenuState();
+    reloadLanguagePacks();
   });
 
   const gradientPresets = [
@@ -197,8 +278,8 @@
     <nav>
       {#each tabs as tab}
         {@const TabIcon = tab.icon}
-        <button 
-          class="tab-btn {activeTab === tab.id ? 'active' : ''}" 
+        <button
+          class="tab-btn {activeTab === tab.id ? 'active' : ''}"
           onclick={() => activeTab = tab.id}
         >
           <TabIcon size={18} />
@@ -213,7 +294,7 @@
       <section class="settings-section">
         <h2>Personalization</h2>
         <p class="panel-note">Desktop appearance lives here. Server/runtime operations are managed in the Settings app.</p>
-        
+
         <div class="setting-group">
           <div class="setting-label">Background Source</div>
           <div class="type-selector">
@@ -234,7 +315,7 @@
             <div class="setting-label">Presets</div>
             <div class="wallpaper-grid">
               {#each gradientPresets as wp}
-                <button 
+                <button
                   class="wallpaper-item {$systemSettings.wallpaperId === wp.id ? 'active' : ''}"
                   style="background: {wp.color}"
                   onclick={() => systemSettings.updateSettings({ wallpaper: wp.color, wallpaperId: wp.id })}
@@ -265,7 +346,7 @@
             <div class="gallery-grid">
               {#each wallpaperList as item}
                 {#if ($systemSettings.wallpaperType === 'video' && item.kind === 'video') || ($systemSettings.wallpaperType === 'image' && item.kind === 'image')}
-                  <button 
+                  <button
                     class="gallery-item {$systemSettings.wallpaperId === item.id ? 'active' : ''}"
                     onclick={() => selectWallpaper(item)}
                   >
@@ -276,7 +357,7 @@
                     {:else}
                       <img src={item.url} alt={item.name} loading="lazy" />
                     {/if}
-                    
+
                     {#if $systemSettings.wallpaperId === item.id}
                       <div class="active-check"><Check size={16} /></div>
                     {/if}
@@ -284,7 +365,7 @@
                   </button>
                 {/if}
               {/each}
-              
+
               {#if wallpaperList.length === 0 && !isLoadingList}
                 <div class="empty-gallery">
                   <Folder size={32} />
@@ -297,9 +378,9 @@
           <div class="setting-group">
             <label for="wallpaperUrl">Or manually enter URL</label>
             <div class="url-input-container">
-              <input 
+              <input
                 id="wallpaperUrl"
-                type="text" 
+                type="text"
                 placeholder="https://example.com/custom.png"
                 value={$systemSettings.wallpaper}
                 onchange={(e) => systemSettings.updateSettings({ wallpaper: e.target.value, wallpaperId: 'custom' })}
@@ -323,32 +404,32 @@
 
         <div class="setting-group">
           <label for="glassBlur">Glassmorphism Blur ({$systemSettings.blurIntensity}px)</label>
-          <input 
+          <input
             id="glassBlur"
-            type="range" min="0" max="40" 
-            value={$systemSettings.blurIntensity} 
-            oninput={(e) => systemSettings.updateSettings({ blurIntensity: parseInt(e.target.value) })} 
+            type="range" min="0" max="40"
+            value={$systemSettings.blurIntensity}
+            oninput={(e) => systemSettings.updateSettings({ blurIntensity: parseInt(e.target.value) })}
           />
         </div>
 
         <div class="setting-group">
           <label for="transparency">Transparency ({Math.round($systemSettings.transparency * 100)}%)</label>
-          <input 
+          <input
             id="transparency"
-            type="range" min="0.05" max="0.5" step="0.01" 
-            value={$systemSettings.transparency} 
-            oninput={(e) => systemSettings.updateSettings({ transparency: parseFloat(e.target.value) })} 
+            type="range" min="0.05" max="0.5" step="0.01"
+            value={$systemSettings.transparency}
+            oninput={(e) => systemSettings.updateSettings({ transparency: parseFloat(e.target.value) })}
           />
         </div>
 
         <div class="setting-group">
           <label for="accentColor">Accent Color</label>
           <div class="color-picker">
-            <input 
+            <input
               id="accentColor"
-              type="color" 
-              value={$systemSettings.accentColor} 
-              oninput={(e) => systemSettings.updateSettings({ accentColor: e.target.value })} 
+              type="color"
+              value={$systemSettings.accentColor}
+              oninput={(e) => systemSettings.updateSettings({ accentColor: e.target.value })}
             />
             <span class="color-value">{$systemSettings.accentColor}</span>
           </div>
@@ -394,6 +475,48 @@
         </div>
 
         <div class="setting-divider"></div>
+
+        <div class="setting-group">
+          <div class="setting-label">Desktop Icons</div>
+          <div class="taskbar-settings glass-effect">
+            <div class="taskbar-row">
+              <span>Grid scale</span>
+              <span class="setting-value">{desktopIconScalePercent}%</span>
+            </div>
+            <input
+              aria-label="Desktop icon grid scale"
+              type="range"
+              min="0.8"
+              max="1.25"
+              step="0.01"
+              value={getDesktopIconScale($systemSettings.desktopIconScale)}
+              oninput={(e) => setDesktopIconScale(e.currentTarget.value)}
+            />
+            <div class="taskbar-row wrap">
+              <span>Quick sizes</span>
+              <div class="size-segment desktop-size-segment">
+                <button
+                  class:active={isDesktopIconScale(0.9)}
+                  onclick={() => setDesktopIconScale(0.9)}
+                >
+                  Tight
+                </button>
+                <button
+                  class:active={isDesktopIconScale(1)}
+                  onclick={() => setDesktopIconScale(1)}
+                >
+                  Default
+                </button>
+                <button
+                  class:active={isDesktopIconScale(1.15)}
+                  onclick={() => setDesktopIconScale(1.15)}
+                >
+                  Large
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div class="setting-group">
           <div class="setting-label">Start Menu</div>
@@ -715,6 +838,42 @@
       </section>
     {:else if activeTab === 'system'}
       <section class="settings-section">
+        <div class="setting-group">
+          <div class="setting-label">{translateWith($i18n, 'controlPanel.language.label', {}, 'Desktop Language')}</div>
+          <p class="panel-note">{translateWith($i18n, 'controlPanel.language.description', {}, 'Upload a language pack JSON file, then select it for core desktop UI without rebuild.')}</p>
+          <div class="ops-inline">
+            <select
+              value={normalizeLanguageCode($systemSettings.language)}
+              onchange={(event) => updateDesktopLanguage(event.currentTarget.value)}
+            >
+              {#each $supportedLanguages as language}
+                <option value={language.code}>
+                  {translateWith(
+                    $i18n,
+                    'controlPanel.language.optionFormat',
+                    { nativeName: language.nativeName, name: language.name },
+                    `${language.nativeName} (${language.name})`
+                  )}
+                </option>
+              {/each}
+            </select>
+            <button class="action-btn-outline" onclick={() => languagePackInput?.click()} disabled={isUploadingLanguagePack}>
+              <Upload size={12} />
+              {translateWith($i18n, 'controlPanel.language.uploadButton', {}, isUploadingLanguagePack ? 'Uploading...' : 'Upload Pack')}
+            </button>
+            <button class="action-btn-outline" onclick={() => reloadLanguagePacks({ toastOnSuccess: true })}>
+              {translateWith($i18n, 'controlPanel.language.reloadButton', {}, 'Refresh Packs')}
+            </button>
+            <input
+              bind:this={languagePackInput}
+              type="file"
+              accept="application/json,.json"
+              style="display: none;"
+              onchange={handleLanguagePackUpload}
+            />
+          </div>
+        </div>
+
         <h2>System Information</h2>
         <div class="info-card glass-effect">
           <div class="info-item">
@@ -755,22 +914,22 @@
 </div>
 
 {#if showFilePicker}
-  <FilePicker 
-    filter={$systemSettings.wallpaperType === 'video' ? ['mp4', 'webm'] : ['jpg', 'jpeg', 'png', 'webp', 'gif']} 
-    onSelect={handleFileSelected} 
-    onCancel={() => showFilePicker = false} 
+  <FilePicker
+    filter={$systemSettings.wallpaperType === 'video' ? ['mp4', 'webm'] : ['jpg', 'jpeg', 'png', 'webp', 'gif']}
+    onSelect={handleFileSelected}
+    onCancel={() => showFilePicker = false}
   />
 {/if}
 
 <style>
   .control-panel { display: flex; height: 100%; overflow: hidden; background: rgba(0,0,0,0.2); }
-  
+
   .sidebar { width: 200px; padding: 20px 10px; display: flex; flex-direction: column; gap: 20px; border-right: 1px solid var(--glass-border); }
   .sidebar-header { display: flex; align-items: center; gap: 10px; padding: 0 10px; font-weight: 600; color: var(--text-primary); }
-  
+
   nav { display: flex; flex-direction: column; gap: 4px; }
-  .tab-btn { 
-    display: flex; align-items: center; gap: 12px; padding: 10px 15px; background: transparent; 
+  .tab-btn {
+    display: flex; align-items: center; gap: 12px; padding: 10px 15px; background: transparent;
     border: none; color: var(--text-dim); border-radius: 8px; cursor: pointer; transition: all 0.2s;
     text-align: left;
   }
@@ -778,31 +937,31 @@
   .tab-btn.active { background: var(--accent-blue); color: white; box-shadow: 0 4px 12px rgba(88, 166, 255, 0.3); }
 
   .content-area { flex: 1; padding: 30px; overflow-y: auto; }
-  
+
   h2 { font-size: 24px; font-weight: 700; margin-bottom: 24px; color: var(--text-primary); }
   .panel-note { margin: -10px 0 16px; color: var(--text-dim); font-size: 13px; }
-  
+
   .setting-group { margin-bottom: 24px; display: flex; flex-direction: column; gap: 10px; }
   .setting-group label,
   .setting-label { font-size: 14px; font-weight: 600; color: var(--text-secondary); }
-  
+
   .setting-divider { height: 1px; background: var(--glass-border); margin: 30px 0; }
 
   input[type="range"] { width: 100%; accent-color: var(--accent-blue); height: 6px; border-radius: 3px; cursor: pointer; }
-  
+
   .wallpaper-grid, .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
-  
-  .wallpaper-item, .gallery-item { 
-    height: 90px; border-radius: 10px; border: 2px solid transparent; cursor: pointer; 
+
+  .wallpaper-item, .gallery-item {
+    height: 90px; border-radius: 10px; border: 2px solid transparent; cursor: pointer;
     position: relative; overflow: hidden; transition: all 0.2s; background: rgba(0,0,0,0.3);
   }
-  
+
   .gallery-item img { width: 100%; height: 100%; object-fit: cover; }
   .video-preview { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(88,166,255,0.1); color: var(--accent-blue); }
 
   .wallpaper-item:hover, .gallery-item:hover { transform: translateY(-3px); box-shadow: 0 8px 16px rgba(0,0,0,0.4); }
   .wallpaper-item.active, .gallery-item.active { border-color: var(--accent-blue); box-shadow: 0 0 15px rgba(88, 166, 255, 0.4); }
-  
+
   .active-check { position: absolute; top: 8px; right: 8px; background: var(--accent-blue); color: white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border: 2px solid rgba(255,255,255,0.2); z-index: 2; }
 
   .wp-name { position: absolute; bottom: 0; left: 0; width: 100%; padding: 6px; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent); font-size: 10px; color: white; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -811,7 +970,7 @@
   .header-actions { display: flex; gap: 8px; }
   .upload-action-btn { background: rgba(88,166,255,0.1); border: 1px dashed var(--accent-blue); color: var(--accent-blue); padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s; }
   .upload-action-btn:hover { background: rgba(88,166,255,0.2); transform: translateY(-1px); }
-  
+
   .action-btn-outline { background: transparent; border: 1px solid var(--glass-border); color: var(--text-secondary); padding: 5px 12px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s; }
   .action-btn-outline:hover { background: rgba(255,255,255,0.05); color: white; }
 
@@ -826,7 +985,7 @@
 
   .url-input-container { display: flex; gap: 8px; }
   .url-input-container input { flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: white; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-family: monospace; outline: none; }
-  
+
   .empty-gallery { grid-column: 1 / -1; padding: 40px; border: 2px dashed var(--glass-border); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--text-dim); opacity: 0.6; }
   .empty-gallery p { margin: 0; font-size: 13px; }
 
@@ -875,6 +1034,11 @@
     border-color: rgba(88, 166, 255, 0.6);
     background: rgba(88, 166, 255, 0.2);
   }
+  .setting-value {
+    color: white;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
   .size-segment {
     display: inline-flex;
     border: 1px solid var(--glass-border);
@@ -893,6 +1057,11 @@
   .size-segment button.active {
     background: rgba(88, 166, 255, 0.2);
     color: white;
+  }
+  .desktop-size-segment button {
+    width: auto;
+    min-width: 58px;
+    padding: 0 10px;
   }
   .pill-toggles {
     display: flex;

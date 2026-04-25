@@ -3,25 +3,64 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Code Editor</title>
+    <title>코드 에디터</title>
     <style>
       :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }
-      body { margin: 0; height: 100vh; display: grid; grid-template-rows: 44px 1fr 28px; background: #111827; color: #e5e7eb; }
-      header, footer { display: flex; align-items: center; gap: 10px; padding: 0 12px; background: #0f172a; border-bottom: 1px solid #253044; }
-      footer { border-top: 1px solid #253044; border-bottom: 0; color: #94a3b8; font-size: 12px; }
+      body {
+        margin: 0;
+        height: 100vh;
+        display: grid;
+        grid-template-rows: 46px 1fr 30px;
+        background: radial-gradient(circle at 20% 0%, #17263f 0%, #0b1220 48%, #060b14 100%);
+        color: #e5e7eb;
+      }
+      header, footer {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+        background: rgba(15, 23, 42, 0.6);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.26);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+      }
+      footer {
+        border-top: 1px solid rgba(148, 163, 184, 0.22);
+        border-bottom: 0;
+        color: #94a3b8;
+        font-size: 12px;
+      }
       .title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
-      button { border: 1px solid #2563eb; border-radius: 8px; background: #1d4ed8; color: white; padding: 7px 12px; cursor: pointer; }
+      button {
+        border: 1px solid rgba(125, 211, 252, 0.5);
+        border-radius: 8px;
+        background: rgba(37, 99, 235, 0.72);
+        color: white;
+        padding: 7px 12px;
+        cursor: pointer;
+      }
       button:disabled { opacity: .45; cursor: not-allowed; }
-      textarea { width: 100%; height: 100%; box-sizing: border-box; resize: none; border: 0; outline: 0; padding: 16px; background: #020617; color: #dbeafe; font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      textarea {
+        width: 100%;
+        height: 100%;
+        box-sizing: border-box;
+        resize: none;
+        border: 0;
+        outline: 0;
+        padding: 16px;
+        background: rgba(2, 6, 23, 0.78);
+        color: #dbeafe;
+        font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
     </style>
   </head>
   <body>
     <header>
-      <div class="title" id="title">Code Editor</div>
-      <button id="save">Save</button>
+      <div class="title" id="title">코드 에디터</div>
+      <button id="save">저장</button>
     </header>
     <textarea id="editor" spellcheck="false"></textarea>
-    <footer id="status">Waiting for file context...</footer>
+    <footer id="status">파일 컨텍스트를 기다리는 중...</footer>
     <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const titleEl = document.getElementById('title');
@@ -35,7 +74,7 @@
       async function save() {
         if (!active) return;
         if (active.mode === 'read') {
-          setStatus('Read-only grant. Save blocked.');
+          setStatus('읽기 전용 권한입니다. 저장할 수 없습니다.');
           return;
         }
         try {
@@ -46,9 +85,9 @@
             overwrite: true,
             approval: { approved: true, reason: 'sandbox-editor-save' }
           });
-          setStatus('Saved.');
+          setStatus('저장했습니다.');
         } catch (err) {
-          setStatus(err?.message || 'Save failed.');
+          setStatus(err?.message || '저장에 실패했습니다.');
         }
       }
 
@@ -60,9 +99,9 @@
           const grant = launchData?.fileContext?.permissionContext || {};
           const path = file.path || launchData.path || '';
           const grantId = grant.grantId || '';
-          titleEl.textContent = file.name || path.split('/').pop() || 'Code Editor';
+          titleEl.textContent = file.name || path.split('/').pop() || '코드 에디터';
           if (!path || !grantId) {
-            setStatus('File path or grant is missing.');
+            setStatus('파일 경로 또는 권한이 없습니다.');
             saveEl.disabled = true;
             return;
           }
@@ -70,10 +109,10 @@
           editorEl.value = String(result?.content || '');
           active = { path, grantId, mode: file.mode || 'readwrite' };
           saveEl.disabled = active.mode === 'read';
-          setStatus(active.mode === 'read' ? 'Opened read-only.' : 'Ready.');
+          setStatus(active.mode === 'read' ? '읽기 전용으로 열었습니다.' : '준비되었습니다.');
         } catch (err) {
           saveEl.disabled = true;
-          setStatus(err?.message || 'Failed to open file.');
+          setStatus(err?.message || '파일을 열지 못했습니다.');
         }
       }
 

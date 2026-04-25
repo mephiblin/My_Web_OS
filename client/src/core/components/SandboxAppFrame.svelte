@@ -7,7 +7,7 @@
   import { apiFetch } from '../../utils/api.js';
   import { cloneMessagePayload } from '../../utils/messagePayload.js';
 
-  let { app, showPermissionOverlay = true } = $props();
+  let { app } = $props();
 
   const iconMap = {
     Shield,
@@ -31,7 +31,6 @@
   let capabilityById = $state({});
   let approvalMemory = $state({});
   let pendingApproval = $state(null);
-  let recentDenied = $state(null);
   let lastLaunchDataKey = '';
   let bridgeTimeout = null;
 
@@ -315,14 +314,7 @@
   function denyPendingApproval() {
     if (!pendingApproval) return;
     const reject = pendingApproval.reject;
-    const denied = {
-      permission: pendingApproval.permission,
-      method: pendingApproval.method,
-      risk: pendingApproval.risk,
-      deniedAt: new Date().toISOString()
-    };
     pendingApproval = null;
-    recentDenied = denied;
     const err = new Error('User denied sandbox request approval.');
     err.code = 'SANDBOX_APPROVAL_DENIED';
     reject(err);
@@ -473,29 +465,6 @@
     </div>
   {/if}
 
-  {#if showPermissionOverlay && app?.permissions?.length > 0}
-    <div class="overlay permissions">
-      <div class="permissions-title">
-        <Shield size={12} />
-        Sandbox Permissions
-      </div>
-      <div class="permission-list">
-        {#each app.permissions as permission}
-          <span class="permission-chip {shouldRequireApproval(permission) ? 'sensitive' : ''}">
-            {permission}
-            <em>{getRiskLabel(permission)}</em>
-          </span>
-        {/each}
-      </div>
-      {#if recentDenied}
-        <div class="denied-note">
-          <AlertTriangle size={12} />
-          Denied: {recentDenied.permission}
-        </div>
-      {/if}
-    </div>
-  {/if}
-
   {#if pendingApproval}
     <div class="approval-overlay">
       <div class="approval-card glass-effect">
@@ -575,67 +544,6 @@
     gap: 2px;
     max-width: min(520px, calc(100% - 32px));
     border-radius: 12px;
-  }
-
-  .permissions {
-    left: 16px;
-    right: auto;
-    top: 16px;
-    border-radius: 12px;
-    background: rgba(8, 20, 36, 0.78);
-    border: 1px solid rgba(125, 211, 252, 0.3);
-    min-width: 320px;
-    max-width: min(640px, calc(100% - 32px));
-    color: #dbeafe;
-    display: grid;
-    gap: 8px;
-  }
-
-  .permissions-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    color: #bae6fd;
-  }
-
-  .permission-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .permission-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 1px solid rgba(148, 163, 184, 0.28);
-    border-radius: 999px;
-    background: rgba(2, 6, 23, 0.55);
-    padding: 4px 8px;
-    font-size: 11px;
-    color: #dbeafe;
-  }
-
-  .permission-chip em {
-    font-style: normal;
-    opacity: 0.7;
-    font-size: 10px;
-  }
-
-  .permission-chip.sensitive {
-    border-color: rgba(251, 191, 36, 0.45);
-    color: #fde68a;
-  }
-
-  .denied-note {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: #fecaca;
-    font-size: 11px;
   }
 
   .approval-overlay {

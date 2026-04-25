@@ -1,7 +1,7 @@
 {
   "id": "doc-viewer",
-  "title": "Document Viewer",
-  "description": "Document and text preview addon.",
+  "title": "문서 뷰어",
+  "description": "문서/텍스트 미리보기 애드온",
   "version": "1.0.0",
   "type": "app",
   "runtime": {
@@ -48,7 +48,7 @@
   "contributes": {
     "fileContextMenu": [
       {
-        "label": "Open in Document Viewer",
+        "label": "문서 뷰어로 열기",
         "action": "open",
         "extensions": [
           "pdf",
@@ -64,7 +64,7 @@
     "fileCreateTemplates": [],
     "previewProviders": [
       {
-        "label": "Document Preview",
+        "label": "문서 미리보기",
         "extensions": [
           "pdf",
           "txt",
