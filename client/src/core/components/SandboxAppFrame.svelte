@@ -42,6 +42,7 @@
 
     const url = new URL(baseEntry, window.location.origin);
     url.searchParams.set('parentOrigin', window.location.origin);
+    url.searchParams.set('instanceId', app?.id || appId || String(Date.now()));
     return `${url.pathname}${url.search}`;
   });
 

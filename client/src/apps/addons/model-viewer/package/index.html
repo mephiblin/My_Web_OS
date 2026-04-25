@@ -85,6 +85,8 @@
       let mixer;
       let axes;
       let frameId;
+      let resizeObserver;
+      let disposed = false;
       let rawUrl = '';
       let fileName = 'model';
       let wireframe = false;
@@ -111,6 +113,8 @@
         renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
         renderer.shadowMap.enabled = true;
         viewport.appendChild(renderer.domElement);
+        resizeObserver = new ResizeObserver(() => resize());
+        resizeObserver.observe(viewport);
         controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         scene.add(new THREE.AmbientLight(0xffffff, 0.62));
@@ -135,6 +139,7 @@
       }
 
       function animate() {
+        if (disposed) return;
         frameId = requestAnimationFrame(animate);
         const delta = clock.getDelta();
         if (mixer) mixer.update(delta);
@@ -183,13 +188,39 @@
         return String(value || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
       }
 
+      function disposeMaterial(material) {
+        if (!material) return;
+        for (const key of Object.keys(material)) {
+          const value = material[key];
+          if (value && typeof value === 'object' && typeof value.dispose === 'function') {
+            value.dispose();
+          }
+        }
+        material.dispose?.();
+      }
+
+      function disposeObject(root) {
+        root?.traverse?.((node) => {
+          node.geometry?.dispose?.();
+          if (Array.isArray(node.material)) {
+            node.material.forEach(disposeMaterial);
+          } else {
+            disposeMaterial(node.material);
+          }
+        });
+      }
+
       function frameModel(root) {
         const box = new THREE.Box3().setFromObject(root);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
-        root.position.x += root.position.x - center.x;
-        root.position.y += root.position.y - center.y;
-        root.position.z += root.position.z - center.z;
+        if (!Number.isFinite(size.x + size.y + size.z) || box.isEmpty()) {
+          camera.position.set(5, 5, 5);
+          controls.target.set(0, 0, 0);
+          controls.update();
+          return;
+        }
+        root.position.sub(center);
         const maxDim = Math.max(size.x, size.y, size.z) || 1;
         const fov = camera.fov * Math.PI / 180;
         const distY = (size.y / 2) / Math.tan(fov / 2);
@@ -202,6 +233,14 @@
         controls.target.set(0, 0, 0);
         controls.maxDistance = distance * 8;
         controls.update();
+        renderer?.render(scene, camera);
+      }
+
+      async function waitForViewportSize() {
+        for (let i = 0; i < 20; i += 1) {
+          if (viewport.clientWidth > 10 && viewport.clientHeight > 10) return;
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
       }
 
       async function loadModel(url, extension) {
@@ -219,7 +258,14 @@
         } else {
           throw new Error('Unsupported format: ' + extension);
         }
-        if (model) scene.remove(model);
+        if (model) {
+          scene.remove(model);
+          disposeObject(model);
+        }
+        if (mixer) {
+          mixer.stopAllAction();
+          mixer = null;
+        }
         model = loadedObject;
         scene.add(model);
         if (animations.length > 0) {
@@ -229,10 +275,13 @@
         applyWireframe(model, wireframe);
         frameModel(model);
         inspect(model);
+        renderer?.render(scene, camera);
       }
 
       async function boot() {
         initScene();
+        await waitForViewportSize();
+        resize();
         animate();
         const context = await window.WebOS.ready();
         const launchData = context?.app?.launchData || {};
@@ -250,6 +299,28 @@
         setStatus('Loading ' + fileName + '...');
         await loadModel(rawUrl, extension);
         setStatus('');
+      }
+
+      function cleanup() {
+        if (disposed) return;
+        disposed = true;
+        if (frameId) cancelAnimationFrame(frameId);
+        frameId = null;
+        resizeObserver?.disconnect?.();
+        resizeObserver = null;
+        mixer?.stopAllAction?.();
+        mixer = null;
+        if (model) {
+          scene?.remove?.(model);
+          disposeObject(model);
+          model = null;
+        }
+        controls?.dispose?.();
+        controls = null;
+        renderer?.dispose?.();
+        renderer?.forceContextLoss?.();
+        renderer?.domElement?.remove?.();
+        renderer = null;
       }
 
       wireframeEl.addEventListener('click', () => {
@@ -271,10 +342,8 @@
         link.click();
       });
       window.addEventListener('resize', resize);
-      window.addEventListener('beforeunload', () => {
-        cancelAnimationFrame(frameId);
-        renderer?.dispose();
-      });
+      window.addEventListener('pagehide', cleanup);
+      window.addEventListener('beforeunload', cleanup);
       boot().catch((err) => setStatus(err?.message || 'Failed to open model.', true));
     </script>
   </body>
