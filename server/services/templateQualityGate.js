@@ -10,6 +10,8 @@ const ROOT_PACKAGE_JSON_PATH = path.join(__dirname, '../../package.json');
 const BACKUPS_DIR_NAME = 'package-backups';
 
 const HIGH_RISK_PERMISSIONS = new Set([
+  'host.file.read',
+  'host.file.write',
   'fs.host.read',
   'fs.host.write',
   'fs.host.execute',
@@ -136,7 +138,7 @@ function checkPermissions(manifest, runtimeProfile, checks, recommendations) {
 
   const runtimeType = runtimeProfile.runtimeType;
   const hasHostPermission = permissions.some(
-    (permission) => permission.startsWith('fs.host.') || permission.startsWith('terminal.') || permission.startsWith('system.shell')
+    (permission) => permission.startsWith('host.file.') || permission.startsWith('fs.host.') || permission.startsWith('terminal.') || permission.startsWith('system.shell')
   );
 
   if (runtimeType === 'sandbox-html' && hasHostPermission) {

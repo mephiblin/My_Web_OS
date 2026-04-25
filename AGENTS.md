@@ -53,6 +53,11 @@ Current product direction in this document:
 7. Never silently execute risky actions (delete/overwrite/rollback/install/remove/command execution).
 8. Run the smallest useful verification set and report what was skipped.
 9. Never revert unrelated dirty changes.
+10. Reserved continuation command:
+   - If coding work remains after an implementation step, do not stop at a midpoint.
+   - Continue development through integration, verification, and documentation when feasible.
+   - If parallel work can safely accelerate completion, summon workers and split ownership by disjoint files/modules.
+   - Only stop early for explicit user pause/stop, unsafe ambiguity, blocked external dependency, or required human testing.
 
 ## 3) Canonical Sources
 

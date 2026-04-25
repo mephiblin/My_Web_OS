@@ -87,6 +87,20 @@ function consumeFileGrant(grantId, options = {}) {
   }
 }
 
+function mapFileGrantHttpError(err) {
+  if (err?.status && err?.code) {
+    return err;
+  }
+  if (String(err?.code || '').startsWith('FS_FILE_GRANT_')) {
+    return createFsHttpError(
+      err.code === 'FS_FILE_GRANT_REQUIRED' ? 400 : 403,
+      err.code,
+      err.message
+    );
+  }
+  return err;
+}
+
 
 /**
  * GET /api/fs/trash
@@ -197,6 +211,93 @@ router.get('/grants', async (req, res) => {
     });
   } catch (err) {
     sendFsError(res, err, 'FS_FILE_GRANT_LIST_FAILED', 'Failed to list active file grants.');
+  }
+});
+
+/**
+ * DELETE /api/fs/grants
+ * Revoke active file grants for current user, optionally filtered by source
+ */
+router.delete('/grants', async (req, res) => {
+  try {
+    const source = typeof req.query?.source === 'string' ? req.query.source.trim() : '';
+    const grants = fileGrantService.revokeGrants({
+      user: req.user?.username,
+      source
+    });
+
+    await auditService.log(
+      'FILE_TRANSFER',
+      'Revoke File Grants',
+      {
+        source: source || 'all',
+        count: grants.length,
+        grantIds: grants.map((grant) => grant.id),
+        user: req.user?.username
+      },
+      'INFO'
+    );
+
+    return res.json({
+      success: true,
+      count: grants.length,
+      revoked: grants.map((grant) => ({
+        id: grant.id,
+        appId: grant.appId,
+        source: grant.source,
+        scope: grant.scope,
+        mode: grant.mode,
+        path: grant.path
+      }))
+    });
+  } catch (err) {
+    sendFsError(res, mapFileGrantHttpError(err), 'FS_FILE_GRANT_REVOKE_FAILED', 'Failed to revoke file grants.');
+  }
+});
+
+/**
+ * DELETE /api/fs/grants/:grantId
+ * Revoke an active file grant for current user
+ */
+router.delete('/grants/:grantId', async (req, res) => {
+  try {
+    const source = typeof req.query?.source === 'string' ? req.query.source.trim() : '';
+    const grant = fileGrantService.revokeGrant(req.params.grantId, {
+      user: req.user?.username,
+      source
+    });
+
+    if (!grant) {
+      throw createFsHttpError(404, 'FS_FILE_GRANT_INVALID', 'File grant is invalid or expired.');
+    }
+
+    await auditService.log(
+      'FILE_TRANSFER',
+      'Revoke File Grant',
+      {
+        path: grant.path,
+        mode: grant.mode,
+        appId: grant.appId,
+        source: grant.source,
+        grantId: grant.id,
+        user: req.user?.username
+      },
+      'INFO'
+    );
+
+    return res.json({
+      success: true,
+      revoked: {
+        id: grant.id,
+        appId: grant.appId,
+        source: grant.source,
+        scope: grant.scope,
+        mode: grant.mode,
+        path: grant.path
+      }
+    });
+  } catch (err) {
+    sendFsError(res, mapFileGrantHttpError(err), 'FS_FILE_GRANT_REVOKE_FAILED', 'Failed to revoke file grant.');
   }
 });
 

@@ -23,6 +23,8 @@ const KNOWN_PERMISSIONS = new Set([
   'app.data.list',
   'app.data.read',
   'app.data.write',
+  'host.file.read',
+  'host.file.write',
   'ui.notification',
   'window.open',
   'system.info'
@@ -30,6 +32,12 @@ const KNOWN_PERMISSIONS = new Set([
 const FILE_ASSOC_ACTIONS = new Set(['preview', 'open', 'edit', 'import', 'export']);
 const FILE_EXTENSION_RE = /^[a-z0-9][a-z0-9._+-]{0,31}$/i;
 const MIME_TYPE_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/i;
+const CONTRIBUTION_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
+const CONTRIBUTION_LABEL_MAX = 80;
+const FILE_TEMPLATE_NAME_MAX = 128;
+const FILE_TEMPLATE_CONTENT_MAX = 64 * 1024;
+const RELATIVE_ENTRY_MAX = 180;
+const HOST_FILE_READ_PERMISSION = 'host.file.read';
 
 function readArgs(argv) {
   const args = {
@@ -68,6 +76,271 @@ function readArgs(argv) {
 
 function makeResult(status, id, message, detail = '') {
   return { status, id, message, detail };
+}
+
+function validateFileContextMenuContributions(checks, manifest, fileAssociations) {
+  const contributes = manifest?.contributes;
+  if (contributes === undefined || contributes === null) return;
+  if (!contributes || typeof contributes !== 'object' || Array.isArray(contributes)) {
+    checks.push(makeResult('fail', 'manifest.contributes', 'contributes must be an object.'));
+    return;
+  }
+
+  const rows = contributes.fileContextMenu;
+  if (rows === undefined || rows === null) return;
+  if (!Array.isArray(rows)) {
+    checks.push(makeResult('fail', 'manifest.contributes.fileContextMenu', 'fileContextMenu must be an array.'));
+    return;
+  }
+
+  const associationExtensionsByAction = new Map();
+  for (const row of Array.isArray(fileAssociations) ? fileAssociations : []) {
+    const actions = Array.isArray(row?.actions) && row.actions.length > 0
+      ? row.actions
+      : [row?.defaultAction || 'open'];
+    for (const rawAction of actions) {
+      const action = String(rawAction || '').trim().toLowerCase();
+      if (!FILE_ASSOC_ACTIONS.has(action)) continue;
+      if (!associationExtensionsByAction.has(action)) {
+        associationExtensionsByAction.set(action, new Set());
+      }
+      for (const rawExt of Array.isArray(row?.extensions) ? row.extensions : []) {
+        const ext = String(rawExt || '').trim().toLowerCase().replace(/^\./, '');
+        if (ext) associationExtensionsByAction.get(action).add(ext);
+      }
+    }
+  }
+
+  rows.forEach((row, index) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      checks.push(makeResult('fail', `manifest.contributes.fileContextMenu[${index}]`, 'Contribution entry must be an object.'));
+      return;
+    }
+
+    const label = String(row.label || '').trim();
+    if (!label) {
+      checks.push(makeResult('fail', `manifest.contributes.fileContextMenu[${index}].label`, 'Contribution label is required.'));
+    } else if (label.length > 80) {
+      checks.push(makeResult('fail', `manifest.contributes.fileContextMenu[${index}].label`, 'Contribution label is too long.', label));
+    }
+
+    const action = String(row.action || row.defaultAction || 'open').trim().toLowerCase();
+    if (!FILE_ASSOC_ACTIONS.has(action)) {
+      checks.push(makeResult('fail', `manifest.contributes.fileContextMenu[${index}].action`, 'Unsupported contribution action.', action));
+    }
+
+    if (row.extensions !== undefined && row.extensions !== null && !Array.isArray(row.extensions)) {
+      checks.push(makeResult('fail', `manifest.contributes.fileContextMenu[${index}].extensions`, 'Extensions must be an array when provided.'));
+    }
+
+    const extensions = Array.isArray(row.extensions) ? row.extensions : [];
+    extensions.forEach((rawExt) => {
+      const ext = String(rawExt || '').trim().replace(/^\./, '');
+      if (!FILE_EXTENSION_RE.test(ext)) {
+        checks.push(
+          makeResult(
+            'fail',
+            `manifest.contributes.fileContextMenu[${index}].extensions`,
+            'Invalid extension value.',
+            String(rawExt || '')
+          )
+        );
+      }
+    });
+
+    const hasExplicitExtensions = extensions.length > 0;
+    const hasAssociationExtensions = (associationExtensionsByAction.get(action)?.size || 0) > 0;
+    if (!hasExplicitExtensions && !hasAssociationExtensions) {
+      checks.push(
+        makeResult(
+          'fail',
+          `manifest.contributes.fileContextMenu[${index}].extensions`,
+          'Contribution needs extensions or a matching fileAssociations action.',
+          action
+        )
+      );
+    }
+  });
+}
+
+function validateContributionLabel(checks, id, label) {
+  const normalized = String(label || '').trim();
+  if (!normalized) {
+    checks.push(makeResult('fail', `${id}.label`, 'Contribution label is required.'));
+  } else if (normalized.length > CONTRIBUTION_LABEL_MAX) {
+    checks.push(makeResult('fail', `${id}.label`, 'Contribution label is too long.', normalized));
+  }
+}
+
+function validateContributionExtensions(checks, id, extensions) {
+  if (extensions !== undefined && extensions !== null && !Array.isArray(extensions)) {
+    checks.push(makeResult('fail', `${id}.extensions`, 'Extensions must be an array when provided.'));
+    return false;
+  }
+  if (!Array.isArray(extensions)) return false;
+  extensions.forEach((rawExt) => {
+    const ext = String(rawExt || '').trim().replace(/^\./, '');
+    if (!FILE_EXTENSION_RE.test(ext)) {
+      checks.push(makeResult('fail', `${id}.extensions`, 'Invalid extension value.', String(rawExt || '')));
+    }
+  });
+  return extensions.length > 0;
+}
+
+function associationHasExtensions(fileAssociations, actions = []) {
+  const actionSet = new Set(actions.map((action) => String(action || '').trim().toLowerCase()).filter(Boolean));
+  return (Array.isArray(fileAssociations) ? fileAssociations : []).some((row) => {
+    const extensions = Array.isArray(row?.extensions) ? row.extensions : [];
+    if (extensions.length === 0) return false;
+    if (actionSet.size === 0) return true;
+    const rowActions = Array.isArray(row?.actions) && row.actions.length > 0 ? row.actions : [row?.defaultAction || 'open'];
+    return rowActions.some((action) => actionSet.has(String(action || '').trim().toLowerCase()));
+  });
+}
+
+function validateSafeRelativeEntry(checks, id, value) {
+  const entry = String(value || '').trim().replace(/^[/\\]+/, '');
+  const invalid =
+    !entry ||
+    entry.length > RELATIVE_ENTRY_MAX ||
+    entry.includes('\0') ||
+    entry.split(/[\\/]+/).includes('..') ||
+    /^[a-z][a-z0-9+.-]*:/i.test(entry);
+  if (invalid) {
+    checks.push(makeResult('fail', id, 'Entry must be a safe relative path.', String(value || '')));
+  }
+}
+
+function validateFileCreateTemplateContributions(checks, manifest) {
+  const rows = manifest?.contributes?.fileCreateTemplates;
+  if (rows === undefined || rows === null) return;
+  if (!Array.isArray(rows)) {
+    checks.push(makeResult('fail', 'manifest.contributes.fileCreateTemplates', 'fileCreateTemplates must be an array.'));
+    return;
+  }
+
+  rows.forEach((row, index) => {
+    const id = `manifest.contributes.fileCreateTemplates[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      checks.push(makeResult('fail', id, 'Contribution entry must be an object.'));
+      return;
+    }
+    validateContributionLabel(checks, id, row.label);
+
+    const name = String(row.name || row.defaultName || '').trim();
+    if (!name || name.length > FILE_TEMPLATE_NAME_MAX || name.includes('\0') || name.includes('/') || name.includes('\\')) {
+      checks.push(makeResult('fail', `${id}.name`, 'Template name must be a safe file name.', name));
+    }
+
+    const extension = String(row.extension || (name.includes('.') ? name.split('.').pop() : '') || '').trim().replace(/^\./, '');
+    if (!FILE_EXTENSION_RE.test(extension)) {
+      checks.push(makeResult('fail', `${id}.extension`, 'Template needs a valid extension or file name extension.', extension));
+    }
+
+    const action = String(row.action || 'edit').trim().toLowerCase();
+    if (!FILE_ASSOC_ACTIONS.has(action)) {
+      checks.push(makeResult('fail', `${id}.action`, 'Unsupported template action.', action));
+    }
+
+    if (row.content !== undefined && typeof row.content !== 'string') {
+      checks.push(makeResult('fail', `${id}.content`, 'Template content must be a string.'));
+    } else if (typeof row.content === 'string' && row.content.length > FILE_TEMPLATE_CONTENT_MAX) {
+      checks.push(makeResult('fail', `${id}.content`, 'Template content is too large.'));
+    }
+
+    if (row.openAfterCreate !== undefined && typeof row.openAfterCreate !== 'boolean') {
+      checks.push(makeResult('fail', `${id}.openAfterCreate`, 'openAfterCreate must be a boolean when provided.'));
+    }
+  });
+}
+
+function validateFileProviderContributions(checks, manifest, fileAssociations, keyName) {
+  const rows = manifest?.contributes?.[keyName];
+  if (rows === undefined || rows === null) return;
+  if (!Array.isArray(rows)) {
+    checks.push(makeResult('fail', `manifest.contributes.${keyName}`, `${keyName} must be an array.`));
+    return;
+  }
+
+  const permissions = new Set(Array.isArray(manifest?.permissions) ? manifest.permissions.map(String) : []);
+  if ((keyName === 'previewProviders' || keyName === 'thumbnailProviders') && rows.length > 0 && !permissions.has(HOST_FILE_READ_PERMISSION)) {
+    checks.push(
+      makeResult(
+        'fail',
+        'manifest.permissions',
+        `${keyName} requires ${HOST_FILE_READ_PERMISSION}.`,
+        HOST_FILE_READ_PERMISSION
+      )
+    );
+  }
+
+  const hasInferableExtensions = associationHasExtensions(fileAssociations, ['preview', 'open']);
+  rows.forEach((row, index) => {
+    const id = `manifest.contributes.${keyName}[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      checks.push(makeResult('fail', id, 'Contribution entry must be an object.'));
+      return;
+    }
+    validateContributionLabel(checks, id, row.label);
+    const hasExtensions = validateContributionExtensions(checks, id, row.extensions);
+    if (!hasExtensions && !hasInferableExtensions) {
+      checks.push(makeResult('fail', `${id}.extensions`, 'Provider needs extensions or matching fileAssociations.'));
+    }
+  });
+}
+
+function validateSettingsPanelContributions(checks, manifest) {
+  const rows = manifest?.contributes?.settingsPanels;
+  if (rows === undefined || rows === null) return;
+  if (!Array.isArray(rows)) {
+    checks.push(makeResult('fail', 'manifest.contributes.settingsPanels', 'settingsPanels must be an array.'));
+    return;
+  }
+
+  rows.forEach((row, index) => {
+    const id = `manifest.contributes.settingsPanels[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      checks.push(makeResult('fail', id, 'Contribution entry must be an object.'));
+      return;
+    }
+    validateContributionLabel(checks, id, row.label);
+    validateSafeRelativeEntry(checks, `${id}.entry`, row.entry || row.path || 'index.html');
+  });
+}
+
+function validateBackgroundServiceContributions(checks, manifest) {
+  const rows = manifest?.contributes?.backgroundServices;
+  if (rows === undefined || rows === null) return;
+  if (!Array.isArray(rows)) {
+    checks.push(makeResult('fail', 'manifest.contributes.backgroundServices', 'backgroundServices must be an array.'));
+    return;
+  }
+
+  rows.forEach((row, index) => {
+    const id = `manifest.contributes.backgroundServices[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      checks.push(makeResult('fail', id, 'Contribution entry must be an object.'));
+      return;
+    }
+    const serviceId = String(row.id || '').trim();
+    if (!CONTRIBUTION_ID_RE.test(serviceId)) {
+      checks.push(makeResult('fail', `${id}.id`, 'Background service id is invalid.', serviceId));
+    }
+    validateContributionLabel(checks, id, row.label || serviceId);
+    validateSafeRelativeEntry(checks, `${id}.entry`, row.entry);
+    if (row.autoStart === true) {
+      checks.push(
+        makeResult(
+          'warn',
+          `${id}.autoStart`,
+          'Background service autoStart is policy-gated and will not execute automatically yet.',
+          serviceId
+        )
+      );
+    } else if (row.autoStart !== undefined && typeof row.autoStart !== 'boolean') {
+      checks.push(makeResult('fail', `${id}.autoStart`, 'autoStart must be a boolean when provided.'));
+    }
+  });
 }
 
 function runChecks(manifest) {
@@ -225,6 +498,13 @@ function runChecks(manifest) {
       }
     });
   }
+
+  validateFileContextMenuContributions(checks, manifest, fileAssociations);
+  validateFileCreateTemplateContributions(checks, manifest);
+  validateFileProviderContributions(checks, manifest, fileAssociations, 'previewProviders');
+  validateFileProviderContributions(checks, manifest, fileAssociations, 'thumbnailProviders');
+  validateSettingsPanelContributions(checks, manifest);
+  validateBackgroundServiceContributions(checks, manifest);
 
   const failCount = checks.filter((item) => item.status === 'fail').length;
   const warnCount = checks.filter((item) => item.status === 'warn').length;
@@ -398,4 +678,11 @@ function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  runChecks,
+  runBuiltinRegistryChecks
+};

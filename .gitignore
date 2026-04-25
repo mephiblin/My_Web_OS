@@ -9,6 +9,9 @@ client/node_modules/
 # Build outputs
 dist/
 build/
+!client/src/apps/addons/model-viewer/package/vendor/three/build/
+!client/src/apps/addons/model-viewer/package/vendor/three/build/three.core.js
+!client/src/apps/addons/model-viewer/package/vendor/three/build/three.module.js
 storage/rehearsal-backups/
 
 # IDE and System files

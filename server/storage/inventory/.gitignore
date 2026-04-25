@@ -7,3 +7,9 @@ system/*
 !system/apps.json
 !apps/hello-sandbox/
 !apps/hello-sandbox/**
+!apps/doc-viewer/
+!apps/doc-viewer/**
+!apps/editor/
+!apps/editor/**
+!apps/model-viewer/
+!apps/model-viewer/**

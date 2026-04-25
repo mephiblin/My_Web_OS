@@ -24,9 +24,9 @@ const OPERATION_META = {
   emptyTrash: { title: 'Empty Trash Failed', defaultMessage: 'Could not empty trash.' },
   config: { title: 'Load Failed', defaultMessage: 'Could not load file station configuration.' },
   userDirs: { title: 'Load Failed', defaultMessage: 'Could not load user directories.' },
-  cloudRemotes: { title: 'Load Failed', defaultMessage: 'Could not load cloud remotes.' }
-  ,
-  grants: { title: 'Grant Load Failed', defaultMessage: 'Could not load active file grants.' }
+  cloudRemotes: { title: 'Load Failed', defaultMessage: 'Could not load cloud remotes.' },
+  grants: { title: 'Grant Load Failed', defaultMessage: 'Could not load active file grants.' },
+  revokeGrant: { title: 'Grant Revoke Failed', defaultMessage: 'Could not revoke this file grant.' }
 };
 
 function parseErrorMessage(err) {
@@ -240,6 +240,21 @@ export async function fetchDesktopApps() {
 export async function fetchActiveFileGrants(source = 'file-station') {
   const query = source ? `?source=${encodeURIComponent(source)}` : '';
   return withNormalizedError('grants', () => apiFetch(`/api/fs/grants${query}`));
+}
+
+export async function revokeFileGrant(grantId, source = 'file-station') {
+  const id = text(grantId);
+  const query = source ? `?source=${encodeURIComponent(source)}` : '';
+  return withNormalizedError('revokeGrant', () => apiFetch(`/api/fs/grants/${encodeURIComponent(id)}${query}`, {
+    method: 'DELETE'
+  }));
+}
+
+export async function revokeFileGrants(source = '') {
+  const query = source ? `?source=${encodeURIComponent(source)}` : '';
+  return withNormalizedError('revokeGrant', () => apiFetch(`/api/fs/grants${query}`, {
+    method: 'DELETE'
+  }));
 }
 
 export async function createDir(path) {

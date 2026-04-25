@@ -18,6 +18,18 @@ const CAPABILITY_CATALOG = Object.freeze([
     summary: 'Write files to the package-owned data root.'
   },
   {
+    id: 'host.file.read',
+    category: 'host-files',
+    risk: 'medium',
+    summary: 'Read a user-selected host file through a temporary File Station grant.'
+  },
+  {
+    id: 'host.file.write',
+    category: 'host-files',
+    risk: 'high',
+    summary: 'Write a user-selected host file through a temporary File Station grant and explicit overwrite approval.'
+  },
+  {
     id: 'ui.notification',
     category: 'ui',
     risk: 'low',

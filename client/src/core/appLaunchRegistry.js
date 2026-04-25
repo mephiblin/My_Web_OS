@@ -35,11 +35,11 @@ export function getWindowComponentKey(windowLike = {}) {
 
 export function resolveWindowLaunch(windowLike = {}) {
   const launch = normalizeAppLaunch(windowLike);
-  const componentKey = getWindowComponentKey(windowLike);
+  const componentKey = launch.mode === 'component' ? getWindowComponentKey(windowLike) : '';
   return {
     launch,
     componentKey,
-    hasBuiltinComponent: Boolean(BUILTIN_COMPONENT_LOADERS[componentKey])
+    hasBuiltinComponent: launch.mode === 'component' && Boolean(BUILTIN_COMPONENT_LOADERS[componentKey])
   };
 }
 

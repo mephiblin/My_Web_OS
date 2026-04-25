@@ -7,7 +7,7 @@
   import { apiFetch } from '../../utils/api.js';
   import { cloneMessagePayload } from '../../utils/messagePayload.js';
 
-  let { app } = $props();
+  let { app, showPermissionOverlay = true } = $props();
 
   const iconMap = {
     Shield,
@@ -32,6 +32,7 @@
   let approvalMemory = $state({});
   let pendingApproval = $state(null);
   let recentDenied = $state(null);
+  let lastLaunchDataKey = '';
 
   const appId = $derived(app?.appId || app?.id || '');
   const declaredPermissions = $derived(new Set(Array.isArray(app?.permissions) ? app.permissions : []));
@@ -53,8 +54,8 @@
     'app.data.list': 'app.data.list',
     'app.data.read': 'app.data.read',
     'app.data.write': 'app.data.write',
-    'host.file.read': 'app.data.read',
-    'host.file.write': 'app.data.write'
+    'host.file.read': 'host.file.read',
+    'host.file.write': 'host.file.write'
   };
 
   const SENSITIVE_RISK_LEVELS = new Set(['medium', 'high']);
@@ -66,9 +67,23 @@
     frameEl.contentWindow.postMessage(safePayload, '*');
   }
 
+  function getLaunchDataKey(launchData) {
+    try {
+      return JSON.stringify(cloneMessagePayload(launchData || null, null));
+    } catch (_err) {
+      return String(Date.now());
+    }
+  }
+
   function disposeFrame() {
     if (!frameEl) return;
+    const targetFrame = frameEl;
     postToFrame({ type: 'webos:dispose' });
+    setTimeout(() => {
+      if (targetFrame) {
+        targetFrame.src = 'about:blank';
+      }
+    }, 50);
   }
 
   function normalizeAppForWindow(targetApp) {
@@ -214,7 +229,7 @@
     const capability = getCapability(permission);
     const risk = String(capability?.risk || '').toLowerCase();
     if (SENSITIVE_RISK_LEVELS.has(risk)) return true;
-    return permission === 'window.open' || permission === 'app.data.write';
+    return permission === 'window.open' || permission === 'app.data.write' || permission === 'host.file.read' || permission === 'host.file.write';
   }
 
   function describeRequest(request, permission) {
@@ -341,6 +356,8 @@
       if (!payload || typeof payload !== 'object') return;
 
       if (payload.type === 'webos:ready') {
+        const launchData = app.data || null;
+        lastLaunchDataKey = getLaunchDataKey(launchData);
         bridgeReady = true;
         loading = false;
         postToFrame({
@@ -352,7 +369,7 @@
             permissions: Array.isArray(app.permissions) ? app.permissions : [],
             runtime: app.runtime,
             sdkUrl: '/api/sandbox/sdk.js',
-            launchData: app.data || null
+            launchData
           },
           capabilities: capabilityCatalog,
           apiPolicy
@@ -391,9 +408,13 @@
 
   $effect(() => {
     if (!bridgeReady) return;
+    const launchData = app.data || null;
+    const launchDataKey = getLaunchDataKey(launchData);
+    if (launchDataKey === lastLaunchDataKey) return;
+    lastLaunchDataKey = launchDataKey;
     postToFrame({
       type: 'webos:launch-data',
-      launchData: app.data || null
+      launchData
     });
   });
 
@@ -426,7 +447,7 @@
     </div>
   {/if}
 
-  {#if app?.permissions?.length > 0}
+  {#if showPermissionOverlay && app?.permissions?.length > 0}
     <div class="overlay permissions">
       <div class="permissions-title">
         <Shield size={12} />

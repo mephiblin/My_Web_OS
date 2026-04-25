@@ -85,6 +85,29 @@
     return request(method, params);
   }
 
+  function normalizeDataPathInput(input) {
+    if (input && typeof input === 'object') return input;
+    return { path: input || '' };
+  }
+
+  var appDataApi = {
+    list: function list(input) {
+      var payload = normalizeDataPathInput(input);
+      return requestWithPermission('app.data.list', 'app.data.list', { path: payload.path || '' });
+    },
+    read: function read(input) {
+      var payload = normalizeDataPathInput(input);
+      return requestWithPermission('app.data.read', 'app.data.read', { path: payload.path || '' });
+    },
+    write: function write(input, content) {
+      var payload = normalizeDataPathInput(input);
+      return requestWithPermission('app.data.write', 'app.data.write', {
+        path: payload.path || '',
+        content: payload.content == null ? (content == null ? '' : content) : payload.content
+      });
+    }
+  };
+
   function handleMessage(event) {
     if (event.source !== global.parent) return;
     var payload = event.data || {};
@@ -155,20 +178,10 @@
         return requestWithPermission('system.info', 'system.info', {});
       }
     },
-    appData: {
-      list: function list(path) {
-        return requestWithPermission('app.data.list', 'app.data.list', { path: path || '' });
-      },
-      read: function read(path) {
-        return requestWithPermission('app.data.read', 'app.data.read', { path: path || '' });
-      },
-      write: function write(path, content) {
-        return requestWithPermission('app.data.write', 'app.data.write', {
-          path: path || '',
-          content: content == null ? '' : content
-        });
-      }
+    app: {
+      data: appDataApi
     },
+    appData: appDataApi,
     files: {
       rawUrl: function rawUrl(input) {
         var payload = input && typeof input === 'object' ? input : {};
@@ -180,14 +193,14 @@
       },
       read: function read(input) {
         var payload = input && typeof input === 'object' ? input : {};
-        return requestWithPermission('app.data.read', 'host.file.read', {
+        return requestWithPermission('host.file.read', 'host.file.read', {
           path: payload.path || '',
           grantId: payload.grantId || ''
         });
       },
       write: function write(input) {
         var payload = input && typeof input === 'object' ? input : {};
-        return requestWithPermission('app.data.write', 'host.file.write', {
+        return requestWithPermission('host.file.write', 'host.file.write', {
           path: payload.path || '',
           grantId: payload.grantId || '',
           content: payload.content == null ? '' : payload.content,

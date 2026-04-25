@@ -2300,6 +2300,23 @@
     return extensions.length > 0 ? extensions.join(', ') : `${rows.length} association(s)`;
   }
 
+  function getAppContributionSummary(app) {
+    const contributes = app?.contributes && typeof app.contributes === 'object' ? app.contributes : {};
+    const groups = [
+      ['menu', contributes.fileContextMenu],
+      ['templates', contributes.fileCreateTemplates],
+      ['preview', contributes.previewProviders],
+      ['thumbs', contributes.thumbnailProviders],
+      ['settings', contributes.settingsPanels],
+      ['services', contributes.backgroundServices]
+    ];
+    const parts = groups
+      .map(([label, rows]) => [label, Array.isArray(rows) ? rows.length : 0])
+      .filter(([, count]) => count > 0)
+      .map(([label, count]) => `${label}:${count}`);
+    return parts.length > 0 ? parts.join(', ') : '-';
+  }
+
   async function loadDesktopAppModelStats() {
     loadingDesktopApps = true;
     try {
@@ -2314,7 +2331,17 @@
           runtimeType: String(app?.runtimeType || app?.runtime || '').trim().toLowerCase() || 'builtin',
           appType: String(app?.appType || app?.type || '').trim().toLowerCase() || 'app',
           permissions: Array.isArray(app?.permissions) ? app.permissions : [],
-          fileAssociations: Array.isArray(app?.fileAssociations) ? app.fileAssociations : []
+          fileAssociations: Array.isArray(app?.fileAssociations) ? app.fileAssociations : [],
+          contributes: app?.contributes && typeof app.contributes === 'object' && !Array.isArray(app.contributes)
+            ? app.contributes
+            : {
+              fileContextMenu: [],
+              fileCreateTemplates: [],
+              previewProviders: [],
+              thumbnailProviders: [],
+              settingsPanels: [],
+              backgroundServices: []
+            }
         }))
         .sort((a, b) => String(a.title || a.id || '').localeCompare(String(b.title || b.id || '')));
       const next = {
@@ -3429,6 +3456,7 @@
                     <span>{app.dataBoundary}</span>
                     <span>perm:{app.permissions.length}</span>
                     <span>assoc:{getAppAssociationSummary(app)}</span>
+                    <span>contrib:{getAppContributionSummary(app)}</span>
                   </div>
                 </div>
               {/each}

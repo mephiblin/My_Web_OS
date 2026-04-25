@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { 
     Folder, File, FileText, ChevronLeft, ChevronRight, RotateCcw, 
     Plus, Trash2, LayoutGrid, List, Pencil, Home, Download, Image, Video, Clock, Package, Box, Lock, Unlock, ShieldAlert,
@@ -11,14 +11,22 @@
   import { openContextMenu } from '../../../core/stores/contextMenuStore.js';
   import { addShortcut } from '../../../core/stores/shortcutStore.js';
   import { contextMenuSettings } from '../../../core/stores/contextMenuStore.js';
+  import SandboxAppFrame from '../../../core/components/SandboxAppFrame.svelte';
   import * as fsApi from './api.js';
   import {
     findAssociationMatches,
+    findFileContextContributions,
+    findFileCreateTemplates,
+    findPreviewProviderMatches,
+    findThumbnailProviderMatches,
     getFileExtension,
     inferPreferredActionByExtension,
     resolveOpenPlan
   } from './services/fileAssociations.js';
   import { listTransferJobs, isRunningStatus } from '../transfer/api.js';
+
+  const FILE_STATION_GRANT_SOURCE = 'file-station';
+  const PREVIEW_GRANT_SOURCE = 'file-station-preview';
 
   let currentPath = $state('/');
   let initialPath = $state('/');
@@ -50,6 +58,12 @@
   let previewContent = $state(null);
   let showPreview = $state(false);
   let previewLoading = $state(false);
+  let previewProviderLabel = $state('');
+  let previewProviderCandidate = $state(null);
+  let previewProviderFrameApp = $state(null);
+  let previewItem = $state(null);
+  let previewGrantId = $state('');
+  let previewRequestId = 0;
 
   // Upload State
   let isDragging = $state(false);
@@ -238,6 +252,24 @@
     };
   }
 
+  function buildFileContext(item, grant, mode = 'read') {
+    const extension = getFileExtension(item?.name || '');
+    return {
+      source: 'file-station',
+      file: {
+        path: item.path,
+        name: item.name,
+        extension,
+        mode
+      },
+      permissionContext: {
+        grantId: grant?.id || '',
+        scope: grant?.scope || 'single-file',
+        expiresOnWindowClose: true
+      }
+    };
+  }
+
   function setDefaultOpenWith(extension, appId) {
     const ext = String(extension || '').trim().toLowerCase();
     const normalizedAppId = String(appId || '').trim();
@@ -262,27 +294,13 @@
   }
 
   async function openFileWithApp(item, appId, action) {
-    const extension = getFileExtension(item?.name || '');
     const mode = action === 'edit' ? 'readwrite' : 'read';
-    const grantResponse = await fsApi.createFileGrant(item.path, mode, appId, 'file-station').catch(() => null);
+    const grantResponse = await fsApi.createFileGrant(item.path, mode, appId, FILE_STATION_GRANT_SOURCE).catch(() => null);
     const grant = grantResponse?.grant || null;
     if (grant?.id) {
       loadActiveFileGrants().catch(() => {});
     }
-    const fileContext = {
-      source: 'file-station',
-      file: {
-        path: item.path,
-        name: item.name,
-        extension,
-        mode
-      },
-      permissionContext: {
-        grantId: grant?.id || '',
-        scope: grant?.scope || 'single-file',
-        expiresOnWindowClose: true
-      }
-    };
+    const fileContext = buildFileContext(item, grant, mode);
 
     const appMeta = resolveAppMeta(appId);
     openWindow(buildWindowAppForFile(appMeta, appId, item), {
@@ -296,6 +314,203 @@
     const matches = findAssociationMatches(desktopApps, extension);
     const match = matches.find((candidate) => candidate.appId === appId);
     await openFileWithApp(item, appId, match?.defaultAction || inferPreferredActionByExtension(extension));
+  }
+
+  function revokePreviewGrant(grantId = previewGrantId, options = {}) {
+    const id = String(grantId || '').trim();
+    if (!id) return;
+    fsApi.revokeFileGrant(id, PREVIEW_GRANT_SOURCE)
+      .catch(() => {})
+      .finally(() => {
+        if (options.refresh !== false) {
+          loadActiveFileGrants().catch(() => {});
+        }
+      });
+  }
+
+  function resetPreviewState(options = {}) {
+    const shouldRevoke = options.revoke !== false;
+    const activeGrantId = previewGrantId;
+    previewRequestId += 1;
+    previewGrantId = '';
+    if (shouldRevoke && activeGrantId) {
+      revokePreviewGrant(activeGrantId, { refresh: options.refresh !== false });
+    }
+    previewContent = null;
+    previewProviderLabel = '';
+    previewProviderCandidate = null;
+    previewProviderFrameApp = null;
+    previewItem = null;
+    previewLoading = false;
+  }
+
+  function closePreview() {
+    resetPreviewState();
+    showPreview = false;
+  }
+
+  function canUseProviderPreview(item) {
+    return Boolean(item && !item.isDirectory && !isTrashView && !String(item.path || '').startsWith('cloud://'));
+  }
+
+  function providerKindLabel(provider) {
+    return provider?.source === 'manifest-thumbnail-provider' ? 'Thumbnail' : 'Preview';
+  }
+
+  function getPreviewProviderForItem(item) {
+    if (!canUseProviderPreview(item)) return null;
+    return findPreviewProviderMatches(desktopApps, getFileExtension(item?.name || ''))[0] || null;
+  }
+
+  function getThumbnailProviderForItem(item) {
+    if (!canUseProviderPreview(item)) return null;
+    return findThumbnailProviderMatches(desktopApps, getFileExtension(item?.name || ''))[0] || null;
+  }
+
+  function getFileProviderHint(item) {
+    return getPreviewProviderForItem(item) || getThumbnailProviderForItem(item);
+  }
+
+  function buildPreviewFrameApp(provider, item, fileContext) {
+    const appMeta = provider?.app || resolveAppMeta(provider?.appId);
+    const source = appMeta && typeof appMeta === 'object' ? appMeta : {};
+    const appId = String(source.id || provider?.appId || '').trim();
+    if (!appId || !source?.sandbox?.entryUrl) return null;
+    return {
+      ...source,
+      id: `${appId}-preview-${Date.now()}`,
+      appId,
+      title: `${provider.label || source.title || appId} - ${item.name}`,
+      singleton: false,
+      data: {
+        path: item.path,
+        previewContext: {
+          source: 'file-station-preview',
+          kind: providerKindLabel(provider).toLowerCase(),
+          provider: {
+            appId,
+            label: provider.label || source.title || appId
+          }
+        },
+        fileContext
+      }
+    };
+  }
+
+  function prepareProviderPreview(item, provider) {
+    resetPreviewState();
+    previewItem = item;
+    previewProviderCandidate = provider;
+    previewProviderLabel = provider?.label || '';
+    showPreview = true;
+  }
+
+  async function loadProviderPreview(item = previewItem, provider = previewProviderCandidate) {
+    if (!item || !provider) return;
+    const activeGrantId = previewGrantId;
+    if (activeGrantId) {
+      previewGrantId = '';
+      revokePreviewGrant(activeGrantId);
+    }
+    const requestId = ++previewRequestId;
+    previewContent = null;
+    previewProviderFrameApp = null;
+    previewProviderCandidate = provider;
+    previewItem = item;
+    previewProviderLabel = provider?.label || '';
+    previewLoading = true;
+    showPreview = true;
+
+    try {
+      const grantResponse = await fsApi.createFileGrant(item.path, 'read', provider.appId, PREVIEW_GRANT_SOURCE);
+      const grant = grantResponse?.grant || null;
+      if (requestId !== previewRequestId || previewItem?.path !== item.path) {
+        if (grant?.id) {
+          revokePreviewGrant(grant.id);
+        }
+        return;
+      }
+      if (grant?.id) {
+        previewGrantId = grant.id;
+        loadActiveFileGrants().catch(() => {});
+      }
+      const frameApp = buildPreviewFrameApp(provider, item, buildFileContext(item, grant, 'read'));
+      if (!frameApp) {
+        if (grant?.id) {
+          previewGrantId = '';
+          revokePreviewGrant(grant.id);
+        }
+        previewContent = 'Preview provider is not available.';
+        return;
+      }
+      previewProviderFrameApp = frameApp;
+    } catch (err) {
+      if (requestId !== previewRequestId) return;
+      previewContent = err?.message || 'Cannot load provider preview.';
+      notifyApiError(err, 'Preview Failed');
+    } finally {
+      if (requestId === previewRequestId) {
+        previewLoading = false;
+      }
+    }
+  }
+
+  function canCreateInCurrentPath() {
+    const path = String(currentPath || '').trim();
+    return Boolean(path) && !isTrashView && !path.startsWith('cloud://');
+  }
+
+  function buildChildPath(name) {
+    const cleanName = String(name || '').trim();
+    const base = String(currentPath || '/').replace(/\/+$/, '');
+    return base === '' ? `/${cleanName}` : `${base}/${cleanName}`;
+  }
+
+  function itemNameExists(name) {
+    const normalized = String(name || '').trim().toLowerCase();
+    return Boolean(normalized) && items.some((item) => String(item?.name || '').trim().toLowerCase() === normalized);
+  }
+
+  async function createFileWithContent(name, content = '') {
+    if (!canCreateInCurrentPath()) {
+      addToast('Creating files is not available in this location.', 'info');
+      return null;
+    }
+
+    const fileName = String(name || '').trim();
+    if (!fileName) return null;
+    if (fileName.includes('/') || fileName.includes('\\')) {
+      addToast('File name cannot contain path separators.', 'error');
+      return null;
+    }
+    if (itemNameExists(fileName) && !confirm(`${fileName} already exists. Overwrite it?`)) {
+      return null;
+    }
+
+    const path = buildChildPath(fileName);
+    await fsApi.writeFile(path, content);
+    await fetchItems(currentPath);
+    return {
+      name: fileName,
+      path,
+      isDirectory: false
+    };
+  }
+
+  async function createFileFromTemplate(template) {
+    const suggestedName = String(template?.name || '').trim();
+    const name = prompt(`Create ${template?.label || 'file'} as:`, suggestedName);
+    if (!name) return;
+    try {
+      const item = await createFileWithContent(name, typeof template?.content === 'string' ? template.content : '');
+      if (!item) return;
+      addToast(`Created ${item.name}.`, 'success');
+      if (template?.openAfterCreate !== false && template?.appId) {
+        await openFileWithApp(item, template.appId, template.action || 'edit');
+      }
+    } catch (err) {
+      notifyApiError(err, 'Create File Failed');
+    }
   }
 
   function buildSidebarLinks(homePath, dirs) {
@@ -333,10 +548,42 @@
 
   async function loadActiveFileGrants() {
     try {
-      const response = await fsApi.fetchActiveFileGrants('file-station');
+      const response = await fsApi.fetchActiveFileGrants('');
       activeFileGrants = Array.isArray(response?.grants) ? response.grants : [];
     } catch (_err) {
       activeFileGrants = [];
+    }
+  }
+
+  async function revokeGrantFromPanel(grant) {
+    const id = String(grant?.id || '').trim();
+    if (!id) return;
+    try {
+      await fsApi.revokeFileGrant(id, grant?.source || '');
+      if (previewGrantId === id) {
+        previewGrantId = '';
+        resetPreviewState({ revoke: false });
+        showPreview = false;
+      }
+      await loadActiveFileGrants();
+      addToast('File grant revoked.', 'success');
+    } catch (err) {
+      notifyApiError(err, 'Grant Revoke Failed');
+    }
+  }
+
+  async function revokeAllGrantsFromPanel() {
+    if (activeFileGrants.length === 0) return;
+    if (!confirm(`Revoke ${activeFileGrants.length} active file grant(s)? Open addon windows may lose file access.`)) return;
+    try {
+      await fsApi.revokeFileGrants('');
+      previewGrantId = '';
+      resetPreviewState({ revoke: false });
+      showPreview = false;
+      await loadActiveFileGrants();
+      addToast('All active file grants revoked.', 'success');
+    } catch (err) {
+      notifyApiError(err, 'Grant Revoke Failed');
     }
   }
 
@@ -355,11 +602,36 @@
       const isLocked = lockedFolders.includes(item.path);
       const extension = item?.isDirectory ? '' : getFileExtension(item.name);
       const associationMatches = item?.isDirectory ? [] : findAssociationMatches(desktopApps, extension);
+      const contributionMatches = item?.isDirectory ? [] : findFileContextContributions(desktopApps, extension);
+      const previewProvider = item?.isDirectory ? null : getPreviewProviderForItem(item);
+      const thumbnailProvider = item?.isDirectory || previewProvider ? null : getThumbnailProviderForItem(item);
+      const contributionKeys = new Set(contributionMatches.map((match) => `${match.appId}:${match.action}`));
       const preferredApp = resolvePreferredOpenWith(extension);
       itemsInfo = [
         { label: 'Open', icon: Folder, action: () => handleDblClick(item) },
+        ...(!item.isDirectory && previewProvider
+          ? [{
+            label: `Preview with ${previewProvider.label || previewProvider.appId}`,
+            icon: Image,
+            action: () => prepareProviderPreview(item, previewProvider)
+          }]
+          : []),
+        ...(!item.isDirectory && thumbnailProvider
+          ? [{
+            label: `Show Thumbnail with ${thumbnailProvider.label || thumbnailProvider.appId}`,
+            icon: Image,
+            action: () => prepareProviderPreview(item, thumbnailProvider)
+          }]
+          : []),
+        ...(!item.isDirectory && contributionMatches.length > 0
+          ? contributionMatches.slice(0, 8).map((match) => ({
+            label: match.label,
+            icon: LayoutGrid,
+            action: () => openFileWithApp(item, match.appId, match.action)
+          }))
+          : []),
         ...(!item.isDirectory && associationMatches.length > 0
-          ? associationMatches.slice(0, 6).map((match) => {
+          ? associationMatches.filter((match) => !contributionKeys.has(`${match.appId}:${match.defaultAction}`)).slice(0, 6).map((match) => {
             const appMeta = match.app || resolveAppMeta(match.appId);
             return {
               label: `Open With ${appMeta?.title || match.appId}`,
@@ -398,9 +670,16 @@
         { label: 'Refresh', icon: RotateCcw, action: fetchTrash }
       ];
     } else {
+      const createAllowed = canCreateInCurrentPath();
+      const createTemplates = createAllowed ? findFileCreateTemplates(desktopApps) : [];
       itemsInfo = [
-        { label: 'New File', icon: FileText, action: createFile },
-        { label: 'New Folder', icon: Plus, action: createFolder },
+        ...(createAllowed ? [{ label: 'New File', icon: FileText, action: createFile }] : []),
+        ...createTemplates.slice(0, 10).map((template) => ({
+          label: template.label.toLowerCase().startsWith('new ') ? template.label : `New ${template.label}`,
+          icon: FileText,
+          action: () => createFileFromTemplate(template)
+        })),
+        ...(createAllowed ? [{ label: 'New Folder', icon: Plus, action: createFolder }] : []),
         { label: 'Refresh', icon: RotateCcw, action: () => fetchItems(currentPath) }
       ];
     }
@@ -410,6 +689,7 @@
 
   async function fetchItems(path) {
     loading = true;
+    closePreview();
     isSearchView = false;
     isTrashView = false;
     filterQuery = '';
@@ -462,7 +742,7 @@
     loading = true;
     isSearchView = true;
     isTrashView = false;
-    showPreview = false;
+    closePreview();
     filterQuery = '';
     try {
       const data = await fsApi.searchFiles(searchQuery, currentPath);
@@ -525,6 +805,7 @@
 
   async function fetchTrash() {
     loading = true;
+    closePreview();
     isTrashView = true;
     isSearchView = false;
     currentPath = 'trash';
@@ -608,11 +889,21 @@
   async function handleItemClick(e, item) {
     e.stopPropagation();
     selectedItem = item;
+    resetPreviewState();
     
     if (!item.isDirectory && !isTrashView) {
-       const ext = item.name.split('.').pop()?.toLowerCase();
+       const ext = getFileExtension(item.name);
+       const provider = canUseProviderPreview(item)
+         ? (findPreviewProviderMatches(desktopApps, ext)[0] || findThumbnailProviderMatches(desktopApps, ext)[0])
+         : null;
+       if (provider) {
+         prepareProviderPreview(item, provider);
+         return;
+       }
        const isCode = ['md', 'txt', 'js', 'json', 'css', 'html', 'svelte'].includes(ext);
        if (isCode) {
+           const requestId = previewRequestId;
+           previewItem = item;
            showPreview = true;
            previewLoading = true;
            previewContent = 'Loading...';
@@ -627,19 +918,22 @@
              } else {
                 res = await fsApi.readFile(item.path);
              }
+             if (requestId !== previewRequestId || previewItem?.path !== item.path) return;
              previewContent = res.content;
            } catch (err) {
+             if (requestId !== previewRequestId) return;
              previewContent = 'Cannot render preview.';
              notifyApiError(err, 'Preview Failed');
            } finally {
-             previewLoading = false;
+             if (requestId === previewRequestId) {
+               previewLoading = false;
+             }
            }
        } else {
-           showPreview = false;
-           previewContent = null;
+           closePreview();
        }
     } else {
-       showPreview = false;
+       closePreview();
     }
   }
 
@@ -842,14 +1136,18 @@
     const name = prompt('Enter file name:');
     if (!name) return;
     try {
-      await fsApi.writeFile(`${currentPath}/${name}`, '');
-      fetchItems(currentPath);
+      await createFileWithContent(name, '');
     } catch (err) {
       notifyApiError(err, 'Save Failed');
     }
   }
 
   async function createFolder() {
+    if (!canCreateInCurrentPath()) {
+      addToast('Creating folders is not available in this location.', 'info');
+      return;
+    }
+
     const name = prompt('Enter folder name:');
     if (!name) return;
     try {
@@ -864,6 +1162,9 @@
     if (!selectedItem) return;
     if (!confirm(`Delete ${selectedItem.name}?`)) return;
     try {
+      if (previewItem?.path === selectedItem.path) {
+        closePreview();
+      }
       await fsApi.deleteItem(selectedItem.path);
       agentStore.triggerEmotion('alert', `Deleted ${selectedItem.name}`, 3000);
       selectedItem = null;
@@ -880,6 +1181,9 @@
     const newName = prompt('Enter new name:', target.name);
     if (!newName || newName === target.name) return;
     try {
+      if (previewItem?.path === target.path) {
+        closePreview();
+      }
       await fsApi.renameItem(target.path, newName);
       selectedItem = null;
       fetchItems(currentPath);
@@ -908,7 +1212,7 @@
         fsApi.fetchUserDirs(),
         fsApi.fetchCloudRemotes(),
         fsApi.fetchDesktopApps(),
-        fsApi.fetchActiveFileGrants('file-station').catch(() => ({ grants: [] }))
+        fsApi.fetchActiveFileGrants('').catch(() => ({ grants: [] }))
       ]);
 
       if (config.initialPath) {
@@ -929,10 +1233,12 @@
     refreshTransferStatus();
     transferPolling = setInterval(() => refreshTransferStatus(), 3000);
     refreshCloudUploadStatus();
-    return () => {
-      if (transferPolling) clearInterval(transferPolling);
-      if (cloudUploadPolling) clearInterval(cloudUploadPolling);
-    };
+  });
+
+  onDestroy(() => {
+    if (transferPolling) clearInterval(transferPolling);
+    if (cloudUploadPolling) clearInterval(cloudUploadPolling);
+    resetPreviewState({ refresh: false });
   });
 
   async function handleAddCloud() {
@@ -1029,8 +1335,8 @@
       <button class={viewMode === 'grid' ? 'active' : ''} onclick={() => viewMode = 'grid'}><LayoutGrid size={16} /></button>
       <button class={viewMode === 'list' ? 'active' : ''} onclick={() => viewMode = 'list'}><List size={16} /></button>
       <div class="separator"></div>
-      <button title="New File" onclick={createFile}><FileText size={16} /></button>
-      <button title="New Folder" onclick={createFolder}><Plus size={16} /></button>
+      <button title="New File" onclick={createFile} disabled={!canCreateInCurrentPath()}><FileText size={16} /></button>
+      <button title="New Folder" onclick={createFolder} disabled={!canCreateInCurrentPath()}><Plus size={16} /></button>
       <button title="Delete" class="delete" onclick={handleDelete} disabled={!selectedItem}><Trash2 size={16} /></button>
     </div>
   </div>
@@ -1055,14 +1361,22 @@
                   <code>{root}</code>
                 {/each}
               </div>
-              <div class="grants-label">Active File Grants (file-station)</div>
+              <div class="grants-label grants-header">
+                <span>Active File Grants</span>
+                {#if activeFileGrants.length > 0}
+                  <button class="grant-revoke-all" onclick={revokeAllGrantsFromPanel}>Revoke All</button>
+                {/if}
+              </div>
               {#if activeFileGrants.length === 0}
                 <div class="runtime-log-empty">No active grants.</div>
               {:else}
                 <div class="grants-list">
                   {#each activeFileGrants as grant}
                     <div class="grant-row">
-                      <span>{grant.mode}</span>
+                      <div class="grant-row-head">
+                        <span>{grant.mode} · {grant.source || 'unknown'} · {grant.appId || 'unknown app'}</span>
+                        <button class="grant-revoke-btn" onclick={() => revokeGrantFromPanel(grant)}>Revoke</button>
+                      </div>
                       <code>{grant.path}</code>
                     </div>
                   {/each}
@@ -1104,6 +1418,7 @@
       {:else}
         <div class="view-container {viewMode}">
           {#each filteredItems as item}
+            {@const fileProviderHint = getFileProviderHint(item)}
             <div
               class="item {selectedItem?.path === item.path ? 'selected' : ''}"
               role="button"
@@ -1139,6 +1454,14 @@
               </div>
               <div class="item-info">
                 <span class="name">{item.name}</span>
+                {#if fileProviderHint}
+                  <span
+                    class="provider-hint {fileProviderHint.source === 'manifest-thumbnail-provider' ? 'thumbnail' : 'preview'}"
+                    title={`${providerKindLabel(fileProviderHint)} provider: ${fileProviderHint.label}`}
+                  >
+                    {providerKindLabel(fileProviderHint)}: {fileProviderHint.label}
+                  </span>
+                {/if}
                 {#if isSearchView}
                   <span class="original-path">{item.path}</span>
                 {:else if isTrashView && item.deletedAt}
@@ -1151,18 +1474,45 @@
       {/if}
     </div>
 
-    {#if showPreview && previewContent !== null}
-       <aside class="preview-panel glass-effect">
-         <div class="preview-header">
-           <span class="preview-title">{selectedItem?.name}</span>
-           <button class="close-btn" onclick={() => showPreview = false}>X</button>
-         </div>
-         {#if previewLoading}
-           <div class="preview-loading">Loading preview...</div>
-         {:else}
-           <pre class="preview-content"><code>{previewContent}</code></pre>
-         {/if}
-       </aside>
+    {#if showPreview}
+      <aside class="preview-panel glass-effect">
+        <div class="preview-header">
+          <span class="preview-title">{previewItem?.name || selectedItem?.name}</span>
+          {#if previewProviderLabel}
+            <span class="preview-provider-badge">{previewProviderLabel}</span>
+          {/if}
+          <button class="close-btn" onclick={closePreview}>X</button>
+        </div>
+        {#if previewLoading}
+          <div class="preview-loading">Loading preview...</div>
+        {:else if previewProviderFrameApp}
+          <div class="preview-provider-frame">
+            {#key previewProviderFrameApp.id}
+              <SandboxAppFrame app={previewProviderFrameApp} />
+            {/key}
+          </div>
+        {:else if previewProviderCandidate}
+          <div class="preview-provider-prompt">
+            <div>
+              <strong>{previewProviderLabel || 'App Preview'}</strong>
+              <span>
+                {#if previewProviderCandidate.source === 'manifest-thumbnail-provider'}
+                  can generate a File Station thumbnail/preview after you allow a temporary read grant.
+                {:else}
+                  can render this file in the sandbox after you allow a temporary read grant.
+                {/if}
+              </span>
+            </div>
+            <button class="preview-provider-action" onclick={() => loadProviderPreview()}>
+              {previewProviderCandidate.source === 'manifest-thumbnail-provider' ? 'Show Thumbnail with' : 'Preview with'} {previewProviderLabel || previewProviderCandidate?.appId || 'app'}
+            </button>
+          </div>
+        {:else if previewContent !== null}
+          <pre class="preview-content"><code>{previewContent}</code></pre>
+        {:else}
+          <div class="preview-loading">No preview available.</div>
+        {/if}
+      </aside>
     {/if}
   </div>
 
@@ -1339,6 +1689,32 @@
     color: var(--text-dim);
     text-transform: uppercase;
   }
+  .grants-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+  }
+  .grant-revoke-all, .grant-revoke-btn {
+    border: 1px solid rgba(248, 113, 113, 0.32);
+    background: rgba(127, 29, 29, 0.22);
+    color: #fecaca;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .grant-revoke-all {
+    padding: 2px 6px;
+    font-size: 9px;
+    text-transform: uppercase;
+  }
+  .grant-revoke-btn {
+    padding: 1px 5px;
+    font-size: 9px;
+  }
+  .grant-revoke-all:hover, .grant-revoke-btn:hover {
+    background: rgba(127, 29, 29, 0.36);
+    border-color: rgba(248, 113, 113, 0.55);
+  }
   .grants-list {
     display: flex;
     flex-direction: column;
@@ -1358,6 +1734,12 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+  .grant-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
   }
   .grant-row span {
     font-size: 10px;
@@ -1400,6 +1782,24 @@
   .item-info { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1; min-width: 0; }
   .view-container.list .item-info { align-items: flex-start; }
   .original-path, .delete-date { font-size: 10px; color: var(--text-dim); opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+  .provider-hint {
+    max-width: 100%;
+    border: 1px solid rgba(88, 166, 255, 0.28);
+    border-radius: 999px;
+    background: rgba(88, 166, 255, 0.10);
+    color: #bfdbfe;
+    font-size: 9px;
+    line-height: 1.2;
+    padding: 2px 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .provider-hint.thumbnail {
+    border-color: rgba(34, 197, 94, 0.30);
+    background: rgba(34, 197, 94, 0.10);
+    color: #bbf7d0;
+  }
   
   .icon { display: flex; align-items: center; justify-content: center; }
   .folder-wrapper { position: relative; display: flex; align-items: center; justify-content: center; }
@@ -1420,19 +1820,26 @@
   .loading { display: flex; justify-content: center; align-items: center; height: 100%; color: var(--text-dim); }
 
   .preview-panel {
-    width: 250px;
+    width: min(420px, 36vw);
+    min-width: 280px;
     border-left: 1px solid var(--glass-border);
     display: flex;
     flex-direction: column;
     background: rgba(0,0,0,0.15);
     flex-shrink: 0;
   }
-  .preview-header { padding: 12px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center; }
-  .preview-title { font-size: 13px; font-weight: 600; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .preview-header { padding: 12px; border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .preview-title { font-size: 13px; font-weight: 600; color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+  .preview-provider-badge { border: 1px solid rgba(125, 211, 252, 0.34); border-radius: 999px; padding: 2px 7px; color: #bae6fd; background: rgba(14, 116, 144, 0.18); font-size: 10px; white-space: nowrap; }
   .close-btn { background: transparent; border: none; color: var(--text-dim); cursor: pointer; padding: 2px 6px; border-radius: 4px; }
   .close-btn:hover { color: white; background: rgba(255,255,255,0.1); }
   .preview-content { flex: 1; padding: 12px; margin: 0; overflow: auto; font-size: 11px; color: #a5d6ff; line-height: 1.4; white-space: pre-wrap; word-break: break-all; font-family: monospace; }
   .preview-loading { padding: 20px; color: var(--text-dim); text-align: center; font-size: 12px; }
+  .preview-provider-prompt { flex: 1; padding: 18px; display: flex; flex-direction: column; justify-content: center; gap: 14px; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
+  .preview-provider-prompt strong { display: block; color: white; font-size: 14px; margin-bottom: 4px; }
+  .preview-provider-action { align-self: flex-start; border: 1px solid rgba(125, 211, 252, 0.4); background: rgba(14, 116, 144, 0.24); color: #dff7ff; border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 12px; }
+  .preview-provider-action:hover { background: rgba(14, 116, 144, 0.34); border-color: rgba(125, 211, 252, 0.65); }
+  .preview-provider-frame { flex: 1; min-height: 0; overflow: hidden; }
 
   .content-area.dragging {
     outline: 2px dashed var(--accent-blue);

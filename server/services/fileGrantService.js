@@ -107,9 +107,61 @@ function listActiveGrants(options = {}) {
   return items;
 }
 
+function revokeGrant(grantId, options = {}) {
+  pruneExpiredGrants();
+  const normalizedGrantId = String(grantId || '').trim();
+  if (!normalizedGrantId) {
+    const err = new Error('A valid file grant id is required.');
+    err.code = 'FS_FILE_GRANT_REQUIRED';
+    throw err;
+  }
+
+  const grant = grantStore.get(normalizedGrantId);
+  if (!grant) {
+    return null;
+  }
+
+  const expectedUser = String(options.user || '').trim();
+  if (expectedUser && grant.user && grant.user !== expectedUser) {
+    const err = new Error('File grant user does not match.');
+    err.code = 'FS_FILE_GRANT_USER_MISMATCH';
+    throw err;
+  }
+
+  const expectedSource = String(options.source || '').trim();
+  if (expectedSource && grant.source !== expectedSource) {
+    const err = new Error('File grant source does not match.');
+    err.code = 'FS_FILE_GRANT_SOURCE_MISMATCH';
+    throw err;
+  }
+
+  grantStore.delete(normalizedGrantId);
+  return { ...grant };
+}
+
+function revokeGrants(options = {}) {
+  pruneExpiredGrants();
+  const expectedUser = String(options.user || '').trim();
+  const expectedSource = String(options.source || '').trim();
+  const revoked = [];
+
+  for (const [grantId, grant] of grantStore.entries()) {
+    if (!grant) continue;
+    if (expectedUser && grant.user && grant.user !== expectedUser) continue;
+    if (expectedSource && grant.source !== expectedSource) continue;
+    grantStore.delete(grantId);
+    revoked.push({ ...grant });
+  }
+
+  revoked.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  return revoked;
+}
+
 module.exports = {
   createGrant,
   consumeGrant,
   normalizeGrantMode,
-  listActiveGrants
+  listActiveGrants,
+  revokeGrant,
+  revokeGrants
 };

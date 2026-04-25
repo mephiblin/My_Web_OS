@@ -146,7 +146,7 @@ Expected API/UI behavior:
 
 ## 10. File Association Install Experience
 
-For a package to feel like a native Web OS app, include `fileAssociations` in `manifest.json`.
+For a package to feel like a native Web OS app, include `fileAssociations` and optional `contributes` entries in `manifest.json`.
 
 Example:
 
@@ -158,13 +158,45 @@ Example:
     "type": "sandbox-html",
     "entry": "index.html"
   },
+  "permissions": ["host.file.read"],
   "fileAssociations": [
     {
       "extensions": ["png", "jpg", "jpeg", "webp"],
       "actions": ["open", "preview"],
       "defaultAction": "open"
     }
-  ]
+  ],
+  "contributes": {
+    "fileContextMenu": [
+      {
+        "label": "Open in Better Image Viewer",
+        "action": "open",
+        "extensions": ["png", "jpg", "jpeg", "webp"]
+      }
+    ],
+    "fileCreateTemplates": [
+      {
+        "label": "Markdown File",
+        "name": "Untitled.md",
+        "extension": "md",
+        "content": "# Untitled\n\n",
+        "action": "edit",
+        "openAfterCreate": true
+      }
+    ],
+    "previewProviders": [
+      { "label": "Image Preview", "extensions": ["png", "jpg", "jpeg", "webp"] }
+    ],
+    "thumbnailProviders": [
+      { "label": "Image Thumbnail", "extensions": ["png", "jpg", "jpeg", "webp"] }
+    ],
+    "settingsPanels": [
+      { "label": "Image Viewer Settings", "entry": "settings.html" }
+    ],
+    "backgroundServices": [
+      { "id": "image-indexer", "label": "Image Indexer", "entry": "service.js", "autoStart": false }
+    ]
+  }
 }
 ```
 
@@ -173,13 +205,32 @@ Expected operator behavior:
 - install package through registry or ZIP import
 - open File Station
 - right-click a matching file
+- choose the app-provided context menu item when declared
 - choose `Open With <app>` or `Always Open .<ext> With <app>`
+- right-click empty folder space and choose app-provided `New <template>` entries
 - double-click matching files after default selection
 
 Removal behavior:
 
 - deleting the package removes stale user default file-open mappings for that package
 - built-in fallback apps continue to open supported file types
+
+Contribution rules:
+
+- `contributes.fileContextMenu[]` is declarative only; it must map to a supported file action such as `open`, `preview`, or `edit`.
+- If `extensions` is omitted, Web OS derives matching extensions from the app's `fileAssociations` for the same action.
+- `contributes.fileCreateTemplates[]` lets apps add safe file templates to File Station. The template writes static content only; no app code executes during creation.
+- `contributes.previewProviders[]` connects matching files to the File Station preview panel through sandbox preview handoff and file grants. The panel shows an explicit preview button first; a temporary read grant is issued only after that click and is revoked when the preview is closed or replaced.
+- `contributes.thumbnailProviders[]` connects matching files to File Station provider discovery. Matching files show a thumbnail-provider badge and can hand off to the sandbox preview panel only after the user clicks the action, so directory listing does not auto-read host files.
+- `contributes.settingsPanels[]` declares safe relative package entries for future Package Center settings launch.
+- `contributes.backgroundServices[]` declares service candidates only. `autoStart: true` is treated as a request, not an execution command, until lifecycle policy, approval, and audit handling exist.
+- Package Center and `package:doctor` validate contribution shape so core code does not need app-specific menu hardcoding.
+
+Permission rules:
+
+- `previewProviders` and `thumbnailProviders` require `host.file.read`
+- template entries using `openAfterCreate` must use a boolean value
+- editor-style apps that open host files for editing should declare both `host.file.read` and `host.file.write`
 
 ## 11. Built-In Addon Replacement Policy
 

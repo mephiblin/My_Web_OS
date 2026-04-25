@@ -140,6 +140,9 @@ The current launcher path remains `standard` + `component` for compatibility, wh
 ## Native File Opening Contract
 
 Installable apps become visible to File Station through `fileAssociations`.
+They can also add native-feeling file context menu entries through `contributes.fileContextMenu`.
+The same `contributes` block is the extension surface for native-feeling creation,
+preview, thumbnail, settings, and background-service declarations.
 
 When a package manifest declares:
 
@@ -150,13 +153,45 @@ When a package manifest declares:
     "type": "sandbox-html",
     "entry": "index.html"
   },
+  "permissions": ["host.file.read"],
   "fileAssociations": [
     {
       "extensions": ["png", "jpg", "webp"],
       "actions": ["open", "preview"],
       "defaultAction": "open"
     }
-  ]
+  ],
+  "contributes": {
+    "fileContextMenu": [
+      {
+        "label": "Open in Better Image Viewer",
+        "action": "open",
+        "extensions": ["png", "jpg", "webp"]
+      }
+    ],
+    "fileCreateTemplates": [
+      {
+        "label": "Markdown File",
+        "name": "Untitled.md",
+        "extension": "md",
+        "content": "# Untitled\n\n",
+        "action": "edit",
+        "openAfterCreate": true
+      }
+    ],
+    "previewProviders": [
+      { "label": "Image Preview", "extensions": ["png", "jpg", "webp"] }
+    ],
+    "thumbnailProviders": [
+      { "label": "Image Thumbnail", "extensions": ["png", "jpg", "webp"] }
+    ],
+    "settingsPanels": [
+      { "label": "Image Viewer Settings", "entry": "settings.html" }
+    ],
+    "backgroundServices": [
+      { "id": "image-indexer", "label": "Image Indexer", "entry": "service.js", "autoStart": false }
+    ]
+  }
 }
 ```
 
@@ -166,10 +201,31 @@ The expected user-facing behavior is:
 - double-click uses the user default app when configured
 - otherwise it uses the best matching association
 - right-click exposes `Open With`
+- right-click exposes app-declared context menu entries without core hardcoding
+- right-click in a folder can expose app-declared `New <template>` entries
 - right-click can set `Always Open .<ext> With <app>`
 - uninstalling a package removes stale user-default file association entries for that package
 
 This is the Web OS equivalent of an installed desktop app registering file types with the OS.
+Core owns the resolver and permission/grant bridge; each app owns only its manifest declaration and package entry implementation.
+
+Extension point status:
+
+- `fileContextMenu`: active in File Station right-click file menus
+- `fileCreateTemplates`: active in File Station empty-space right-click menus
+- `previewProviders`: active in File Station preview panel through sandbox preview handoff and file grants. File Station shows a provider prompt first; it creates a temporary read grant only after the user clicks the preview action, and revokes that grant when the preview is closed or replaced.
+- `thumbnailProviders`: active as File Station provider discovery. Matching files show a provider badge and can hand off to the sandbox preview panel after the user clicks the action; no automatic host-file grant is issued during listing.
+- `settingsPanels`: validated and visible as package metadata; Package Center settings launch is a later UI step
+- `backgroundServices`: validated and visible as package metadata; `autoStart` is recorded only as a request and normalized to non-executing metadata until a lifecycle/approval policy exists
+
+The rule remains: adding an app-specific feature should start in that app's package folder and manifest.
+Core files should only be touched when adding a new generic extension point that all apps can use.
+
+Permission rules:
+
+- apps with `contributes.previewProviders[]` or `contributes.thumbnailProviders[]` must declare `host.file.read`
+- apps that open created host files for editing should declare `host.file.read` and `host.file.write`
+- `openAfterCreate` must be a boolean when provided
 
 ## Primary Addon Sandbox Runtime Status
 

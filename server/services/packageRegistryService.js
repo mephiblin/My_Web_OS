@@ -34,6 +34,12 @@ const MEDIA_SCOPE_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
 const FILE_ASSOC_ACTIONS = new Set(['preview', 'open', 'edit', 'import', 'export']);
 const FILE_EXTENSION_RE = /^[a-z0-9][a-z0-9._+-]{0,31}$/i;
 const MIME_TYPE_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/i;
+const CONTRIBUTION_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,63}$/i;
+const CONTRIBUTION_LABEL_MAX = 80;
+const FILE_TEMPLATE_NAME_MAX = 128;
+const FILE_TEMPLATE_CONTENT_MAX = 64 * 1024;
+const RELATIVE_ENTRY_MAX = 180;
+const HOST_FILE_READ_PERMISSION = 'host.file.read';
 
 function normalizeBuiltinIcon(iconValue) {
   if (typeof iconValue !== 'string') {
@@ -331,6 +337,507 @@ function normalizeFileAssociations(input, options = {}) {
   return normalized;
 }
 
+function contributionError(message, code) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+function normalizeContributionLabel(value, pathLabel, strict) {
+  const label = String(value || '').trim();
+  if (!label || label.length > CONTRIBUTION_LABEL_MAX) {
+    if (strict) {
+      throw contributionError(
+        !label ? `${pathLabel} label is required.` : `${pathLabel} label is too long.`,
+        !label ? 'PACKAGE_CONTRIBUTION_LABEL_REQUIRED' : 'PACKAGE_CONTRIBUTION_LABEL_TOO_LONG'
+      );
+    }
+    return '';
+  }
+  return label;
+}
+
+function normalizeContributionExtensions(rawExtensions, pathLabel, strict) {
+  if (rawExtensions !== undefined && rawExtensions !== null && !Array.isArray(rawExtensions)) {
+    if (strict) {
+      throw contributionError(
+        `${pathLabel} extensions must be an array when provided.`,
+        'PACKAGE_CONTRIBUTION_EXTENSIONS_INVALID'
+      );
+    }
+    return [];
+  }
+
+  const extensions = [];
+  const extensionSet = new Set();
+  for (const rawExtension of Array.isArray(rawExtensions) ? rawExtensions : []) {
+    const extension = String(rawExtension || '').trim().toLowerCase().replace(/^\./, '');
+    if (!extension) continue;
+    if (!FILE_EXTENSION_RE.test(extension)) {
+      if (strict) {
+        throw contributionError(
+          `${pathLabel} has invalid extension "${rawExtension}".`,
+          'PACKAGE_CONTRIBUTION_EXTENSION_INVALID'
+        );
+      }
+      continue;
+    }
+    if (extensionSet.has(extension)) continue;
+    extensionSet.add(extension);
+    extensions.push(extension);
+  }
+  return extensions;
+}
+
+function collectAssociationExtensionsByAction(fileAssociations = [], actions = []) {
+  const wantedActions = new Set(actions.map((action) => String(action || '').trim().toLowerCase()).filter(Boolean));
+  const extensions = new Set();
+  for (const row of Array.isArray(fileAssociations) ? fileAssociations : []) {
+    const rowActions = Array.isArray(row?.actions) && row.actions.length > 0
+      ? row.actions
+      : [row?.defaultAction || 'open'];
+    const actionMatch = wantedActions.size === 0 || rowActions.some((action) => wantedActions.has(String(action || '').trim().toLowerCase()));
+    if (!actionMatch) continue;
+    for (const rawExtension of Array.isArray(row?.extensions) ? row.extensions : []) {
+      const extension = String(rawExtension || '').trim().toLowerCase().replace(/^\./, '');
+      if (extension) extensions.add(extension);
+    }
+  }
+  return Array.from(extensions).sort();
+}
+
+function normalizeRelativeContributionEntry(value, pathLabel, strict) {
+  const entry = String(value || '').trim().replace(/^[/\\]+/, '');
+  const invalid =
+    !entry ||
+    entry.length > RELATIVE_ENTRY_MAX ||
+    entry.includes('\0') ||
+    entry.split(/[\\/]+/).includes('..') ||
+    /^[a-z][a-z0-9+.-]*:/i.test(entry);
+
+  if (invalid) {
+    if (strict) {
+      throw contributionError(
+        `${pathLabel} must be a safe relative entry path.`,
+        'PACKAGE_CONTRIBUTION_ENTRY_INVALID'
+      );
+    }
+    return '';
+  }
+  return entry;
+}
+
+function normalizeFileContextMenuContributions(input, fileAssociations = [], options = {}) {
+  const strict = Boolean(options.strict);
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    if (strict) {
+      const err = new Error('contributes.fileContextMenu must be an array.');
+      err.code = 'PACKAGE_CONTRIBUTES_FILE_CONTEXT_MENU_INVALID';
+      throw err;
+    }
+    return [];
+  }
+
+  const supportedExtensionsByAction = new Map();
+  for (const row of Array.isArray(fileAssociations) ? fileAssociations : []) {
+    const actions = Array.isArray(row?.actions) && row.actions.length > 0
+      ? row.actions
+      : [row?.defaultAction || 'open'];
+    for (const rawAction of actions) {
+      const action = String(rawAction || '').trim().toLowerCase();
+      if (!FILE_ASSOC_ACTIONS.has(action)) continue;
+      if (!supportedExtensionsByAction.has(action)) {
+        supportedExtensionsByAction.set(action, new Set());
+      }
+      for (const extension of Array.isArray(row?.extensions) ? row.extensions : []) {
+        const normalizedExt = String(extension || '').trim().toLowerCase().replace(/^\./, '');
+        if (normalizedExt) supportedExtensionsByAction.get(action).add(normalizedExt);
+      }
+    }
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (let index = 0; index < input.length; index += 1) {
+    const row = input[index];
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      if (strict) {
+        const err = new Error(`contributes.fileContextMenu[${index}] must be an object.`);
+        err.code = 'PACKAGE_CONTRIBUTION_INVALID';
+        throw err;
+      }
+      continue;
+    }
+
+    const label = String(row.label || '').trim();
+    if (!label || label.length > 80) {
+      if (strict) {
+        const err = new Error(!label
+          ? `contributes.fileContextMenu[${index}] label is required.`
+          : `contributes.fileContextMenu[${index}] label is too long.`);
+        err.code = !label ? 'PACKAGE_CONTRIBUTION_LABEL_REQUIRED' : 'PACKAGE_CONTRIBUTION_LABEL_TOO_LONG';
+        throw err;
+      }
+      continue;
+    }
+
+    const action = String(row.action || row.defaultAction || 'open').trim().toLowerCase();
+    if (!FILE_ASSOC_ACTIONS.has(action)) {
+      if (strict) {
+        const err = new Error(`contributes.fileContextMenu[${index}] has unsupported action "${row.action}".`);
+        err.code = 'PACKAGE_CONTRIBUTION_ACTION_INVALID';
+        throw err;
+      }
+      continue;
+    }
+
+    const extensions = normalizeContributionExtensions(row.extensions, `contributes.fileContextMenu[${index}]`, strict);
+
+    if (extensions.length === 0) {
+      const supportedExtensions = supportedExtensionsByAction.get(action);
+      if (supportedExtensions?.size > 0) {
+        extensions.push(...Array.from(supportedExtensions).sort());
+      }
+    }
+
+    if (extensions.length === 0) {
+      if (strict) {
+        const err = new Error(`contributes.fileContextMenu[${index}] must include extensions or match fileAssociations.`);
+        err.code = 'PACKAGE_CONTRIBUTION_TARGET_REQUIRED';
+        throw err;
+      }
+      continue;
+    }
+
+    const key = JSON.stringify({ label, action, extensions });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({ label, action, extensions });
+  }
+
+  return normalized;
+}
+
+function normalizeFileCreateTemplateContributions(input, options = {}) {
+  const strict = Boolean(options.strict);
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    if (strict) {
+      throw contributionError(
+        'contributes.fileCreateTemplates must be an array.',
+        'PACKAGE_CONTRIBUTES_FILE_CREATE_TEMPLATES_INVALID'
+      );
+    }
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (let index = 0; index < input.length; index += 1) {
+    const row = input[index];
+    const pathLabel = `contributes.fileCreateTemplates[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      if (strict) {
+        throw contributionError(`${pathLabel} must be an object.`, 'PACKAGE_CONTRIBUTION_INVALID');
+      }
+      continue;
+    }
+
+    const label = normalizeContributionLabel(row.label, pathLabel, strict);
+    if (!label) continue;
+
+    const name = String(row.name || row.defaultName || '').trim();
+    const invalidName =
+      !name ||
+      name.length > FILE_TEMPLATE_NAME_MAX ||
+      name.includes('\0') ||
+      name.includes('/') ||
+      name.includes('\\');
+    if (invalidName) {
+      if (strict) {
+        throw contributionError(
+          `${pathLabel} name must be a safe file name.`,
+          'PACKAGE_CONTRIBUTION_TEMPLATE_NAME_INVALID'
+        );
+      }
+      continue;
+    }
+
+    const explicitExtension = String(row.extension || '').trim().toLowerCase().replace(/^\./, '');
+    const nameExtension = name.includes('.') ? String(name.split('.').pop() || '').trim().toLowerCase() : '';
+    const extension = explicitExtension || nameExtension;
+    if (!extension || !FILE_EXTENSION_RE.test(extension)) {
+      if (strict) {
+        throw contributionError(
+          `${pathLabel} must include a valid extension or file name extension.`,
+          'PACKAGE_CONTRIBUTION_EXTENSION_INVALID'
+        );
+      }
+      continue;
+    }
+
+    const action = String(row.action || 'edit').trim().toLowerCase();
+    if (!FILE_ASSOC_ACTIONS.has(action)) {
+      if (strict) {
+        throw contributionError(
+          `${pathLabel} has unsupported action "${row.action}".`,
+          'PACKAGE_CONTRIBUTION_ACTION_INVALID'
+        );
+      }
+      continue;
+    }
+
+    if (row.content !== undefined && typeof row.content !== 'string') {
+      if (strict) {
+        throw contributionError(
+          `${pathLabel} content must be a string.`,
+          'PACKAGE_CONTRIBUTION_TEMPLATE_CONTENT_INVALID'
+        );
+      }
+      continue;
+    }
+
+    if (row.openAfterCreate !== undefined && typeof row.openAfterCreate !== 'boolean') {
+      if (strict) {
+        throw contributionError(
+          `${pathLabel} openAfterCreate must be a boolean when provided.`,
+          'PACKAGE_CONTRIBUTION_TEMPLATE_OPEN_AFTER_CREATE_INVALID'
+        );
+      }
+      continue;
+    }
+
+    const content = typeof row.content === 'string' ? row.content : '';
+    if (content.length > FILE_TEMPLATE_CONTENT_MAX) {
+      if (strict) {
+        throw contributionError(
+          `${pathLabel} content is too large.`,
+          'PACKAGE_CONTRIBUTION_TEMPLATE_CONTENT_TOO_LARGE'
+        );
+      }
+      continue;
+    }
+
+    const item = {
+      label,
+      name,
+      extension,
+      content,
+      action,
+      openAfterCreate: row.openAfterCreate !== false
+    };
+    const key = JSON.stringify(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(item);
+  }
+
+  return normalized;
+}
+
+function normalizeFileProviderContributions(keyName, input, fileAssociations = [], options = {}) {
+  const strict = Boolean(options.strict);
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    if (strict) {
+      throw contributionError(
+        `contributes.${keyName} must be an array.`,
+        `PACKAGE_CONTRIBUTES_${keyName.replace(/[A-Z]/g, (char) => `_${char}`).toUpperCase()}_INVALID`
+      );
+    }
+    return [];
+  }
+
+  const defaultActions = keyName === 'previewProviders' || keyName === 'thumbnailProviders'
+    ? ['preview', 'open']
+    : [];
+  const inferredExtensions = collectAssociationExtensionsByAction(fileAssociations, defaultActions);
+  const normalized = [];
+  const seen = new Set();
+
+  for (let index = 0; index < input.length; index += 1) {
+    const row = input[index];
+    const pathLabel = `contributes.${keyName}[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      if (strict) {
+        throw contributionError(`${pathLabel} must be an object.`, 'PACKAGE_CONTRIBUTION_INVALID');
+      }
+      continue;
+    }
+
+    const label = normalizeContributionLabel(row.label, pathLabel, strict);
+    if (!label) continue;
+    const extensions = normalizeContributionExtensions(row.extensions, pathLabel, strict);
+    if (extensions.length === 0 && inferredExtensions.length > 0) {
+      extensions.push(...inferredExtensions);
+    }
+    if (extensions.length === 0) {
+      if (strict) {
+        throw contributionError(
+          `${pathLabel} must include extensions or infer them from fileAssociations.`,
+          'PACKAGE_CONTRIBUTION_TARGET_REQUIRED'
+        );
+      }
+      continue;
+    }
+
+    const item = { label, extensions };
+    const key = JSON.stringify(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(item);
+  }
+
+  return normalized;
+}
+
+function normalizeSettingsPanelContributions(input, options = {}) {
+  const strict = Boolean(options.strict);
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    if (strict) {
+      throw contributionError(
+        'contributes.settingsPanels must be an array.',
+        'PACKAGE_CONTRIBUTES_SETTINGS_PANELS_INVALID'
+      );
+    }
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (let index = 0; index < input.length; index += 1) {
+    const row = input[index];
+    const pathLabel = `contributes.settingsPanels[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      if (strict) {
+        throw contributionError(`${pathLabel} must be an object.`, 'PACKAGE_CONTRIBUTION_INVALID');
+      }
+      continue;
+    }
+    const label = normalizeContributionLabel(row.label, pathLabel, strict);
+    if (!label) continue;
+    const entry = normalizeRelativeContributionEntry(row.entry || row.path || 'index.html', pathLabel, strict);
+    if (!entry) continue;
+    const item = { label, entry };
+    const key = JSON.stringify(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(item);
+  }
+  return normalized;
+}
+
+function normalizeBackgroundServiceContributions(input, options = {}) {
+  const strict = Boolean(options.strict);
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    if (strict) {
+      throw contributionError(
+        'contributes.backgroundServices must be an array.',
+        'PACKAGE_CONTRIBUTES_BACKGROUND_SERVICES_INVALID'
+      );
+    }
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (let index = 0; index < input.length; index += 1) {
+    const row = input[index];
+    const pathLabel = `contributes.backgroundServices[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      if (strict) {
+        throw contributionError(`${pathLabel} must be an object.`, 'PACKAGE_CONTRIBUTION_INVALID');
+      }
+      continue;
+    }
+
+    const id = String(row.id || '').trim().toLowerCase();
+    if (!CONTRIBUTION_ID_RE.test(id)) {
+      if (strict) {
+        throw contributionError(`${pathLabel} id is invalid.`, 'PACKAGE_CONTRIBUTION_ID_INVALID');
+      }
+      continue;
+    }
+    const label = normalizeContributionLabel(row.label || id, pathLabel, strict);
+    if (!label) continue;
+    const entry = normalizeRelativeContributionEntry(row.entry || '', pathLabel, strict);
+    if (!entry) continue;
+    const item = {
+      id,
+      label,
+      entry,
+      autoStart: false,
+      requestedAutoStart: row.autoStart === true
+    };
+    const key = JSON.stringify(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(item);
+  }
+
+  return normalized;
+}
+
+function normalizePermissionList(value) {
+  return Array.isArray(value) ? value.map((permission) => String(permission || '').trim()).filter(Boolean) : [];
+}
+
+function assertContributionPermission(keyName, contributions, options = {}) {
+  if (!options.strict || !Array.isArray(contributions) || contributions.length === 0) return;
+  const permissions = new Set(normalizePermissionList(options.permissions));
+  if ((keyName === 'previewProviders' || keyName === 'thumbnailProviders') && !permissions.has(HOST_FILE_READ_PERMISSION)) {
+    throw contributionError(
+      `contributes.${keyName} requires permission "${HOST_FILE_READ_PERMISSION}".`,
+      'PACKAGE_CONTRIBUTION_PERMISSION_REQUIRED'
+    );
+  }
+}
+
+function normalizeContributes(input, fileAssociations = [], options = {}) {
+  const strict = Boolean(options.strict);
+  if (input === undefined || input === null) {
+    return {
+      fileContextMenu: [],
+      fileCreateTemplates: [],
+      previewProviders: [],
+      thumbnailProviders: [],
+      settingsPanels: [],
+      backgroundServices: []
+    };
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    if (strict) {
+      const err = new Error('Manifest contributes must be an object.');
+      err.code = 'PACKAGE_CONTRIBUTES_INVALID';
+      throw err;
+    }
+    return {
+      fileContextMenu: [],
+      fileCreateTemplates: [],
+      previewProviders: [],
+      thumbnailProviders: [],
+      settingsPanels: [],
+      backgroundServices: []
+    };
+  }
+
+  const normalized = {
+    fileContextMenu: normalizeFileContextMenuContributions(input.fileContextMenu, fileAssociations, options),
+    fileCreateTemplates: normalizeFileCreateTemplateContributions(input.fileCreateTemplates, options),
+    previewProviders: normalizeFileProviderContributions('previewProviders', input.previewProviders, fileAssociations, options),
+    thumbnailProviders: normalizeFileProviderContributions('thumbnailProviders', input.thumbnailProviders, fileAssociations, options),
+    settingsPanels: normalizeSettingsPanelContributions(input.settingsPanels, options),
+    backgroundServices: normalizeBackgroundServiceContributions(input.backgroundServices, options)
+  };
+
+  assertContributionPermission('previewProviders', normalized.previewProviders, options);
+  assertContributionPermission('thumbnailProviders', normalized.thumbnailProviders, options);
+  return normalized;
+}
+
 async function readBuiltinRegistry() {
   await inventoryPaths.ensureInventoryStructure();
   const appsFile = await inventoryPaths.getAppsRegistryFile();
@@ -386,6 +893,7 @@ function normalizeBuiltinApp(app) {
   const normalizedEntry = typeof app.entry === 'string' && app.entry.trim() ? app.entry.trim() : '';
   const normalizedPermissions = Array.isArray(app.permissions) ? app.permissions.map(String).filter(Boolean) : [];
   const normalizedFileAssociations = normalizeFileAssociations(app.fileAssociations);
+  const normalizedContributes = normalizeContributes(app.contributes, normalizedFileAssociations);
   const normalizedWindow = normalizeWindow(app.window);
   const builtinType = appModel === APP_MODELS.SYSTEM ? 'system' : 'app';
   const normalizedAppType = String(app.appType || app.type || builtinType).trim() || builtinType;
@@ -404,6 +912,7 @@ function normalizeBuiltinApp(app) {
     source: 'system-registry',
     permissions: normalizedPermissions,
     fileAssociations: normalizedFileAssociations,
+    contributes: normalizedContributes,
     singleton: Boolean(app.singleton),
     icon: iconMeta.icon,
     iconType: iconMeta.iconType,
@@ -428,6 +937,7 @@ function normalizeBuiltinApp(app) {
       },
       permissions: normalizedPermissions,
       fileAssociations: normalizedFileAssociations,
+      contributes: normalizedContributes,
       window: normalizedWindow
     }
   };
@@ -536,6 +1046,7 @@ function normalizeSandboxManifest(manifest) {
   const resolvedEntry = runtimeProfile.entry;
   const mediaScopes = normalizeManifestMediaScopes(manifest);
   const fileAssociations = normalizeFileAssociations(manifest.fileAssociations);
+  const contributes = normalizeContributes(manifest.contributes, fileAssociations);
 
   if (typeof manifest.id !== 'string' || typeof manifest.title !== 'string') {
     return null;
@@ -575,6 +1086,7 @@ function normalizeSandboxManifest(manifest) {
       scopes: mediaScopes
     },
     fileAssociations,
+    contributes,
     author: manifest.author || '',
     repository: manifest.repository || '',
     window: normalizeWindow(manifest.window)
@@ -658,6 +1170,7 @@ async function listSandboxApps() {
 const packageRegistryService = {
   normalizeManifestMediaScopes,
   normalizeManifestFileAssociations: normalizeFileAssociations,
+  normalizeManifestContributes: normalizeContributes,
   OWNERSHIP_CONTRACT_VERSION,
 
   async listDesktopApps() {

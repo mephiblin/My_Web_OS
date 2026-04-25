@@ -606,7 +606,7 @@ function createTemplateEntryContent(templateId, options = {}) {
       <button id="save">Save</button>
       <button id="load">Load</button>
     </div>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const el = document.getElementById('memo');
       async function save() {
@@ -655,7 +655,7 @@ function createTemplateEntryContent(templateId, options = {}) {
       <button type="submit">Add</button>
     </form>
     <ul id="todo-list"></ul>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const FILE_PATH = 'todo-items.json';
       const form = document.getElementById('todo-form');
@@ -776,7 +776,7 @@ function createTemplateEntryContent(templateId, options = {}) {
       <button type="submit">Add</button>
     </form>
     <ul id="bookmark-list"></ul>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const FILE_PATH = 'bookmarks.json';
       const form = document.getElementById('bookmark-form');
@@ -942,7 +942,7 @@ function createTemplateEntryContent(templateId, options = {}) {
     <div id="display" class="display">0</div>
     <div class="grid" id="keys"></div>
     <div id="history" class="history"></div>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const HISTORY_PATH = 'calculator-history.json';
       const display = document.getElementById('display');
@@ -1088,7 +1088,7 @@ function createTemplateEntryContent(templateId, options = {}) {
       <button id="clear-all" type="button">Clear All</button>
     </div>
     <ul id="clip-list"></ul>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const FILE_PATH = 'clipboard-history.json';
       const MAX_ENTRIES = 100;
@@ -1210,7 +1210,7 @@ function createTemplateEntryContent(templateId, options = {}) {
       <div>${title}</div>
       <div id="metric" class="metric">--</div>
     </div>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       async function tick() {
         try {
@@ -1243,7 +1243,7 @@ function createTemplateEntryContent(templateId, options = {}) {
   <body>
     <h3>${title}</h3>
     <pre id="out">Loading...</pre>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       async function refresh() {
         try {
@@ -1314,7 +1314,7 @@ function createTemplateEntryContent(templateId, options = {}) {
       <textarea id="src" placeholder="# Markdown Preview\\n\\n- edit\\n- save\\n- reload"></textarea>
       <article id="preview" class="preview"></article>
     </div>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const FILE_PATH = 'document.md';
       const src = document.getElementById('src');
@@ -1427,7 +1427,7 @@ function createTemplateEntryContent(templateId, options = {}) {
       <table id="csv-table"></table>
     </div>
     <input id="csv-file-input" type="file" accept=".csv,text/csv" style="display:none" />
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const FILE_PATH = 'table.csv';
       const status = document.getElementById('status');
@@ -1573,7 +1573,7 @@ function createTemplateEntryContent(templateId, options = {}) {
       <button id="replace-all" type="button">Replace All</button>
     </div>
     <textarea id="text-input" placeholder="Paste or type text..."></textarea>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const FILE_PATH = 'text.txt';
       const textInput = document.getElementById('text-input');
@@ -1887,7 +1887,7 @@ function createTemplateEntryContent(templateId, options = {}) {
     <textarea id="headers" placeholder="Authorization: Bearer ...&#10;X-Trace-Id: sample">content-type: application/json</textarea>
     <textarea id="body" placeholder='{"key":"value"}'></textarea>
     <pre id="out">Ready</pre>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const HISTORY_FILE = 'request-history.json';
       const methodEl = document.getElementById('method');
@@ -2258,7 +2258,7 @@ function createTemplateEntryContent(templateId, options = {}) {
     <ul id="list"></ul>
     <input id="import-file" type="file" accept="application/json,.json" style="display:none" />
     <div id="import-report" class="meta report"></div>
-    <script src="/api/sandbox/sdk.js"></script>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const FILE_PATH = 'snippets.json';
       const nameEl = document.getElementById('name');
@@ -2553,6 +2553,14 @@ function normalizeManifestInput(input, fallbackAppId) {
   const compatibility = normalizeManifestCompatibility(input?.compatibility);
   const mediaScopes = packageRegistryService.normalizeManifestMediaScopes(input, { strict: true });
   const fileAssociations = packageRegistryService.normalizeManifestFileAssociations(input?.fileAssociations, { strict: true });
+  const permissions = Array.isArray(input?.permissions)
+    ? input.permissions.map((permission) => String(permission)).filter(Boolean)
+    : [];
+  const contributes = packageRegistryService.normalizeManifestContributes(
+    input?.contributes,
+    fileAssociations,
+    { strict: true, permissions }
+  );
   const release = {
     channel: normalizeManifestChannel(input?.release?.channel || input?.channel || 'stable')
   };
@@ -2572,9 +2580,7 @@ function normalizeManifestInput(input, fallbackAppId) {
     repository: String(input?.repository || '').trim(),
     singleton: Boolean(input?.singleton),
     entry: runtimeProfile.entry || entry,
-    permissions: Array.isArray(input?.permissions)
-      ? input.permissions.map((permission) => String(permission)).filter(Boolean)
-      : [],
+    permissions,
     capabilities: Array.isArray(input?.capabilities)
       ? input.capabilities.map((capability) => String(capability)).filter(Boolean)
       : [],
@@ -2582,6 +2588,7 @@ function normalizeManifestInput(input, fallbackAppId) {
       scopes: mediaScopes
     },
     fileAssociations,
+    contributes,
     dependencies,
     compatibility,
     release,

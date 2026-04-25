@@ -248,7 +248,7 @@ router.post('/:appId/data/write', auth, async (req, res) => {
 });
 
 router.post('/:appId/file/read', auth, async (req, res) => {
-  const app = await ensurePermittedSandboxApp(res, req.params.appId, 'app.data.read');
+  const app = await ensurePermittedSandboxApp(res, req.params.appId, 'host.file.read');
   if (!app) return;
 
   try {
@@ -289,7 +289,7 @@ router.post('/:appId/file/read', auth, async (req, res) => {
 });
 
 router.post('/:appId/file/write', auth, async (req, res) => {
-  const app = await ensurePermittedSandboxApp(res, req.params.appId, 'app.data.write');
+  const app = await ensurePermittedSandboxApp(res, req.params.appId, 'host.file.write');
   if (!app) return;
 
   try {
@@ -372,7 +372,7 @@ router.get('/:appId/file/raw', async (req, res) => {
       });
     }
 
-    if (!app.permissions.includes('app.data.read')) {
+    if (!app.permissions.includes('host.file.read')) {
       return res.status(403).json({
         error: true,
         code: 'APP_PERMISSION_DENIED',
