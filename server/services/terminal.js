@@ -12,6 +12,8 @@ try {
 }
 
 const sessions = new Map();
+const terminalAccessGrants = new Map();
+const TERMINAL_APP_ACCESS_TTL_MS = 8 * 60 * 60 * 1000;
 
 function sanitizeCommand(command) {
   const value = String(command || '').replace(/\s+/g, ' ').trim();
@@ -34,6 +36,32 @@ function computeTerminalTargetHash(targetEvidence = {}) {
   hash.update('terminal-session-target-v1\0');
   hash.update(stableJsonStringify(targetEvidence));
   return `sha256:${hash.digest('hex')}`;
+}
+
+function createTerminalAccessGrantId() {
+  if (typeof crypto.randomUUID === 'function') {
+    return `terminal-app-access-${crypto.randomUUID()}`;
+  }
+  return `terminal-app-access-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+}
+
+function cleanupExpiredTerminalAccessGrants() {
+  const current = Date.now();
+  for (const [grantId, grant] of terminalAccessGrants.entries()) {
+    if (!grant || grant.expiresAtMs <= current) {
+      terminalAccessGrants.delete(grantId);
+    }
+  }
+}
+
+function normalizeAppInstanceId(value) {
+  return String(value || '').trim().slice(0, 160);
+}
+
+function createTerminalError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
 }
 
 function resolveSocketUser(socket) {
@@ -84,6 +112,38 @@ function buildSessionTarget(socket, payload = {}) {
   };
 }
 
+function buildAppAccessTarget(socket, payload = {}) {
+  const shell = os.platform() === 'win32' ? 'powershell.exe' : 'bash';
+  const cwd = process.env.HOME || process.env.USERPROFILE || '';
+  const username = socket.data?.user?.username || '';
+  const appInstanceId = normalizeAppInstanceId(payload.appInstanceId);
+  const target = {
+    type: 'terminal.appAccess',
+    id: appInstanceId,
+    label: `NexusTerm ${appInstanceId || 'app session'}`
+  };
+  const evidence = {
+    user: username,
+    appId: 'nexus-term',
+    appInstanceId,
+    shell,
+    cwd,
+    client: {
+      address: socket.handshake?.address || socket.conn?.remoteAddress || '',
+      userAgent: socket.handshake?.headers?.['user-agent'] || ''
+    }
+  };
+  return {
+    action: 'terminal.appAccess',
+    target,
+    targetHash: computeTerminalTargetHash(evidence),
+    evidence,
+    shell,
+    cwd,
+    appInstanceId
+  };
+}
+
 function buildTerminalPreflight(socket, payload = {}) {
   const targetContext = buildSessionTarget(socket, payload);
   const operation = operationApprovalService.createOperation({
@@ -120,6 +180,46 @@ function buildTerminalPreflight(socket, payload = {}) {
   };
 }
 
+function buildTerminalAppAccessPreflight(socket, payload = {}) {
+  const targetContext = buildAppAccessTarget(socket, payload);
+  if (!targetContext.appInstanceId) {
+    throw createTerminalError('TERMINAL_APP_ACCESS_APP_REQUIRED', 'Terminal app access requires an app instance id.');
+  }
+
+  const operation = operationApprovalService.createOperation({
+    action: targetContext.action,
+    userId: socket.data.user.username,
+    target: targetContext.target,
+    targetHash: targetContext.targetHash,
+    typedConfirmation: socket.data.user.username,
+    metadata: {
+      evidence: targetContext.evidence
+    }
+  });
+
+  return {
+    operationId: operation.operationId,
+    action: targetContext.action,
+    target: targetContext.target,
+    riskLevel: 'high',
+    impact: [
+      'NexusTerm will be allowed to open local shell tabs for this app session.',
+      'Commands typed into any shell tab can change real host files and services.'
+    ],
+    recoverability: {
+      appCanBeClosed: true,
+      commandRollbackNotGuaranteed: true
+    },
+    approval: {
+      required: true,
+      typedConfirmation: socket.data.user.username,
+      expiresAt: operation.expiresAt
+    },
+    targetHash: targetContext.targetHash,
+    evidence: targetContext.evidence
+  };
+}
+
 function emitTerminalApprovalError(socket, code, message, preflight = null) {
   socket.emit('terminal:error', {
     code,
@@ -130,7 +230,46 @@ function emitTerminalApprovalError(socket, code, message, preflight = null) {
 }
 
 function isApprovedSession(socket) {
-  return Boolean(socket.data?.terminalSessionApproval?.operationId);
+  return Boolean(
+    socket.data?.terminalSessionApproval?.operationId
+    || socket.data?.terminalSessionApproval?.appAccessGrantId
+  );
+}
+
+function createTerminalAccessGrant({ userId, appInstanceId, operationId, targetHash }) {
+  cleanupExpiredTerminalAccessGrants();
+  const createdAtMs = Date.now();
+  const expiresAtMs = createdAtMs + TERMINAL_APP_ACCESS_TTL_MS;
+  const grant = {
+    grantId: createTerminalAccessGrantId(),
+    userId,
+    appId: 'nexus-term',
+    appInstanceId,
+    operationId,
+    targetHash,
+    createdAt: new Date(createdAtMs).toISOString(),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    expiresAtMs
+  };
+  terminalAccessGrants.set(grant.grantId, grant);
+  return { ...grant };
+}
+
+function validateTerminalAccessGrant(socket, payload = {}) {
+  cleanupExpiredTerminalAccessGrants();
+  const grantId = String(payload.grantId || '').trim();
+  const appInstanceId = normalizeAppInstanceId(payload.appInstanceId);
+  const grant = terminalAccessGrants.get(grantId);
+  if (!grant) {
+    throw createTerminalError('TERMINAL_APP_ACCESS_NOT_FOUND', 'Terminal app access grant was not found or has expired.');
+  }
+  if (grant.userId !== socket.data.user.username) {
+    throw createTerminalError('TERMINAL_APP_ACCESS_USER_MISMATCH', 'Terminal app access belongs to a different user.');
+  }
+  if (grant.appInstanceId !== appInstanceId) {
+    throw createTerminalError('TERMINAL_APP_ACCESS_APP_MISMATCH', 'Terminal app access belongs to a different NexusTerm instance.');
+  }
+  return { ...grant };
 }
 
 /**
@@ -215,7 +354,92 @@ function initTerminalService(io) {
       }
     });
 
-    socket.on('terminal:init', ({ cols, rows, approval } = {}) => {
+    socket.on('terminal:app-access-preflight', (payload = {}) => {
+      if (!socket.data.user?.username) {
+        auditService.log(
+          'SYSTEM',
+          'Terminal: App Access Preflight Rejected (Auth Required)',
+          { socketId: socket.id },
+          'WARNING'
+        ).catch(() => {});
+        emitTerminalApprovalError(socket, 'TERMINAL_AUTH_REQUIRED', 'Authentication required. Please sign in again.');
+        return;
+      }
+
+      try {
+        const preflight = buildTerminalAppAccessPreflight(socket, payload);
+        auditService.log(
+          'SYSTEM',
+          'Terminal: App Access Preflight Created',
+          {
+            socketId: socket.id,
+            user: socket.data.user.username,
+            operationId: preflight.operationId,
+            appInstanceId: preflight.evidence.appInstanceId,
+            targetHash: preflight.targetHash
+          },
+          'WARNING'
+        ).catch(() => {});
+        socket.emit('terminal:app-access-preflight', preflight);
+      } catch (err) {
+        emitTerminalApprovalError(socket, err.code || 'TERMINAL_APP_ACCESS_PREFLIGHT_INVALID', err.message);
+      }
+    });
+
+    socket.on('terminal:app-access-approve', (payload = {}) => {
+      if (!socket.data.user?.username) {
+        emitTerminalApprovalError(socket, 'TERMINAL_AUTH_REQUIRED', 'Authentication required. Please sign in again.');
+        return;
+      }
+
+      const targetContext = buildAppAccessTarget(socket, payload);
+      try {
+        if (!targetContext.appInstanceId) {
+          throw createTerminalError('TERMINAL_APP_ACCESS_APP_REQUIRED', 'Terminal app access requires an app instance id.');
+        }
+        const approval = operationApprovalService.approveOperation({
+          operationId: payload.operationId,
+          userId: socket.data.user.username,
+          action: 'terminal.appAccess',
+          targetId: targetContext.appInstanceId,
+          typedConfirmation: payload.typedConfirmation
+        });
+        const grant = createTerminalAccessGrant({
+          userId: socket.data.user.username,
+          appInstanceId: targetContext.appInstanceId,
+          operationId: approval.operationId,
+          targetHash: targetContext.targetHash
+        });
+        auditService.log(
+          'SYSTEM',
+          'Terminal: App Access Approved',
+          {
+            socketId: socket.id,
+            user: socket.data.user.username,
+            operationId: approval.operationId,
+            appInstanceId: grant.appInstanceId,
+            grantId: grant.grantId,
+            targetHash: targetContext.targetHash
+          },
+          'WARNING'
+        ).catch(() => {});
+        socket.emit('terminal:app-access-grant', grant);
+      } catch (err) {
+        auditService.log(
+          'SYSTEM',
+          'Terminal: App Access Approval Rejected',
+          {
+            socketId: socket.id,
+            user: socket.data.user.username,
+            code: err.code || 'TERMINAL_APP_ACCESS_APPROVAL_INVALID'
+          },
+          'WARNING'
+        ).catch(() => {});
+        emitTerminalApprovalError(socket, 'TERMINAL_APP_ACCESS_APPROVAL_INVALID', err.message);
+      }
+    });
+
+    socket.on('terminal:init', ({ cols, rows, approval, appAccess } = {}) => {
       if (!socket.data.user?.username) {
         auditService.log(
           'SYSTEM',
@@ -230,58 +454,84 @@ function initTerminalService(io) {
       }
 
       const targetContext = buildSessionTarget(socket, { cols, rows });
-      if (
-        !approval ||
-        !String(approval.operationId || '').trim() ||
-        !String(approval.nonce || '').trim() ||
-        !String(approval.targetHash || '').trim()
-      ) {
-        const preflight = buildTerminalPreflight(socket, { cols, rows });
-        auditService.log(
-          'SYSTEM',
-          'Terminal: Session Rejected (Approval Required)',
-          { socketId: socket.id, user: socket.data.user.username, operationId: preflight.operationId },
-          'WARNING'
-        ).catch(() => {});
-        emitTerminalApprovalError(socket, 'TERMINAL_SESSION_APPROVAL_REQUIRED', 'Terminal session requires a scoped approval nonce.', preflight);
-        return;
-      }
-
       let approvalContext = null;
-      try {
-        if (String(approval.targetHash || '').trim() !== targetContext.targetHash) {
-          const err = new Error('Terminal session approval target changed after preflight.');
-          err.code = 'TERMINAL_SESSION_APPROVAL_TARGET_CHANGED';
-          throw err;
-        }
-        approvalContext = operationApprovalService.consumeApproval({
-          operationId: approval.operationId,
-          nonce: approval.nonce,
-          userId: socket.data.user.username,
-          action: 'terminal.session',
-          targetId: socket.id,
-          targetHash: targetContext.targetHash
-        });
-      } catch (err) {
-        auditService.log(
-          'SYSTEM',
-          'Terminal: Session Rejected (Approval Invalid)',
-          {
-            socketId: socket.id,
-            user: socket.data.user.username,
-            code: err.code || 'TERMINAL_SESSION_APPROVAL_INVALID'
-          },
-          'WARNING'
-        ).catch(() => {});
-        emitTerminalApprovalError(socket, 'TERMINAL_SESSION_APPROVAL_INVALID', err.message);
-        return;
-      }
+      let appAccessContext = null;
 
-      socket.data.terminalSessionApproval = {
-        operationId: approvalContext.operationId,
-        targetHash: approvalContext.targetHash,
-        consumedAt: approvalContext.consumedAt
-      };
+      if (appAccess?.grantId) {
+        try {
+          appAccessContext = validateTerminalAccessGrant(socket, appAccess);
+        } catch (err) {
+          auditService.log(
+            'SYSTEM',
+            'Terminal: Session Rejected (App Access Invalid)',
+            {
+              socketId: socket.id,
+              user: socket.data.user.username,
+              code: err.code || 'TERMINAL_APP_ACCESS_INVALID'
+            },
+            'WARNING'
+          ).catch(() => {});
+          emitTerminalApprovalError(socket, 'TERMINAL_APP_ACCESS_INVALID', err.message);
+          return;
+        }
+        socket.data.terminalSessionApproval = {
+          appAccessGrantId: appAccessContext.grantId,
+          operationId: appAccessContext.operationId,
+          targetHash: appAccessContext.targetHash,
+          appInstanceId: appAccessContext.appInstanceId,
+          approvedAt: appAccessContext.createdAt
+        };
+      } else {
+        if (
+          !approval ||
+          !String(approval.operationId || '').trim() ||
+          !String(approval.nonce || '').trim() ||
+          !String(approval.targetHash || '').trim()
+        ) {
+          const preflight = buildTerminalPreflight(socket, { cols, rows });
+          auditService.log(
+            'SYSTEM',
+            'Terminal: Session Rejected (Approval Required)',
+            { socketId: socket.id, user: socket.data.user.username, operationId: preflight.operationId },
+            'WARNING'
+          ).catch(() => {});
+          emitTerminalApprovalError(socket, 'TERMINAL_SESSION_APPROVAL_REQUIRED', 'Terminal session requires a scoped approval nonce.', preflight);
+          return;
+        }
+
+        try {
+          if (String(approval.targetHash || '').trim() !== targetContext.targetHash) {
+            throw createTerminalError('TERMINAL_SESSION_APPROVAL_TARGET_CHANGED', 'Terminal session approval target changed after preflight.');
+          }
+          approvalContext = operationApprovalService.consumeApproval({
+            operationId: approval.operationId,
+            nonce: approval.nonce,
+            userId: socket.data.user.username,
+            action: 'terminal.session',
+            targetId: socket.id,
+            targetHash: targetContext.targetHash
+          });
+        } catch (err) {
+          auditService.log(
+            'SYSTEM',
+            'Terminal: Session Rejected (Approval Invalid)',
+            {
+              socketId: socket.id,
+              user: socket.data.user.username,
+              code: err.code || 'TERMINAL_SESSION_APPROVAL_INVALID'
+            },
+            'WARNING'
+          ).catch(() => {});
+          emitTerminalApprovalError(socket, 'TERMINAL_SESSION_APPROVAL_INVALID', err.message);
+          return;
+        }
+
+        socket.data.terminalSessionApproval = {
+          operationId: approvalContext.operationId,
+          targetHash: approvalContext.targetHash,
+          consumedAt: approvalContext.consumedAt
+        };
+      }
 
       if (!pty) {
         auditService.log(
@@ -290,7 +540,8 @@ function initTerminalService(io) {
           {
             socketId: socket.id,
             user: socket.data.user.username,
-            operationId: approvalContext.operationId
+            operationId: approvalContext?.operationId || appAccessContext?.operationId || null,
+            appAccessGrantId: appAccessContext?.grantId || null
           },
           'WARNING'
         ).catch(() => {});
@@ -330,11 +581,12 @@ function initTerminalService(io) {
         {
           socketId: sessionId,
           user: socket.data.user.username,
-          operationId: approvalContext.operationId,
+          operationId: approvalContext?.operationId || appAccessContext?.operationId || null,
+          appAccessGrantId: appAccessContext?.grantId || null,
           approval: {
-            nonceConsumed: true,
-            consumedAt: approvalContext.consumedAt,
-            targetHash: approvalContext.targetHash
+            nonceConsumed: Boolean(approvalContext),
+            consumedAt: approvalContext?.consumedAt || null,
+            targetHash: approvalContext?.targetHash || appAccessContext?.targetHash || null
           }
         },
         'INFO'
@@ -425,12 +677,14 @@ function _resetForTests() {
     } catch (_err) {}
   }
   sessions.clear();
+  terminalAccessGrants.clear();
 }
 
 module.exports = {
   initTerminalService,
   getActiveSessions,
   buildSessionTarget,
+  buildAppAccessTarget,
   _setPtyForTests,
   _resetForTests
 };

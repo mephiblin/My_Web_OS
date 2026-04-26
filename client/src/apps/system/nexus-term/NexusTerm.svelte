@@ -34,6 +34,7 @@
   } from 'lucide-svelte';
   import * as fsApi from '../file-explorer/api.js';
   import NexusShellSession from './NexusShellSession.svelte';
+  import { createTerminalAppAccessClient } from './services/terminalSessionClient.js';
 
   const TEXT_EXTENSIONS = new Set([
     'md', 'markdown', 'txt', 'json', 'js', 'jsx', 'ts', 'tsx', 'svelte', 'css', 'scss',
@@ -69,12 +70,19 @@
   })();
 
   const initialTerminalTab = createTerminalTab();
+  const terminalAppInstanceId = `nexus-term-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   let mainElement;
   let terminalTabs = $state([initialTerminalTab]);
   let activeTerminalId = $state(initialTerminalTab.id);
   let pendingTerminalInput = $state(null);
   let terminalResizeSignal = $state(0);
+  let terminalAccessClient;
+  let terminalAccessPreflight = $state(null);
+  let terminalAccessGrant = $state(null);
+  let terminalAccessTypedConfirmation = $state('');
+  let terminalAccessLoading = $state(false);
+  let terminalAccessError = $state('');
 
   let loadingWorkspace = $state(false);
   let workspaceError = $state(null);
@@ -128,6 +136,7 @@
   let activeTerminal = $derived(terminalTabs.find((tab) => tab.id === activeTerminalId) || terminalTabs[0] || null);
   let activeTerminalState = $derived(activeTerminal?.state || {});
   let activeTerminalReady = $derived(activeTerminalState.ready === true);
+  let terminalAccessReady = $derived(Boolean(terminalAccessGrant?.grantId));
   let documentPath = $derived(activeDocument?.path || '');
   let dirty = $derived(Boolean(activeDocument && activeDocument.content !== activeDocument.savedContent));
   let selectedExtension = $derived(getExtension(activeDocument?.path || selectedFile?.name || ''));
@@ -172,6 +181,45 @@
       text
     };
     activeMobileTab = 'terminal';
+  }
+
+  function getTerminalAccessClient() {
+    if (!terminalAccessClient) {
+      terminalAccessClient = createTerminalAppAccessClient();
+    }
+    return terminalAccessClient;
+  }
+
+  async function requestTerminalAccessPreflight() {
+    if (terminalAccessLoading || terminalAccessReady) return;
+    terminalAccessLoading = true;
+    terminalAccessError = '';
+    terminalAccessTypedConfirmation = '';
+    try {
+      terminalAccessPreflight = await getTerminalAccessClient().requestPreflight(terminalAppInstanceId);
+    } catch (err) {
+      terminalAccessError = normalizeError(err, 'Could not prepare terminal approval.').message;
+    } finally {
+      terminalAccessLoading = false;
+    }
+  }
+
+  async function approveTerminalAccess() {
+    if (!terminalAccessPreflight || terminalAccessLoading || terminalAccessReady) return;
+    terminalAccessLoading = true;
+    terminalAccessError = '';
+    try {
+      terminalAccessGrant = await getTerminalAccessClient().approveAccess(
+        terminalAccessPreflight,
+        terminalAccessTypedConfirmation
+      );
+      terminalAccessTypedConfirmation = '';
+      terminalResizeSignal += 1;
+    } catch (err) {
+      terminalAccessError = normalizeError(err, 'Could not start terminal session.').message;
+    } finally {
+      terminalAccessLoading = false;
+    }
   }
 
   function getExtension(path = '') {
@@ -1061,6 +1109,7 @@
 
   onMount(async () => {
     resetDefaultPaneLayout();
+    requestTerminalAccessPreflight();
     await loadWorkspace();
     setTimeout(() => {
       terminalResizeSignal += 1;
@@ -1072,6 +1121,7 @@
     globalThis.document?.body?.classList.remove('nexus-resizing');
     globalThis.document?.body?.classList.remove('nexus-resizing-explorer');
     globalThis.document?.body?.classList.remove('nexus-resizing-terminal');
+    terminalAccessClient?.disconnect();
   });
 </script>
 
@@ -1325,11 +1375,60 @@
             <NexusShellSession
               active={tab.id === activeTerminalId}
               sessionId={tab.id}
+              enabled={terminalAccessReady}
+              appAccessGrant={terminalAccessGrant}
               pendingInput={pendingTerminalInput}
               resizeSignal={terminalResizeSignal}
               onStateChange={updateTerminalState}
             />
           {/each}
+          {#if !terminalAccessReady}
+            <div class="terminal-access-gate">
+              <div class="approval-card terminal-approval-card">
+                <div class="approval-heading">
+                  <Shield size={24} />
+                  <h2>Start Terminal Session</h2>
+                </div>
+                <p>Opens local shell access for this NexusTerm window. New shell tabs will reuse this approval until the app is closed.</p>
+                {#if terminalAccessPreflight}
+                  <dl>
+                    <div><dt>Action</dt><dd>{terminalAccessPreflight.action}</dd></div>
+                    <div><dt>Target</dt><dd>{terminalAccessPreflight.target?.label || terminalAccessPreflight.target?.id || 'NexusTerm'}</dd></div>
+                    <div><dt>Impact</dt><dd>{Array.isArray(terminalAccessPreflight.impact) ? terminalAccessPreflight.impact.join(' ') : terminalAccessPreflight.impact}</dd></div>
+                  </dl>
+                  <label>
+                    <span>Type <code>{terminalAccessPreflight.approval?.typedConfirmation}</code> to approve</span>
+                    <input
+                      bind:value={terminalAccessTypedConfirmation}
+                      autocomplete="off"
+                      spellcheck="false"
+                      onkeydown={(event) => event.key === 'Enter' && approveTerminalAccess()}
+                    />
+                  </label>
+                  <div class="dialog-actions">
+                    <button class="ghost" onclick={requestTerminalAccessPreflight} disabled={terminalAccessLoading}>Refresh</button>
+                    <button
+                      class="primary"
+                      onclick={approveTerminalAccess}
+                      disabled={terminalAccessLoading || terminalAccessTypedConfirmation !== terminalAccessPreflight.approval?.typedConfirmation}
+                    >
+                      {#if terminalAccessLoading}<Loader size={15} class="spin" />{/if}
+                      Start Shell
+                    </button>
+                  </div>
+                {:else}
+                  <p class="session-progress">
+                    {terminalAccessLoading ? 'Preparing terminal approval...' : 'Terminal approval is not ready yet.'}
+                  </p>
+                  <button class="primary" onclick={requestTerminalAccessPreflight} disabled={terminalAccessLoading}>
+                    {#if terminalAccessLoading}<Loader size={15} class="spin" />{/if}
+                    Retry Approval Request
+                  </button>
+                {/if}
+                {#if terminalAccessError}<p class="error-text">{terminalAccessError}</p>{/if}
+              </div>
+            </div>
+          {/if}
         </div>
       </div>
     </section>
@@ -1809,6 +1908,49 @@
     min-height: 0;
   }
 
+  .terminal-access-gate {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    background: rgba(4, 9, 18, 0.78);
+    z-index: 8;
+  }
+
+  .terminal-approval-card {
+    width: min(520px, 96%);
+    max-height: 94%;
+    overflow: auto;
+    border: 1px solid rgba(122, 162, 247, 0.3);
+    background: rgba(8, 18, 34, 0.96);
+    border-radius: 8px;
+    padding: 22px;
+    box-shadow: 0 18px 58px rgba(0, 0, 0, 0.42);
+  }
+
+  .approval-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    color: #f3f7ff;
+  }
+
+  .approval-heading h2 {
+    margin: 0;
+    font-size: 18px;
+  }
+
+  .terminal-approval-card p {
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  .session-progress {
+    margin: 10px 0 12px;
+  }
+
   .modal-backdrop {
     position: absolute;
     inset: 0;
@@ -2075,6 +2217,7 @@
 
   .doc-tabs button {
     max-width: 180px;
+    min-width: 0;
     min-height: 26px;
     display: flex;
     align-items: center;
@@ -2092,8 +2235,15 @@
 
   .doc-tabs span {
     min-width: 0;
+    flex: 1 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .doc-tabs button :global(svg) {
+    flex: 0 0 16px;
+    width: 13px;
+    height: 13px;
   }
 
   .markdown-preview {

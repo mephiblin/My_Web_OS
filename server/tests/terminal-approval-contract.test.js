@@ -167,3 +167,70 @@ test('terminal session approval is consumed once before PTY spawn', () => {
   const replayError = replaySocket.findEvent('terminal:error');
   assert.equal(replayError?.code, 'TERMINAL_SESSION_APPROVAL_INVALID', JSON.stringify(replaySocket.emitted));
 });
+
+test('terminal app access approval can start multiple NexusTerm shell sockets', () => {
+  operationApprovalService._resetForTests();
+  terminalService._resetForTests();
+  const fakePty = createFakePty();
+  terminalService._setPtyForTests(fakePty);
+  const appInstanceId = 'nexus-term-test-run';
+
+  const approvalSocket = new MockSocket('socket-terminal-app-approval', 'admin');
+  terminalService.initTerminalService(createIo(approvalSocket));
+  approvalSocket.clientEmit('terminal:app-access-preflight', { appInstanceId });
+  const preflight = approvalSocket.findEvent('terminal:app-access-preflight');
+  assert.equal(preflight?.action, 'terminal.appAccess', JSON.stringify(approvalSocket.emitted));
+  assert.equal(preflight?.target?.id, appInstanceId, JSON.stringify(preflight));
+  assert.ok(preflight?.operationId, JSON.stringify(preflight));
+
+  approvalSocket.clientEmit('terminal:app-access-approve', {
+    appInstanceId,
+    operationId: preflight.operationId,
+    typedConfirmation: 'admin'
+  });
+  const grant = approvalSocket.findEvent('terminal:app-access-grant');
+  assert.equal(grant?.appInstanceId, appInstanceId, JSON.stringify(approvalSocket.emitted));
+  assert.ok(grant?.grantId, JSON.stringify(grant));
+
+  const firstShell = new MockSocket('socket-terminal-app-shell-1', 'admin');
+  terminalService.initTerminalService(createIo(firstShell));
+  firstShell.clientEmit('terminal:init', {
+    cols: 100,
+    rows: 28,
+    appAccess: {
+      grantId: grant.grantId,
+      appInstanceId
+    }
+  });
+  assert.equal(fakePty.processes.length, 1);
+  assert.ok(firstShell.findEvent('terminal:ready'), JSON.stringify(firstShell.emitted));
+
+  const secondShell = new MockSocket('socket-terminal-app-shell-2', 'admin');
+  terminalService.initTerminalService(createIo(secondShell));
+  secondShell.clientEmit('terminal:init', {
+    cols: 90,
+    rows: 24,
+    appAccess: {
+      grantId: grant.grantId,
+      appInstanceId
+    }
+  });
+  assert.equal(fakePty.processes.length, 2);
+  assert.ok(secondShell.findEvent('terminal:ready'), JSON.stringify(secondShell.emitted));
+
+  secondShell.clientEmit('terminal:input', 'echo app-access-ok\n');
+  assert.deepEqual(fakePty.writes, ['echo app-access-ok\n']);
+
+  const wrongAppSocket = new MockSocket('socket-terminal-app-wrong', 'admin');
+  terminalService.initTerminalService(createIo(wrongAppSocket));
+  wrongAppSocket.clientEmit('terminal:init', {
+    cols: 90,
+    rows: 24,
+    appAccess: {
+      grantId: grant.grantId,
+      appInstanceId: 'other-nexus-term-run'
+    }
+  });
+  const wrongAppError = wrongAppSocket.findEvent('terminal:error');
+  assert.equal(wrongAppError?.code, 'TERMINAL_APP_ACCESS_INVALID', JSON.stringify(wrongAppSocket.emitted));
+});

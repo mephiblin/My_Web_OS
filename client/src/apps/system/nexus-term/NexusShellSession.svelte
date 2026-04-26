@@ -1,6 +1,5 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
-  import { Loader, Shield } from 'lucide-svelte';
   import { Terminal } from 'xterm';
   import { FitAddon } from 'xterm-addon-fit';
   import 'xterm/css/xterm.css';
@@ -9,6 +8,8 @@
   let {
     active = false,
     sessionId = '',
+    enabled = true,
+    appAccessGrant = null,
     pendingInput = null,
     resizeSignal = 0,
     onStateChange = () => {}
@@ -23,7 +24,6 @@
   let terminalStarting = $state(false);
   let terminalError = $state('');
   let sessionPreflight = $state(null);
-  let typedConfirmation = $state('');
   let lastPendingInputId = '';
   let queuedInputText = '';
 
@@ -37,28 +37,15 @@
   }
 
   function syncTerminalState(nextState = {}) {
-    const previousPreflight = sessionPreflight;
     terminalReady = nextState.initialized === true;
     terminalStarting = nextState.sessionStarting === true;
     terminalError = nextState.sessionError || '';
     sessionPreflight = nextState.sessionPreflight || null;
-    if (sessionPreflight !== previousPreflight) {
-      typedConfirmation = '';
-    }
     emitParentState();
-  }
-
-  function requestSessionPreflight() {
-    typedConfirmation = '';
-    terminalSession?.requestSessionPreflight();
   }
 
   function requestTerminalSession() {
     terminalSession?.requestSession();
-  }
-
-  function approveAndStartSession() {
-    terminalSession?.approveAndStartSession(typedConfirmation);
   }
 
   function bindTerminalInput() {
@@ -90,12 +77,15 @@
       getTerminalSize: () => ({ cols: term?.cols || 80, rows: term?.rows || 24 }),
       write: (data) => term?.write(data),
       writeln: (data) => term?.writeln(data),
+      getAppAccessGrant: () => appAccessGrant,
       onStateChange: syncTerminalState
     });
     bindTerminalInput();
     resizeHandler = () => fitTerminal();
     globalThis.addEventListener('resize', resizeHandler);
-    requestTerminalSession();
+    if (enabled && appAccessGrant?.grantId) {
+      requestTerminalSession();
+    }
   }
 
   function fitTerminal() {
@@ -109,6 +99,13 @@
     if (active) {
       setTimeout(() => fitTerminal(), 0);
     }
+  });
+
+  $effect(() => {
+    enabled;
+    appAccessGrant?.grantId;
+    if (!enabled || !appAccessGrant?.grantId || !terminalSession || terminalReady) return;
+    requestTerminalSession();
   });
 
   $effect(() => {
@@ -143,43 +140,11 @@
 
 <div class:active class="shell-session">
   <div bind:this={terminalElement} class="xterm-host"></div>
-  {#if !terminalReady}
-    <div class="session-gate">
-      <div class="approval-card">
-        <Shield size={22} />
-        <h2>Start Terminal Session</h2>
-        <p>Opens a real local shell on this host. Commands can change real files and services.</p>
-        {#if sessionPreflight}
-          <dl>
-            <div><dt>Action</dt><dd>{sessionPreflight.action}</dd></div>
-            <div><dt>Target</dt><dd>{sessionPreflight.target?.label || sessionPreflight.target?.id || 'Terminal session'}</dd></div>
-            <div><dt>Impact</dt><dd>{Array.isArray(sessionPreflight.impact) ? sessionPreflight.impact.join(' ') : sessionPreflight.impact}</dd></div>
-          </dl>
-          <label>
-            <span>Type <code>{sessionPreflight.approval?.typedConfirmation}</code> to approve</span>
-            <input bind:value={typedConfirmation} autocomplete="off" spellcheck="false" />
-          </label>
-          <div class="dialog-actions">
-            <button class="ghost" onclick={requestSessionPreflight} disabled={terminalStarting}>Refresh</button>
-            <button
-              class="primary"
-              onclick={approveAndStartSession}
-              disabled={terminalStarting || typedConfirmation !== sessionPreflight.approval?.typedConfirmation}
-            >
-              {#if terminalStarting}<Loader size={15} class="spin" />{/if}
-              Start Shell
-            </button>
-          </div>
-        {:else}
-          <p class="session-progress">
-            {terminalStarting ? 'Preparing terminal approval...' : 'Terminal approval is not ready yet.'}
-          </p>
-          <button class="primary" onclick={requestTerminalSession} disabled={terminalStarting}>
-            {#if terminalStarting}<Loader size={15} class="spin" />{/if}
-            Retry Approval Request
-          </button>
-        {/if}
-        {#if terminalError}<p class="error-text">{terminalError}</p>{/if}
+  {#if terminalError && enabled && !terminalReady}
+    <div class="session-status">
+      <div>
+        <p>{terminalError}</p>
+        <button onclick={requestTerminalSession} disabled={terminalStarting}>Retry Shell</button>
       </div>
     </div>
   {/if}
@@ -208,7 +173,7 @@
     height: 100%;
   }
 
-  .session-gate {
+  .session-status {
     position: absolute;
     inset: 0;
     display: grid;
@@ -218,26 +183,22 @@
     z-index: 5;
   }
 
-  .approval-card {
-    width: min(460px, 94%);
+  .session-status > div {
+    width: min(420px, 94%);
     border: 1px solid rgba(122, 162, 247, 0.3);
     background: rgba(8, 18, 34, 0.94);
     border-radius: 8px;
-    padding: 22px;
+    padding: 16px;
     box-shadow: 0 18px 58px rgba(0, 0, 0, 0.42);
   }
 
-  .approval-card h2 {
-    margin: 12px 0 8px;
-    font-size: 18px;
-  }
-
-  .approval-card p {
+  .session-status p {
+    margin: 0 0 12px;
     color: var(--muted);
     line-height: 1.5;
   }
 
-  button, input {
+  button {
     font: inherit;
   }
 
@@ -255,68 +216,4 @@
     opacity: 0.55;
   }
 
-  .primary {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    color: #f8fbff;
-    border-color: transparent;
-    padding: 0 13px;
-    font-weight: 700;
-  }
-
-  .ghost {
-    padding: 0 13px;
-  }
-
-  .dialog-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    justify-content: flex-end;
-  }
-
-  dl {
-    display: grid;
-    gap: 8px;
-    margin: 12px 0;
-  }
-
-  dl div {
-    display: grid;
-    grid-template-columns: 96px minmax(0, 1fr);
-    gap: 10px;
-  }
-
-  dt {
-    color: var(--muted);
-  }
-
-  dd {
-    margin: 0;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  label {
-    display: grid;
-    gap: 8px;
-    margin: 12px 0;
-  }
-
-  input {
-    background: #070f1c;
-    color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 9px 10px;
-    min-width: 0;
-  }
-
-  .session-progress {
-    color: var(--muted);
-    margin: 10px 0 12px;
-  }
-
-  .error-text {
-    color: var(--danger);
-  }
 </style>
