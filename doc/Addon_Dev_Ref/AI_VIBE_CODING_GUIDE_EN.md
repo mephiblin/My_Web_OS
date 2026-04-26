@@ -23,6 +23,16 @@ contracts.
 9. Do not build raw URLs from `{ path, grantId }`.
 10. Do not send legacy approval shortcuts such as `{ approved: true }`.
 
+## Before Editing
+
+1. Read `QUICKSTART_FIRST_ADDON_EN.md` if creating a new addon.
+2. Read `CORE_INTEGRATION_MAP.md` before using File Station, launch data,
+   grants, raw tickets, parent approval, or singleton relaunch behavior.
+3. Read `PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md` before changing install,
+   update, ZIP, registry, rollback, manifest update, or backup flows.
+4. Do not invent SDK methods. If the needed method is absent from
+   `SDK_API_REFERENCE.md`, stop and classify it as a core contract change.
+
 ## Default Implementation Target
 
 Create or edit:
@@ -94,6 +104,7 @@ Use this for a basic addon:
   },
   "permissions": [
     "ui.notification",
+    "app.data.list",
     "app.data.read",
     "app.data.write"
   ]
@@ -117,6 +128,7 @@ Add host file permissions only when needed:
 Every addon should have explicit startup, ready, and error states.
 
 ```html
+<div id="status">Starting...</div>
 <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
 <script>
   const statusEl = document.getElementById('status');
@@ -138,6 +150,13 @@ Every addon should have explicit startup, ready, and error states.
 ```
 
 Do not rely on top-level SDK calls before `WebOS.ready()`.
+
+Iframe limits:
+
+- The sandbox iframe currently uses `allow-scripts` only.
+- Do not depend on cookies, `localStorage`, `sessionStorage`, forms, popups,
+  browser downloads, top navigation, or parent DOM access.
+- Do not fetch arbitrary backend APIs directly from addon code; use the SDK.
 
 ## UI Rules For Generated Addons
 
@@ -165,6 +184,7 @@ window.WebOS.getApiPolicy();
 window.WebOS.ui.notification({ title, message, type });
 window.WebOS.window.open(appId, data);
 window.WebOS.system.info();
+window.WebOS.app.data.list({ path });
 window.WebOS.app.data.read({ path });
 window.WebOS.app.data.write({ path, content });
 window.WebOS.files.read({ path, grantId });
@@ -187,8 +207,9 @@ fetch('/api/sandbox/.../file/write/approve');
 await window.WebOS.ready();
 
 const context = window.WebOS.getContext();
-const file = context?.launchData?.fileContext?.file;
-const permission = context?.launchData?.fileContext?.permissionContext;
+const launchData = context?.app?.launchData || {};
+const file = launchData?.fileContext?.file;
+const permission = launchData?.fileContext?.permissionContext;
 
 if (!file?.path || !permission?.grantId) {
   throw new Error('Open this addon from File Station with a file grant.');
@@ -199,6 +220,21 @@ const result = await window.WebOS.files.read({
   grantId: permission.grantId
 });
 ```
+
+For singleton file viewers/editors, also handle relaunch data:
+
+```js
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent) return;
+  const payload = event.data || {};
+  if (payload.type === 'webos:launch-data') {
+    loadFromLaunchData(payload.launchData || {});
+  }
+});
+```
+
+Do not use `context.launchData`; current launch data is
+`context.app.launchData`.
 
 ## Host File Writer Pattern
 
@@ -214,6 +250,20 @@ await window.WebOS.files.write({
 If backend approval is needed, the parent Web OS frame opens the approval dialog
 and retries the write. Addon code should not mint or receive approval nonces
 except as part of the parent-mediated retry.
+
+## Package Lifecycle Pattern
+
+Package lifecycle work is not ordinary addon iframe code. Fresh install, ZIP
+import, registry install/update, rollback, and manifest update use:
+
+```text
+preflight -> user typed confirmation -> /api/packages/lifecycle/approve
+-> execute with approval { operationId, nonce, targetHash }
+```
+
+Never satisfy typed confirmation by copying
+`preflight.approval.typedConfirmation` in code. It must be user-entered in
+trusted Package Center UI.
 
 ## Preview URL Pattern
 
@@ -305,6 +355,7 @@ Permission denied:
 - manifest does not declare permission
 - file grant missing or expired
 - app id does not match grant
+- parent approval was denied or another approval is already open
 
 Overwrite fails:
 
@@ -320,3 +371,10 @@ Raw preview fails:
 - profile mismatch
 - file changed after ticket issue
 
+Core contract needed:
+
+- new SDK method is required
+- File Station does not provide the required launch/grant shape
+- addon needs cloud-file grants
+- addon needs background execution
+- install/update behavior is missing from Package Center lifecycle

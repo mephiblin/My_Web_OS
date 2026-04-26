@@ -14,6 +14,25 @@ Backend enforces permission, target, nonce, target hash, TTL, consume-once, and 
 
 An addon is not trusted to approve its own risky Host operation.
 
+## Sandbox Iframe Limits
+
+The current iframe uses `sandbox="allow-scripts"` only.
+
+Do not depend on:
+
+- same-origin access,
+- parent DOM access,
+- cookies,
+- `localStorage` or `sessionStorage`,
+- browser forms,
+- popups,
+- direct downloads,
+- top-level navigation.
+
+Use the SDK bridge for platform access. Static package assets may be loaded
+relative to the sandbox entry page, but `manifest.json` is not served as a
+static asset.
+
 ## Host File Access
 
 Host file access requires:
@@ -35,6 +54,10 @@ Write:
 ```js
 await WebOS.files.write({ path, grantId, content, overwrite: true });
 ```
+
+Sandbox addons cannot create arbitrary new host files by path. New host files
+must be created by a trusted core surface such as File Station templates, then
+opened with a `readwrite` grant.
 
 ## Overwrite Approval
 
@@ -91,6 +114,28 @@ Legacy sandbox raw grant endpoint is disabled with:
 SANDBOX_RAW_GRANT_URL_DISABLED
 ```
 
+Ticket limits:
+
+- `preview` defaults to 5 minutes and is capped at 10 minutes.
+- `media` is capped at 8 hours absolute and 45 minutes idle.
+- Media tickets become invalid when target size or mtime changes.
+
+## Package Lifecycle Approval
+
+Package install, import, update, rollback, and manifest update are high-risk
+lifecycle operations. They use:
+
+```text
+preflight -> typed confirmation -> approval nonce -> execute
+```
+
+Rules:
+
+- Typed confirmation must be entered by the user in trusted Package Center UI.
+- Do not copy `preflight.approval.typedConfirmation` into approval code.
+- Approval evidence must include `operationId`, `nonce`, and `targetHash`.
+- Legacy `{ approved: true }` shortcuts are rejected.
+
 ## Data Boundaries
 
 App data:
@@ -114,6 +159,8 @@ Sandbox is browser sandboxing, not VM/kernel isolation.
 Current limitations:
 
 - No native OS/kernel isolation for addon code.
+- Sandbox iframe currently allows scripts only; many browser platform features
+  are intentionally unavailable.
 - No public-internet security claim by default.
 - Backend restart can invalidate pending approval state.
 - Long-running transfer/backup behavior still benefits from real-use observation.
@@ -145,6 +192,19 @@ High risk:
 
 High-risk changes require backend contract and focused tests.
 
+## Approval Recovery UX
+
+Handle approval failures as normal user outcomes:
+
+| Situation | Addon/UI response |
+| --- | --- |
+| User denied approval | Keep content unchanged; show "Approval denied" and allow retry |
+| Approval expired | Ask user to retry the save/install flow from the current state |
+| Target changed | Reload or re-read target before offering another write |
+| Backend restarted | Reopen preflight and approval; old nonce is invalid |
+| Grant missing/expired | Ask user to reopen the file from File Station |
+| Another approval busy | Disable duplicate action and retry after current dialog closes |
+
 ## Bad Pattern Checklist
 
 Search before finishing:
@@ -174,4 +234,3 @@ Before merging an addon:
 5. Does it handle SDK startup failure visibly?
 6. Does Package Center install/update/remove behavior remain valid?
 7. Does it keep feature code out of core desktop/window files?
-

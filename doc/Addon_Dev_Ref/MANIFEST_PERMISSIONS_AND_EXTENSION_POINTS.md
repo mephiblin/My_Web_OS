@@ -36,8 +36,17 @@ Current addon default:
 sandbox-html
 ```
 
-Other runtime types may exist in package validation, but they should not be used
-for ordinary UI addons without explicit lifecycle, approval, and audit design.
+Ordinary UI addons should use:
+
+```text
+type: app
+runtime.type: sandbox-html
+```
+
+Other runtime/app types exist in validation, including `service`, `hybrid`, and
+managed process runtimes. They should not be used for ordinary UI addons
+without explicit lifecycle, approval, runtime, and audit design. Service
+packages may not appear in the desktop launcher.
 
 ## Permissions
 
@@ -48,6 +57,7 @@ Common permissions:
 | `ui.notification` | Show Web OS notifications/toasts |
 | `window.open` | Open another registered Web OS app |
 | `system.info` | Read system overview |
+| `app.data.list` | List addon-owned data files/directories |
 | `app.data.read` | Read addon-owned data |
 | `app.data.write` | Write addon-owned data |
 | `host.file.read` | Read granted host files |
@@ -58,6 +68,29 @@ Rules:
 - Permission list must be explicit.
 - Do not request host permissions for UI-only tools.
 - `host.file.write` is high-risk and should be justified by the addon purpose.
+
+## Extended Manifest Fields
+
+Current normalizers also understand these fields:
+
+| Field | Status | Notes |
+| --- | --- | --- |
+| `description` | Stable | User-facing package summary |
+| `icon` | Stable | Lucide name, image URL/data URL, or package asset path |
+| `author` | Stable metadata | Display/review metadata |
+| `repository` | Stable metadata | Project or source URL |
+| `singleton` | Stable | Reuses one app window and may receive `webos:launch-data` |
+| `window.width/height/minWidth/minHeight` | Stable | Initial desktop window sizing hints |
+| `media.scopes` | Advanced | Reviewed lifecycle risk; scope names are validated |
+| `dependencies` | Advanced | Package dependency/version range metadata |
+| `compatibility` | Advanced | Server/runtime compatibility checks |
+| `release.channel` | Distribution | `stable`, `beta`, `alpha`, or `canary` |
+| `service` | Experimental for ordinary addons | Runtime service settings; not a UI addon default |
+| `healthcheck` | Experimental for ordinary addons | Managed runtime healthcheck metadata |
+| `resources` | Experimental for ordinary addons | Managed runtime resource hints |
+
+Package Center may preserve unknown fields in source files, but addon authors
+should not rely on unknown fields becoming runtime behavior.
 
 ## File Associations
 
@@ -78,9 +111,12 @@ Use `fileAssociations` to register opener behavior.
 Rules:
 
 - Extensions are lowercase without dots.
+- Current File Station matching is extension-centered. `mimeTypes` are accepted
+  as manifest metadata but should not be the only matching strategy.
 - `actions` should match behavior the addon actually supports.
 - `defaultAction` should be one of the declared actions.
 - Editor-style apps normally need `host.file.read` and `host.file.write`.
+- Supported actions are `preview`, `open`, `edit`, `import`, and `export`.
 
 ## `contributes.fileContextMenu`
 
@@ -132,6 +168,8 @@ Rules:
 - Template content is static.
 - `openAfterCreate` must be boolean.
 - No addon code executes to create the file.
+- Template `name` must be a safe file name and is capped at 128 characters.
+- Template `content` is capped at 64 KiB.
 
 ## `contributes.previewProviders`
 
@@ -217,6 +255,19 @@ Current status:
 - `autoStart: true` is treated as a request, not execution permission.
 - Do not rely on background service execution until lifecycle policy exists.
 
+## Validation Limits
+
+Important current limits:
+
+| Item | Limit |
+| --- | --- |
+| Extension value | `a-z`, numbers, `.`, `_`, `+`, `-`, max 32 chars |
+| Contribution id | max 64 chars, `a-z`, numbers, `.`, `_`, `:`, `-` |
+| Contribution label | max 80 chars |
+| File template name | max 128 chars |
+| File template content | max 64 KiB |
+| Relative entry path | safe relative path, max 180 chars |
+
 ## Package Replacement Policy
 
 Inventory package apps may replace built-in `standard` addons with the same id.
@@ -232,4 +283,3 @@ Rules:
 - Replacement is allowed for `standard` addons.
 - Replacement is not allowed for `system` apps.
 - Package replacement should preserve app id and file association behavior.
-

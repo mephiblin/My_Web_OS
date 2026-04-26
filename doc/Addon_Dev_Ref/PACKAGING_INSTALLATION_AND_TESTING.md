@@ -23,6 +23,15 @@ npm run package:doctor -- --manifest=server/storage/inventory/apps/<app-id>/mani
 Then open the app from the Web OS launcher or File Station if file associations
 apply.
 
+Notes:
+
+- Inventory remains the canonical runtime source.
+- The backend reads package manifests from disk.
+- The client app registry caches `/api/system/apps`; reload the browser after
+  adding a new inventory package directly.
+- Direct inventory editing bypasses Package Center install/update approval,
+  backup, and rollback paths. Use ZIP or registry when testing lifecycle.
+
 ### Built-In Addon Package Source
 
 For built-in addon replacements, keep both source and runtime copy aligned:
@@ -40,7 +49,7 @@ This is currently used by package-first addon replacements such as:
 
 ### ZIP Import
 
-The zip root should contain:
+The zip should contain either a root manifest:
 
 ```text
 manifest.json
@@ -49,33 +58,82 @@ assets/
 vendor/
 ```
 
+or a single package folder:
+
+```text
+my-addon/
+  manifest.json
+  index.html
+  assets/
+  vendor/
+```
+
 Package Center import should:
 
 - read manifest during preflight
 - show lifecycle risks
-- require approval for overwrite/update when needed
+- require lifecycle approval for install/import/update
 - create backup before replacing installed package files
 - preserve rollback evidence
 
-### Git Registry
+Direct upload limit is 50 MB. Avoid archives with multiple manifests or
+multiple package roots.
+
+### Registry Distribution
 
 Recommended for distributable addons.
 
-Repository contents:
+Repository or HTTP contents:
 
 ```text
 webos-store.json
 releases/<addon>.zip
 ```
 
-The store index points to package zip artifacts.
+The store index points to HTTP(S) package zip artifacts. Package Center may
+convert GitHub repository URLs to
+`https://raw.githubusercontent.com/<owner>/<repo>/main/webos-store.json`, but
+the backend install path downloads JSON/ZIP over HTTP(S); it does not `git clone`.
+
+Registry package ZIP download limit is 80 MB and 15 seconds.
+
 See:
 
 ```text
+doc/Addon_Dev_Ref/PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md
 doc/reference/community-registry-and-presets.md
 doc/presets/webos-store.preset.json
 doc/presets/package-manifest.preset.json
 ```
+
+### Package Lifecycle Approval
+
+Install, import, update, rollback, and manifest update use the lifecycle
+approval contract:
+
+```text
+preflight -> user typed confirmation -> approve -> execute with scoped nonce
+```
+
+`{ approved: true }` is rejected. See
+`PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md`.
+
+### Local Workspace Bridge
+
+Package Center may record an optional local workspace bridge:
+
+```json
+{
+  "localWorkspace": {
+    "enabled": true,
+    "path": "/allowed/root/my-addon",
+    "mode": "readwrite"
+  }
+}
+```
+
+The path must be inside configured allowed roots, and inventory remains
+canonical. This bridge is not sandbox host filesystem permission.
 
 ## Verification Commands
 
@@ -166,7 +224,8 @@ Package lifecycle:
 
 - package doctor passes
 - ZIP import preflight passes
-- update/overwrite creates backup
+- install/import/update lifecycle approval is user-entered and scoped
+- update/overwrite creates backup when required
 - rollback path is visible
 - uninstall removes stale file associations
 
@@ -201,6 +260,19 @@ Package install failed:
 
 - Run package doctor.
 - Check manifest shape.
-- Check zip root layout.
+- Check accepted zip layout and upload size.
 - Check Package Center preflight details.
+- Check lifecycle approval target hash if execution says approval invalid.
 
+Registry install failed:
+
+- Confirm source URL is HTTP(S).
+- Confirm store index exposes `zipUrl` or `downloadUrl`.
+- Confirm ZIP is below 80 MB and reachable within 15 seconds.
+- Confirm channel update policy is not blocking the candidate.
+
+Local workspace bridge failed:
+
+- Confirm path is inside configured allowed roots.
+- Confirm path is not a protected inventory system path.
+- Confirm mode is `read` or `readwrite`.

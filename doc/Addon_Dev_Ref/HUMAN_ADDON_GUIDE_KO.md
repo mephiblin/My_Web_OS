@@ -6,6 +6,10 @@
 목표는 “core를 건드리지 않고도 설치, 실행, 파일 연동, 검증이 되는 애드온”을
 만드는 것이다.
 
+처음 애드온을 만드는 경우 `QUICKSTART_FIRST_ADDON_KO.md`를 먼저 따라 한다.
+File Station, sandbox iframe, launch data, grant처럼 core와 맞닿는 계약은
+`CORE_INTEGRATION_MAP.md`가 기준이다.
+
 ## 1. 기본 개념
 
 My Web OS의 일반 애드온은 브라우저 iframe 안에서 실행되는 package app이다.
@@ -72,7 +76,7 @@ server/storage/inventory/apps/<app-id>/
     "type": "sandbox-html",
     "entry": "index.html"
   },
-  "permissions": ["ui.notification", "app.data.read", "app.data.write"]
+  "permissions": ["ui.notification", "app.data.list", "app.data.read", "app.data.write"]
 }
 ```
 
@@ -110,6 +114,7 @@ await window.WebOS.ready();
 ui.notification    알림 표시
 window.open        다른 Web OS 앱 열기
 system.info        시스템 개요 조회
+app.data.list      애드온 전용 데이터 목록 조회
 app.data.read      애드온 전용 데이터 읽기
 app.data.write     애드온 전용 데이터 쓰기
 host.file.read     File Station grant로 host 파일 읽기
@@ -189,8 +194,9 @@ const result = await window.WebOS.app.data.read({
 await window.WebOS.ready();
 
 const context = window.WebOS.getContext();
-const file = context?.launchData?.fileContext?.file;
-const permission = context?.launchData?.fileContext?.permissionContext;
+const launchData = context?.app?.launchData || {};
+const file = launchData?.fileContext?.file;
+const permission = launchData?.fileContext?.permissionContext;
 
 if (!file?.path || !permission?.grantId) {
   throw new Error('File Station에서 파일을 열어주세요.');
@@ -201,6 +207,14 @@ const result = await window.WebOS.files.read({
   grantId: permission.grantId
 });
 ```
+
+주의:
+
+- `launchData`는 `context.app.launchData`에 있다.
+- 기존 singleton 창에 새 파일이 전달되면 `webos:launch-data` message가
+  추가로 올 수 있다. 파일 viewer/editor는 이 message를 처리해야 한다.
+- `cloud://` 파일 handoff는 현재 sandbox host file grant가 비어 있으므로
+  unsupported/missing grant로 안내한다.
 
 ### 미리보기 raw URL
 
@@ -309,7 +323,27 @@ webos-store.json
 releases/<addon>.zip
 ```
 
-자세한 형식은 `doc/reference/community-registry-and-presets.md`를 본다.
+Package Center UI가 GitHub repository URL을 raw `webos-store.json` URL로
+변환할 수는 있지만, backend 설치 경로는 `git clone`이 아니라 HTTP(S)
+JSON/ZIP 다운로드다.
+
+자세한 형식은 `PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md`와
+`doc/reference/community-registry-and-presets.md`를 본다.
+
+### Package lifecycle
+
+ZIP import, registry install/update, rollback, manifest update는 모두
+preflight와 typed confirmation approval을 거친다. 자세한 흐름은
+`PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md`를 기준으로 한다.
+
+핵심 순서:
+
+```text
+preflight -> 사용자가 package id 직접 입력 -> lifecycle approve
+-> { operationId, nonce, targetHash }로 실행
+```
+
+`{ approved: true }` 같은 legacy shortcut은 거절된다.
 
 ## 9. 필수 검증
 
@@ -344,7 +378,11 @@ npm run verify
 현재 한계:
 
 - sandbox app은 kernel/VM 수준 격리가 아니다.
+- sandbox iframe은 현재 `allow-scripts`만 허용한다. cookie, localStorage,
+  popup, download, form submit, parent DOM 접근에 의존하지 않는다.
 - host 파일 접근은 File Station grant가 있을 때만 가능하다.
+- sandbox는 임의 host path에 새 파일을 만들 수 없다. 새 파일은 File Station
+  template 같은 trusted core flow로 만든 뒤 `readwrite` grant로 연다.
 - 덮어쓰기 승인은 Web OS 부모 프레임이 담당한다.
 - `backgroundServices.autoStart`는 아직 자동 실행이 아니라 metadata 요청이다.
 - `settingsPanels`는 검증/표시 metadata이며 완전한 settings launch UI는 이후 단계다.
@@ -397,4 +435,3 @@ core를 수정하면 안 되는 경우:
 앱 기능은 애드온 안에.
 권한/승인/설치/실행 계약은 Web OS core에.
 ```
-
