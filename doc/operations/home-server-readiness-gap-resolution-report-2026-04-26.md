@@ -7,7 +7,8 @@ Primary decision:
 - VPN/internal owner-only beta operation is conditionally acceptable.
 - Addon development may continue in parallel.
 - Addon-only/core-freeze is conditionally declared because the gates in this
-  document are closed and verified.
+  document and the 2026-04-26 approval self-approval hardening pass are closed
+  and verified.
 - Direct public internet exposure remains out of scope until hardened deployment
   and real-use smoke coverage are verified.
 
@@ -55,19 +56,46 @@ completion claims belong in this file or future `doc/operations/` plans.
 
 | 기준 | 점수 | 판정 |
 | --- | ---: | --- |
-| VPN/내부망 개인 홈서버 운영 | 8.0 / 10 | 조건부 가능 |
-| DSM-like 일상 운영면 | 7.2 / 10 | 조건부 가능 |
-| addon-only/core-freeze 준비도 | 86 / 100 | 조건부 가능 |
+| VPN/내부망 개인 홈서버 운영 | 8.3 / 10 | 조건부 가능 |
+| DSM-like 일상 운영면 | 7.4 / 10 | 조건부 가능 |
+| addon-only/core-freeze 준비도 | 90 / 100 | 조건부 가능 |
 | 직접 공인 인터넷 노출 | N/A | hardened 검증 전 금지 |
 
 Interpretation:
 
 - The backend contract and targeted UI workflow are aligned for the gates in
   this document.
+- Sandbox overwrite approval is parent-owned, and system-app typed confirmation
+  no longer approves by echoing server-provided confirmation text.
 - `npm run verify` passing is necessary but not sufficient for DSM-like
   readiness.
 - Remaining work is future hardening: browser click-through automation,
   hardened deployment rehearsal, and ongoing platform contract maintenance.
+
+## 4A. Approval Self-Approval Hardening Snapshot
+
+Status: `[COMPLETE]` on 2026-04-26.
+
+Code-verified behavior:
+
+- Sandbox SDK `approveWrite()` no longer mints approval nonces for sandbox code.
+- Sandbox frame owns overwrite approval collection and retries sandbox writes
+  with scoped `{ operationId, nonce, targetHash }` evidence.
+- Built-in sandbox editor packages and generated personal templates no longer
+  call `approveWrite()` or echo `preflight.approval.typedConfirmation`.
+- Trusted Code Editor overwrite approval now requires user-entered typed input.
+- Transfer cloud overwrite, Docker actions, and Package delete submit trimmed
+  user input instead of server-derived confirmation values.
+- `npm run verify:ui-smoke` includes source guards for known self-approval and
+  legacy approval patterns.
+
+Score impact:
+
+- Sandbox/addon write approval: `62 -> 82`
+- Cloud transfer overwrite UX: `70 -> 82`
+- Test/smoke coverage: `78 -> 84`
+- Overall readiness: `82 -> 88`
+- Addon-only/core-freeze readiness: `86 -> 90`
 
 ## 4. Last Verification Snapshot
 

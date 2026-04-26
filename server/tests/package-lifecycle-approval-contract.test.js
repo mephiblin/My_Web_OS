@@ -146,14 +146,14 @@ async function createPackage(baseUrl, token, appId) {
   });
 }
 
-async function approveLifecycle(baseUrl, token, preflight) {
+async function approveLifecycle(baseUrl, token, preflight, typedConfirmation = preflight.approval.typedConfirmation) {
   return requestJson(baseUrl, '/api/packages/lifecycle/approve', token, {
     method: 'POST',
     body: {
       operationId: preflight.operationId,
       action: preflight.action,
       targetId: preflight.target.id,
-      typedConfirmation: preflight.approval.typedConfirmation
+      typedConfirmation
     }
   });
 }
@@ -182,6 +182,12 @@ test('registry install requires consume-once backend approval', async () => {
       body: { zipUrl: zipServer.zipUrl }
     });
     assert.equal(preflight.status, 200, JSON.stringify(preflight.json));
+
+    const wrongApproval = await approveLifecycle(server.baseUrl, token, preflight.json.preflight, 'wrong-confirmation');
+    assert.equal(wrongApproval.status, 400, JSON.stringify(wrongApproval.json));
+    assert.equal(wrongApproval.json?.code, 'PACKAGE_LIFECYCLE_APPROVAL_INVALID', JSON.stringify(wrongApproval.json));
+    assert.equal(wrongApproval.json?.approval?.nonce, undefined, JSON.stringify(wrongApproval.json));
+
     const approval = await approveLifecycle(server.baseUrl, token, preflight.json.preflight);
     assert.equal(approval.status, 200, JSON.stringify(approval.json));
 

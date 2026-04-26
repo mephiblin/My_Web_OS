@@ -10,6 +10,9 @@
 
   let editorContainer;
   let editor;
+  let overwriteReview = $state(null);
+  let overwriteTypedInput = $state('');
+  let overwriteApproving = $state(false);
 
   function getPackageFileContext() {
     const ctx = data?.packageFile;
@@ -106,24 +109,15 @@
           };
           const preflightResponse = await editorApi.preflightOverwrite(target.path, approvalContext);
           const preflight = preflightResponse?.preflight;
-          const approvalResponse = await editorApi.approveOverwrite(target.path, preflight, approvalContext);
-          const approval = approvalResponse?.approval;
-          if (!approval?.nonce) {
-            throw new Error('Overwrite approval response did not include a nonce.');
-          }
-          const overwriteResult = await editorApi.saveFile(target.path, editor.getValue(), {
-            ...approvalContext,
-            overwrite: true,
-            approval: {
-              ...approval,
-              targetHash: preflight?.targetHash
-            }
-          });
-          if (overwriteResult.success || !overwriteResult.error) {
-            addToast('파일을 저장했습니다.', 'success');
-            return;
-          }
-          addToast(overwriteResult.message || '파일 저장 중 오류가 발생했습니다.', 'error');
+          overwriteReview = {
+            target,
+            approvalContext,
+            preflight,
+            content: editor.getValue(),
+            error: ''
+          };
+          overwriteTypedInput = '';
+          overwriteApproving = false;
           return;
         } catch (overwriteErr) {
           addToast(overwriteErr?.message || '덮어쓰기 저장에 실패했습니다.', 'error');
@@ -132,6 +126,64 @@
       }
       addToast(err?.message || '서버 연결에 실패했습니다.', 'error');
       console.error(err);
+    }
+  }
+
+  function closeOverwriteReview() {
+    overwriteReview = null;
+    overwriteTypedInput = '';
+    overwriteApproving = false;
+  }
+
+  async function approveOverwriteSave() {
+    if (!overwriteReview || overwriteApproving) return;
+    const typedConfirmation = overwriteTypedInput.trim();
+    const expected = String(overwriteReview.preflight?.approval?.typedConfirmation || '');
+    if (!expected || !typedConfirmation || typedConfirmation !== expected) {
+      overwriteReview = {
+        ...overwriteReview,
+        error: expected
+          ? `Type ${expected} to approve overwrite.`
+          : 'Overwrite approval did not include a typed confirmation.'
+      };
+      return;
+    }
+
+    overwriteApproving = true;
+    try {
+      const { target, approvalContext, preflight, content } = overwriteReview;
+      const approvalResponse = await editorApi.approveOverwrite(target.path, preflight, {
+        ...approvalContext,
+        typedConfirmation
+      });
+      const approval = approvalResponse?.approval;
+      if (!approval?.nonce) {
+        throw new Error('Overwrite approval response did not include a nonce.');
+      }
+      const overwriteResult = await editorApi.saveFile(target.path, content, {
+        ...approvalContext,
+        overwrite: true,
+        approval: {
+          ...approval,
+          targetHash: preflight?.targetHash
+        }
+      });
+      if (overwriteResult.success || !overwriteResult.error) {
+        addToast('파일을 저장했습니다.', 'success');
+        closeOverwriteReview();
+        return;
+      }
+      overwriteReview = {
+        ...overwriteReview,
+        error: overwriteResult.message || '파일 저장 중 오류가 발생했습니다.'
+      };
+      overwriteApproving = false;
+    } catch (err) {
+      overwriteReview = {
+        ...overwriteReview,
+        error: err?.message || '덮어쓰기 저장에 실패했습니다.'
+      };
+      overwriteApproving = false;
     }
   }
 
@@ -160,6 +212,7 @@
     const packageAppId = data?.packageFile?.appId;
     const packagePath = data?.packageFile?.path;
     if ((hostPath || (packageAppId && packagePath)) && editor) {
+      closeOverwriteReview();
       loadFile();
     }
   });
@@ -179,12 +232,48 @@
     </button>
   </div>
   <div class="editor-container" bind:this={editorContainer}></div>
+  {#if overwriteReview}
+    {@const expectedConfirmation = overwriteReview.preflight?.approval?.typedConfirmation || ''}
+    <div class="approval-backdrop" role="presentation">
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="overwrite-title">
+        <h2 id="overwrite-title">Overwrite file</h2>
+        <p>{overwriteReview.target.path}</p>
+        <span>Type <code>{expectedConfirmation}</code> to approve</span>
+        <input bind:value={overwriteTypedInput} autocomplete="off" />
+        {#if overwriteReview.error}
+          <p class="approval-error">{overwriteReview.error}</p>
+        {/if}
+        <div class="approval-actions">
+          <button type="button" onclick={closeOverwriteReview} disabled={overwriteApproving}>Cancel</button>
+          <button
+            type="button"
+            class="approve-btn"
+            onclick={approveOverwriteSave}
+            disabled={overwriteApproving || overwriteTypedInput.trim() !== expectedConfirmation}
+          >
+            {overwriteApproving ? 'Approving...' : 'Approve Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
-  .editor-wrapper { display: flex; flex-direction: column; height: 100%; background: #1e1e1e; }
+  .editor-wrapper { position: relative; display: flex; flex-direction: column; height: 100%; background: #1e1e1e; }
   .toolbar { height: 36px; background: #252526; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #333; }
   .file-path { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .save-btn { background: var(--accent-blue); border: none; color: white; padding: 2px 10px; border-radius: 4px; font-size: 12px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .editor-container { flex: 1; width: 100%; }
+  .approval-backdrop { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); z-index: 5; }
+  .approval-dialog { width: min(420px, calc(100% - 32px)); background: #252526; border: 1px solid #3c3c3c; border-radius: 6px; padding: 16px; color: white; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35); }
+  .approval-dialog h2 { margin: 0; font-size: 16px; }
+  .approval-dialog p { margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+  .approval-dialog span { font-size: 13px; color: var(--text-dim); }
+  .approval-dialog input { background: #1e1e1e; color: white; border: 1px solid #555; border-radius: 4px; padding: 8px; }
+  .approval-error { color: #ff8585 !important; }
+  .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .approval-actions button { border: 1px solid #555; background: #333; color: white; border-radius: 4px; padding: 6px 10px; cursor: pointer; }
+  .approval-actions .approve-btn { background: var(--accent-blue); border-color: var(--accent-blue); }
+  .approval-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
 </style>

@@ -122,7 +122,7 @@
       copy,
       preflight: null,
       error: '',
-      typedConfirmation: id
+      requiredConfirmation: id
     };
 
     try {
@@ -134,7 +134,7 @@
       approvalDialog = {
         ...approvalDialog,
         preflight,
-        typedConfirmation: String(preflight?.approval?.typedConfirmation || id)
+        requiredConfirmation: String(preflight?.approval?.typedConfirmation || id)
       };
     } catch (err) {
       approvalDialog = {
@@ -156,8 +156,9 @@
     if (!approvalDialog?.container?.ID || !approvalDialog?.action || approvalLoading) return;
     const { action, container, preflight } = approvalDialog;
     const id = container.ID;
-    const typedConfirmation = String(preflight?.approval?.typedConfirmation || approvalDialog.typedConfirmation || id);
-    if (approvalInput.trim() !== typedConfirmation) {
+    const typedConfirmation = String(approvalDialog.requiredConfirmation || id);
+    const typedInput = approvalInput.trim();
+    if (typedInput !== typedConfirmation) {
       approvalDialog = {
         ...approvalDialog,
         error: `Type ${typedConfirmation} to approve this Docker operation.`
@@ -172,7 +173,7 @@
         body: JSON.stringify({
           id,
           operationId: preflight?.operationId,
-          typedConfirmation
+          typedConfirmation: typedInput
         })
       });
       const approval = approvalResponse?.approval || {};
@@ -454,7 +455,7 @@
             <div class="approval-error">{approvalDialog.error}</div>
           {/if}
           <label class="typed-confirm">
-            <span>Type <code>{approvalDialog.typedConfirmation}</code> to approve</span>
+            <span>Type <code>{approvalDialog.requiredConfirmation}</code> to approve</span>
             <input bind:value={approvalInput} disabled={approvalLoading || !approvalDialog.preflight} autocomplete="off" />
           </label>
         </div>

@@ -97,9 +97,17 @@ npm run verify:ui-smoke
 This command expects the backend and frontend dev servers to already be running.
 It checks deterministic workflow source guards, backend health, and the frontend
 app shell boot contract. The source guards currently fail if targeted system
-apps reintroduce native `confirm()` / `prompt()` or if the expected approval and
+apps reintroduce native `confirm()` / `prompt()`, if the expected approval and
 recoverable-state markers disappear from Login, File Station, Package Center,
-Transfer UI, or Sandbox frame code.
+Transfer UI, or Sandbox frame code, or if known self-approval patterns return.
+
+Current self-approval guards include:
+
+- system apps sending `typedConfirmation` from server-derived
+  `expectedConfirmation` or `preflight.approval` values
+- sandbox package entries calling `approveWrite()`
+- generated templates using legacy `{ approved: true }`
+- raw grant URL construction using `{ path, grantId }`
 
 This is stronger than a reachability-only smoke and is the current dependency-free
 release smoke gate. It is still not a browser click-through automation gate.

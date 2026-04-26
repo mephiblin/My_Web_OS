@@ -2136,28 +2136,6 @@ function createTemplateEntryContent(templateId, options = {}) {
           return { ok: false, message: 'Invalid JSON. Disable validation to write raw text.' };
         }
       }
-      async function requestWriteApproval(sdk, path, grantId) {
-        if (!approveOverwriteEl.checked) return undefined;
-        if (!sdk?.files?.writePreflight || !sdk?.files?.approveWrite) {
-          throw new Error('WebOS overwrite approval API unavailable');
-        }
-        const preflight = await sdk.files.writePreflight({
-          path,
-          grantId
-        });
-        const approval = await sdk.files.approveWrite({
-          path,
-          operationId: preflight?.operationId,
-          typedConfirmation: preflight?.approval?.typedConfirmation
-        });
-        const reason = String(approvalReasonEl.value || '').trim();
-        return {
-          operationId: approval?.operationId,
-          nonce: approval?.nonce,
-          targetHash: preflight?.targetHash,
-          reason: reason || undefined
-        };
-      }
       document.getElementById('format').addEventListener('click', () => {
         try {
           input.value = JSON.stringify(JSON.parse(input.value || '{}'), null, 2);
@@ -2248,17 +2226,15 @@ function createTemplateEntryContent(templateId, options = {}) {
         }
         const overwrite = overwriteHostEl.checked;
         if (overwrite && !approveOverwriteEl.checked) {
-          setStatus('Enable overwrite approval before writing existing host file');
+          setStatus('Enable overwrite to request parent-owned approval');
           return;
         }
         try {
-          const approval = overwrite ? await requestWriteApproval(sdk, path, grantId) : undefined;
           await sdk.files.write({
             path,
             grantId,
             content: String(input.value || ''),
-            overwrite,
-            approval
+            overwrite
           });
           setStatus(overwrite ? 'Host file overwritten' : 'Host file written');
         } catch (err) {

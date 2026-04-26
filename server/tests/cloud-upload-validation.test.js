@@ -843,6 +843,17 @@ process.exit(0);
         assert.equal(preflight.json?.requiresApproval, true, JSON.stringify(preflight.json));
         assert.ok(preflight.json?.approval?.operationId, JSON.stringify(preflight.json));
 
+        const wrongApproved = await requestJson(server.baseUrl, '/api/cloud/transfer/approve', token, {
+          method: 'POST',
+          body: {
+            operationId: preflight.json.approval.operationId,
+            typedConfirmation: 'wrong-confirmation'
+          }
+        });
+        assert.equal(wrongApproved.status, 409, JSON.stringify(wrongApproved.json));
+        assert.equal(wrongApproved.json?.code, 'OPERATION_APPROVAL_CONFIRMATION_MISMATCH', JSON.stringify(wrongApproved.json));
+        assert.equal(wrongApproved.json?.approval?.nonce, undefined, JSON.stringify(wrongApproved.json));
+
         const blocked = await requestJson(server.baseUrl, '/api/cloud/transfer', token, {
           method: 'POST',
           body: payload

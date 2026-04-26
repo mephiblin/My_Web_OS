@@ -35,6 +35,8 @@ Primary docs:
 - `doc/planning/feature-inventory-home-server-remote-computer.md`
 - `doc/planning/roadmap-home-server-remote-computer.md`
 - `doc/reference/architecture-api-reference.md`
+- `doc/Addon_Dev_Ref/README.md`
+- `doc/reference/addon-development-guide.md`
 - `doc/reference/package-ecosystem-guide.md`
 - `doc/operations/completed-backlog-log.md`
 - `doc/operations/local-run-guide.md`

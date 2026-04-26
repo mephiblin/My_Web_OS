@@ -2877,7 +2877,8 @@
     if (!appId || !pkg || !review?.preflight || removingPackageId) return;
 
     const typedConfirmation = String(review.preflight.approval.typedConfirmation || appId);
-    if (packageDeleteTypedInput.trim() !== typedConfirmation) {
+    const typedInput = packageDeleteTypedInput.trim();
+    if (typedInput !== typedConfirmation) {
       packageDeleteReview = {
         ...review,
         error: `Type ${typedConfirmation} to approve package removal.`
@@ -2890,7 +2891,7 @@
     try {
       const approvalResponse = await approvePackageDelete(appId, {
         operationId: review.preflight.operationId,
-        typedConfirmation
+        typedConfirmation: typedInput
       });
       const approval = approvalResponse?.approval;
       if (!approval?.nonce) {

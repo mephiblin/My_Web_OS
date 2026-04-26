@@ -21,6 +21,7 @@
     cancelTransferJob,
     cancelCloudTransferJob,
     clearTransferJobs,
+    approveCloudTransferOverwrite,
     createCloudTransferJob,
     createLocalCopyJob,
     createUrlDownloadJob,
@@ -56,6 +57,7 @@
   let operationError = $state('');
   let lastSyncAt = $state(null);
   let cloudOverwriteReview = $state(null);
+  let cloudOverwriteTypedInput = $state('');
   let pollTimer = null;
 
   let urlForm = $state({
@@ -251,6 +253,7 @@
         const result = await createCloudTransferJob(cloudForm);
         if (result?.approvalRequired) {
           cloudOverwriteReview = result;
+          cloudOverwriteTypedInput = '';
           showError(result.message, 'CLOUD_TRANSFER_APPROVAL_REQUIRED');
           return;
         }
@@ -269,19 +272,23 @@
 
   async function approveCloudOverwrite() {
     if (!cloudOverwriteReview?.expectedConfirmation) return;
+    if (cloudOverwriteTypedInput.trim() !== cloudOverwriteReview.expectedConfirmation) {
+      showError(`덮어쓰려면 "${cloudOverwriteReview.expectedConfirmation}" 확인값을 입력하세요.`, 'CLOUD_TRANSFER_APPROVAL_INPUT_MISMATCH');
+      return;
+    }
     operationError = '';
     creating = true;
     try {
-      const result = await createCloudTransferJob({
-        ...cloudForm,
-        typedConfirmation: cloudOverwriteReview.expectedConfirmation
-      });
+      const approval = await approveCloudTransferOverwrite(cloudOverwriteReview.preflight, cloudOverwriteTypedInput.trim());
+      const result = await createCloudTransferJob(cloudForm, { approval });
       if (result?.approvalRequired) {
         cloudOverwriteReview = result;
+        cloudOverwriteTypedInput = '';
         showError(result.message, 'CLOUD_TRANSFER_APPROVAL_REQUIRED');
         return;
       }
       cloudOverwriteReview = null;
+      cloudOverwriteTypedInput = '';
       addToast('덮어쓰기 승인 후 서버 클라우드 전송 작업을 생성했습니다.', 'success');
       notifications.add({ title: 'Transfer', message: '서버 클라우드 전송 작업이 큐에 등록되었습니다.', type: 'success' });
       resetCurrentForm();
@@ -497,11 +504,17 @@
               remotePath: cloudForm.remotePath
             })}</span>
             <code>{cloudOverwriteReview.expectedConfirmation}</code>
+            <input
+              type="text"
+              bind:value={cloudOverwriteTypedInput}
+              placeholder="확인값 입력"
+              autocomplete="off"
+            />
           </div>
-          <button class="approve-btn" onclick={approveCloudOverwrite} disabled={creating}>
+          <button class="approve-btn" onclick={approveCloudOverwrite} disabled={creating || cloudOverwriteTypedInput.trim() !== cloudOverwriteReview.expectedConfirmation}>
             {creating ? '승인 중...' : '확인값으로 덮어쓰기 승인'}
           </button>
-          <button class="ghost-btn" onclick={() => (cloudOverwriteReview = null)} disabled={creating}>취소</button>
+          <button class="ghost-btn" onclick={() => { cloudOverwriteReview = null; cloudOverwriteTypedInput = ''; }} disabled={creating}>취소</button>
         </div>
       {/if}
     {/if}

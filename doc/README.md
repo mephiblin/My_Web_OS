@@ -22,6 +22,15 @@
 - `[ACTIVE]` `README.md` (개발/에이전트 기준)
 - `[ACTIVE]` `USER_README.md` (사용자/운영자 기준)
 
+## Addon Development
+- `[ACTIVE]` `doc/Addon_Dev_Ref/README.md` (애드온 개발 레퍼런스 묶음)
+- `[ACTIVE]` `doc/Addon_Dev_Ref/AI_VIBE_CODING_GUIDE_EN.md` (AI/vibe-coding용 영문 지침)
+- `[ACTIVE]` `doc/Addon_Dev_Ref/HUMAN_ADDON_GUIDE_KO.md` (인간 개발자용 한국어 가이드)
+- `[ACTIVE]` `doc/Addon_Dev_Ref/SDK_API_REFERENCE.md`
+- `[ACTIVE]` `doc/Addon_Dev_Ref/MANIFEST_PERMISSIONS_AND_EXTENSION_POINTS.md`
+- `[ACTIVE]` `doc/Addon_Dev_Ref/SECURITY_LIMITS_AND_APPROVALS.md`
+- `[ACTIVE]` `doc/Addon_Dev_Ref/PACKAGING_INSTALLATION_AND_TESTING.md`
+
 ## Presets
 - `[ACTIVE]` `doc/presets/AGENTS.preset.md` (AGENTS 실행 프리셋 복사본)
 - `[ACTIVE]` `doc/presets/webos-store.preset.json` (커뮤니티 스토어 인덱스 프리셋)
@@ -62,6 +71,7 @@
 
 ## Reference
 - `[ACTIVE]` `doc/reference/architecture-api-reference.md`
+- `[ACTIVE]` `doc/reference/addon-development-guide.md`
 - `[ACTIVE]` `doc/reference/app-development-model.md`
 - `[ACTIVE]` `doc/reference/package-ecosystem-guide.md`
 - `[ACTIVE]` `doc/reference/community-registry-and-presets.md`

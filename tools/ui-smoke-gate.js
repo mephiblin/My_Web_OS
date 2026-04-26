@@ -25,6 +25,15 @@ function assertFileIncludes(relativePath, patterns, label) {
   return `${label} source contract`;
 }
 
+function assertFileExcludes(relativePath, patterns, label) {
+  const text = readRepoFile(relativePath);
+  const present = patterns.filter((pattern) => pattern.test(text));
+  if (present.length > 0) {
+    throw new Error(`${label} includes blocked workflow patterns: ${present.map((item) => item.source).join(', ')}`);
+  }
+  return `${label} regression guard`;
+}
+
 function checkNoNativePrompts() {
   const targets = [
     'client/src/apps/system/docker-manager/DockerManager.svelte',
@@ -103,11 +112,9 @@ function checkWorkflowSourceContracts() {
       /WebOS\.files\.rawUrl\(rawTicket\)/
     ], 'Model Viewer raw ticket contract'),
     assertFileIncludes('client/src/apps/addons/code-editor/package/index.html', [
-      /WebOS\.files\.writePreflight/,
-      /WebOS\.files\.approveWrite/,
-      /operationId/,
-      /targetHash/
-    ], 'Code Editor scoped overwrite approval'),
+      /WebOS\.files\.write/,
+      /overwrite/
+    ], 'Code Editor parent-owned overwrite request'),
     assertFileIncludes('server/routes/sandbox.js', [
       /SANDBOX_RAW_GRANT_URL_DISABLED/,
       /status\(410\)/
@@ -118,6 +125,52 @@ function checkWorkflowSourceContracts() {
       /approveAndStartSession/,
       /Approve And Start/
     ], 'Terminal typed session approval UX')
+  ];
+}
+
+function checkApprovalRegressionGuards() {
+  return [
+    assertFileExcludes('client/src/apps/system/transfer/TransferUI.svelte', [
+      /typedConfirmation:\s*cloudOverwriteReview\.expectedConfirmation/,
+      /typedConfirmation:\s*.*expectedConfirmation/,
+      /typedConfirmation:\s*.*preflight\?\.approval/
+    ], 'Transfer cloud overwrite typed-confirm'),
+    assertFileExcludes('client/src/apps/system/transfer/api.js', [
+      /typedConfirmation:\s*.*expectedConfirmation/,
+      /typedConfirmation:\s*.*preflight\?\.approval/
+    ], 'Transfer API approval split'),
+    assertFileExcludes('client/src/apps/system/docker-manager/DockerManager.svelte', [
+      /body:\s*JSON\.stringify\(\{[^}]*typedConfirmation:\s*String\(preflight\?\.approval/,
+      /body:\s*JSON\.stringify\(\{[^}]*typedConfirmation:\s*preflight\?\.approval/,
+      /body:\s*JSON\.stringify\(\{[^}]*typedConfirmation:\s*approvalDialog\.typedConfirmation/
+    ], 'Docker typed-confirm submission'),
+    assertFileExcludes('client/src/apps/system/package-center/PackageCenter.svelte', [
+      /approvePackageDelete\([\s\S]{0,200}typedConfirmation:\s*String\(review\.preflight\.approval/,
+      /approvePackageDelete\([\s\S]{0,200}typedConfirmation:\s*review\.preflight\.approval/
+    ], 'Package delete typed-confirm submission'),
+    assertFileExcludes('client/src/apps/addons/code-editor/package/index.html', [
+      /WebOS\.files\.approveWrite/,
+      /typedConfirmation:\s*preflight\?\.approval\?\.typedConfirmation/,
+      /approved:\s*true/,
+      /rawUrl\(\{\s*path,\s*grantId\s*\}\)/,
+      /\bconfirm\s*\(/,
+      /\bprompt\s*\(/
+    ], 'Code Editor package approval regression'),
+    assertFileExcludes('server/storage/inventory/apps/editor/index.html', [
+      /WebOS\.files\.approveWrite/,
+      /typedConfirmation:\s*preflight\?\.approval\?\.typedConfirmation/,
+      /approved:\s*true/,
+      /rawUrl\(\{\s*path,\s*grantId\s*\}\)/,
+      /\bconfirm\s*\(/,
+      /\bprompt\s*\(/
+    ], 'Inventory editor approval regression'),
+    assertFileExcludes('server/routes/packages.js', [
+      /typedConfirmation:\s*preflight\?\.approval\?\.typedConfirmation/,
+      /sdk\.files\.write\([\s\S]{0,400}approved:\s*true/,
+      /rawUrl\(\{\s*path,\s*grantId\s*\}\)/,
+      /\bconfirm\s*\(/,
+      /\bprompt\s*\(/
+    ], 'Generated package template approval regression')
   ];
 }
 
@@ -168,6 +221,7 @@ async function main() {
   const results = [];
   results.push(checkNoNativePrompts());
   results.push(...checkWorkflowSourceContracts());
+  results.push(...checkApprovalRegressionGuards());
   results.push(await checkBackend());
   results.push(await checkFrontendShell());
 

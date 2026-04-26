@@ -78,26 +78,11 @@
           return;
         }
         try {
-          const preflight = await window.WebOS.files.writePreflight({
-            path: active.path,
-            grantId: active.grantId
-          });
-          const typedConfirmation = preflight?.approval?.typedConfirmation || active.path.split('/').pop() || '';
-          const approval = await window.WebOS.files.approveWrite({
-            path: active.path,
-            operationId: preflight?.operationId || '',
-            typedConfirmation
-          });
           await window.WebOS.files.write({
             path: active.path,
             grantId: active.grantId,
             content: editorEl.value,
-            overwrite: true,
-            approval: {
-              operationId: approval?.operationId || preflight?.operationId || '',
-              nonce: approval?.nonce || '',
-              targetHash: approval?.targetHash || preflight?.targetHash || ''
-            }
+            overwrite: true
           });
           setStatus('저장했습니다.');
         } catch (err) {

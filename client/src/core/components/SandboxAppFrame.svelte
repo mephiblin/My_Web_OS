@@ -31,6 +31,9 @@
   let capabilityById = $state({});
   let approvalMemory = $state({});
   let pendingApproval = $state(null);
+  let pendingWriteApproval = $state(null);
+  let writeApprovalInput = $state('');
+  let writeApprovalSubmitting = $state(false);
   let lastLaunchDataKey = '';
   let bridgeTimeout = null;
 
@@ -57,7 +60,6 @@
     'host.file.read': 'host.file.read',
     'host.file.rawTicket': 'host.file.read',
     'host.file.writePreflight': 'host.file.write',
-    'host.file.writeApprove': 'host.file.write',
     'host.file.write': 'host.file.write'
   };
 
@@ -79,6 +81,7 @@
   }
 
   function disposeFrame() {
+    rejectPendingWriteApproval('Sandbox frame was closed before overwrite approval completed.', 'SANDBOX_APPROVAL_CLOSED');
     if (!frameEl) return;
     const targetFrame = frameEl;
     postToFrame({ type: 'webos:dispose' });
@@ -113,6 +116,8 @@
     if (!response.ok) {
       const err = new Error(payload.message || `HTTP ${response.status}`);
       err.code = payload.code || 'SANDBOX_API_FAILED';
+      err.status = response.status;
+      err.payload = payload;
       throw err;
     }
 
@@ -215,21 +220,115 @@
 
       case 'host.file.writePreflight': {
         const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write/preflight`, params);
-        return result.preflight;
-      }
-
-      case 'host.file.writeApprove': {
-        const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write/approve`, params);
-        return result.approval;
+        const { approval: _approval, ...displayPreflight } = result.preflight || {};
+        return displayPreflight;
       }
 
       case 'host.file.write': {
-        const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write`, params);
+        const result = await writeHostFileWithParentApproval(params);
         return result.result;
       }
 
       default:
         return null;
+    }
+  }
+
+  async function writeHostFileWithParentApproval(params) {
+    try {
+      return await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write`, params);
+    } catch (err) {
+      if (err?.code !== 'SANDBOX_FILE_WRITE_APPROVAL_REQUIRED' || !params?.overwrite) {
+        throw err;
+      }
+      const preflight = err.payload?.preflight;
+      if (!preflight?.operationId || !preflight?.targetHash) {
+        throw err;
+      }
+      const approval = await requestParentWriteApproval(params, preflight);
+      return sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write`, {
+        ...params,
+        approval
+      });
+    }
+  }
+
+  async function requestParentWriteApproval(params, preflight) {
+    if (pendingWriteApproval) {
+      const err = new Error('Another sandbox overwrite approval is already pending.');
+      err.code = 'SANDBOX_APPROVAL_BUSY';
+      throw err;
+    }
+    const expectedConfirmation = String(preflight?.approval?.typedConfirmation || '').trim();
+    if (!expectedConfirmation) {
+      const err = new Error('Sandbox overwrite approval did not include a typed confirmation.');
+      err.code = 'SANDBOX_APPROVAL_CONFIRMATION_MISSING';
+      throw err;
+    }
+
+    return new Promise((resolve, reject) => {
+      writeApprovalInput = '';
+      writeApprovalSubmitting = false;
+      pendingWriteApproval = {
+        params,
+        preflight,
+        expectedConfirmation,
+        error: '',
+        resolve,
+        reject
+      };
+    });
+  }
+
+  function rejectPendingWriteApproval(message, code) {
+    if (!pendingWriteApproval) return;
+    const reject = pendingWriteApproval.reject;
+    pendingWriteApproval = null;
+    writeApprovalInput = '';
+    writeApprovalSubmitting = false;
+    const err = new Error(message);
+    err.code = code;
+    reject(err);
+  }
+
+  function denyPendingWriteApproval() {
+    rejectPendingWriteApproval('User denied sandbox overwrite approval.', 'SANDBOX_APPROVAL_DENIED');
+  }
+
+  async function approvePendingWriteApproval() {
+    if (!pendingWriteApproval || writeApprovalSubmitting) return;
+    const current = pendingWriteApproval;
+    const typedConfirmation = writeApprovalInput.trim();
+    if (typedConfirmation !== current.expectedConfirmation) {
+      pendingWriteApproval = {
+        ...current,
+        error: `Type ${current.expectedConfirmation} to approve overwrite.`
+      };
+      return;
+    }
+    writeApprovalSubmitting = true;
+    try {
+      const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write/approve`, {
+        path: current.params?.path || '',
+        operationId: current.preflight?.operationId || '',
+        typedConfirmation
+      });
+      current.resolve({
+        operationId: result.approval?.operationId || current.preflight?.operationId || '',
+        nonce: result.approval?.nonce || '',
+        targetHash: result.approval?.targetHash || current.preflight?.targetHash || ''
+      });
+      pendingWriteApproval = null;
+      writeApprovalInput = '';
+      writeApprovalSubmitting = false;
+    } catch (err) {
+      pendingWriteApproval = pendingWriteApproval
+        ? {
+            ...pendingWriteApproval,
+            error: err.message || 'Sandbox overwrite approval failed.'
+          }
+        : null;
+      writeApprovalSubmitting = false;
     }
   }
 
@@ -511,6 +610,43 @@
     </div>
   {/if}
 
+  {#if pendingWriteApproval}
+    <div class="approval-overlay">
+      <div class="approval-card glass-effect">
+        <div class="approval-head">
+          <AlertTriangle size={14} />
+          <strong>Host File Overwrite Approval</strong>
+        </div>
+        <div class="approval-body">
+          <div><b>App:</b> {app.title}</div>
+          <div><b>Path:</b> {pendingWriteApproval.params?.path}</div>
+          <div><b>Target:</b> {pendingWriteApproval.preflight?.target?.label}</div>
+          <p>Type <b>{pendingWriteApproval.expectedConfirmation}</b> to allow this sandbox app to overwrite the file.</p>
+          <input
+            class="approval-input"
+            autocomplete="off"
+            bind:value={writeApprovalInput}
+            aria-label="Overwrite confirmation"
+          />
+          {#if pendingWriteApproval.error}
+            <p class="approval-error">{pendingWriteApproval.error}</p>
+          {/if}
+        </div>
+        <div class="approval-actions">
+          <button class="btn ghost" disabled={writeApprovalSubmitting} onclick={denyPendingWriteApproval}>Deny</button>
+          <button
+            class="btn primary"
+            disabled={writeApprovalSubmitting || writeApprovalInput.trim() !== pendingWriteApproval.expectedConfirmation}
+            onclick={approvePendingWriteApproval}
+          >
+            <Check size={13} />
+            {writeApprovalSubmitting ? 'Approving...' : 'Approve Overwrite'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <iframe
     bind:this={frameEl}
     title={app.title}
@@ -602,6 +738,20 @@
   .approval-body p {
     margin: 0;
     color: #cbd5e1;
+  }
+
+  .approval-body .approval-error {
+    color: #fecaca;
+  }
+
+  .approval-input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid rgba(251, 191, 36, 0.38);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.72);
+    color: #f8fafc;
+    padding: 8px 10px;
   }
 
   .approval-actions {

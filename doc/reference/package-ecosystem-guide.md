@@ -1,6 +1,8 @@
 # Package Ecosystem Guide
 
 This guide is for community package authors and maintainers.
+For a practical start-to-finish addon development framework, see
+`doc/reference/addon-development-guide.md`.
 For Git-based store publication and preset contracts, see:
 
 - `doc/reference/community-registry-and-presets.md`

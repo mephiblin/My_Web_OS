@@ -118,6 +118,18 @@ test('docker remove preflight and approval issue scoped nonce without running do
     assert.equal(preflight.status, 200, JSON.stringify(preflight.json));
     assert.equal(preflight.json?.preflight?.action, 'docker.remove', JSON.stringify(preflight.json));
 
+    const wrongApprove = await requestJson(server.baseUrl, '/api/docker/remove/approve', token, {
+      method: 'POST',
+      body: {
+        id: 'webos-api',
+        operationId: preflight.json.preflight.operationId,
+        typedConfirmation: 'wrong-confirmation'
+      }
+    });
+    assert.equal(wrongApprove.status, 400, JSON.stringify(wrongApprove.json));
+    assert.equal(wrongApprove.json?.code, 'DOCKER_CONTAINER_REMOVE_APPROVAL_INVALID', JSON.stringify(wrongApprove.json));
+    assert.equal(wrongApprove.json?.approval?.nonce, undefined, JSON.stringify(wrongApprove.json));
+
     const approve = await requestJson(server.baseUrl, '/api/docker/remove/approve', token, {
       method: 'POST',
       body: {

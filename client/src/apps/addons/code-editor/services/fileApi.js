@@ -77,7 +77,7 @@ export async function approveOverwrite(path, preflight, options = {}) {
       appId: options.appId || '',
       operationSource: options.operationSource || '',
       operationId: preflight?.operationId || '',
-      typedConfirmation: preflight?.approval?.typedConfirmation || ''
+      typedConfirmation: String(options.typedConfirmation || '')
     })
   });
 }

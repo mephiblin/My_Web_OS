@@ -203,56 +203,80 @@ export async function listTransferJobs() {
   }
 }
 
-export async function createCloudTransferJob(payload) {
-  const typedConfirmation = text(payload?.typedConfirmation);
-  const body = {
+function buildCloudTransferBody(payload = {}) {
+  return {
     sourcePath: text(payload?.sourcePath),
     remote: text(payload?.remote),
     remotePath: text(payload?.remotePath),
     fileName: text(payload?.fileName) || undefined,
     overwrite: false
   };
+}
 
+function getCloudTransferExpectedConfirmation(preflight = {}, body = {}) {
+  return text(preflight?.approval?.typedConfirmation)
+    || text(preflight?.source?.fileName)
+    || text(body.fileName)
+    || text(body.sourcePath).split('/').pop();
+}
+
+export async function preflightCloudTransferJob(payload) {
+  const body = buildCloudTransferBody(payload);
+  const result = await tryRequest('/api/cloud/transfer/preflight', {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
+  if (!result.ok && !isMissingEndpoint(result.error)) throw result.error;
+  if (!result.ok) return null;
+  return result.payload?.data || result.payload || {};
+}
+
+export async function approveCloudTransferOverwrite(preflight = {}, typedConfirmation = '') {
+  const approval = preflight?.approval || {};
+  const operationId = text(approval.operationId);
+  const expectedConfirmation = text(approval.typedConfirmation);
+  const typedInput = text(typedConfirmation);
+  if (!operationId || typedInput !== expectedConfirmation) {
+    throw {
+      code: 'CLOUD_TRANSFER_APPROVAL_INPUT_MISMATCH',
+      message: `대상에 같은 파일이 있습니다. 덮어쓰려면 "${expectedConfirmation}" 확인값을 입력하세요.`
+    };
+  }
+  const approved = await apiFetch('/api/cloud/transfer/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      operationId,
+      typedConfirmation: typedInput
+    })
+  });
+  const approvalResult = approved?.approval || approved?.data?.approval;
+  if (!approvalResult?.nonce) {
+    throw {
+      code: 'CLOUD_TRANSFER_APPROVAL_INVALID',
+      message: '클라우드 전송 승인 응답에 실행 nonce가 없습니다.'
+    };
+  }
+  return approvalResult;
+}
+
+export async function createCloudTransferJob(payload, options = {}) {
+  const body = buildCloudTransferBody(payload);
   try {
-    const result = await tryRequest('/api/cloud/transfer/preflight', {
-      method: 'POST',
-      body: JSON.stringify(body)
-    });
-    if (!result.ok && !isMissingEndpoint(result.error)) throw result.error;
-    if (result.ok) {
-      const preflight = result.payload?.data || result.payload || {};
+    if (options.approval) {
+      body.overwrite = true;
+      body.approval = options.approval;
+    } else {
+      const preflight = await preflightCloudTransferJob(payload);
       const conflict = preflight?.conflict || preflight?.target?.conflict;
       const requiresApproval = preflight?.requiresApproval === true || preflight?.approvalRequired === true;
       if (conflict || requiresApproval) {
-        const operationId = text(preflight?.approval?.operationId);
-        const expectedConfirmation = text(preflight?.approval?.typedConfirmation)
-          || text(preflight?.source?.fileName)
-          || text(body.fileName)
-          || body.sourcePath.split('/').pop();
-        if (!operationId || typedConfirmation !== expectedConfirmation) {
-          return {
-            approvalRequired: true,
-            preflight,
-            expectedConfirmation,
-            message: `대상에 같은 파일이 있습니다. 덮어쓰려면 "${expectedConfirmation}" 확인값을 입력하세요.`
-          };
-        }
-        const approved = await apiFetch('/api/cloud/transfer/approve', {
-          method: 'POST',
-          body: JSON.stringify({
-            operationId,
-            typedConfirmation
-          })
-        });
-        const approval = approved?.approval || approved?.data?.approval;
-        if (!approval?.nonce) {
-          throw {
-            code: 'CLOUD_TRANSFER_APPROVAL_INVALID',
-            message: '클라우드 전송 승인 응답에 실행 nonce가 없습니다.'
-          };
-        }
-        body.overwrite = true;
-        body.approval = approval;
+        const expectedConfirmation = getCloudTransferExpectedConfirmation(preflight, body);
+        return {
+          approvalRequired: true,
+          preflight,
+          expectedConfirmation,
+          message: `대상에 같은 파일이 있습니다. 덮어쓰려면 "${expectedConfirmation}" 확인값을 입력하세요.`
+        };
       }
     }
 

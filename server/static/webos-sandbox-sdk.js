@@ -244,13 +244,11 @@
           grantId: payload.grantId || ''
         });
       },
-      approveWrite: function approveWrite(input) {
-        var payload = input && typeof input === 'object' ? input : {};
-        return requestWithPermission('host.file.write', 'host.file.writeApprove', {
-          path: payload.path || '',
-          operationId: payload.operationId || '',
-          typedConfirmation: payload.typedConfirmation || ''
-        });
+      approveWrite: function approveWrite() {
+        return Promise.reject(createError(
+          'WEBOS_APPROVAL_PARENT_ONLY',
+          'Sandbox overwrite approval is owned by the Web OS parent frame.'
+        ));
       }
     }
   };

@@ -131,20 +131,16 @@ test('sandbox SDK host file helpers request host.file permissions', async () => 
     grantId: 'fg_1'
   });
 
-  const writeApproveRequest = await requestAndRespond(() => WebOS.files.approveWrite({
+  await assert.rejects(() => WebOS.files.approveWrite({
     path: '/tmp/a.txt',
     operationId: 'op_1',
     typedConfirmation: 'a.txt'
-  }));
-  assert.equal(writeApproveRequest.method, 'host.file.writeApprove');
-  assert.deepEqual(plain(writeApproveRequest.params), {
-    path: '/tmp/a.txt',
-    operationId: 'op_1',
-    typedConfirmation: 'a.txt'
+  }), {
+    code: 'WEBOS_APPROVAL_PARENT_ONLY'
   });
 });
 
-test('built-in sandbox package entries use raw tickets and scoped overwrite approval', () => {
+test('built-in sandbox package entries use raw tickets and parent-owned overwrite approval', () => {
   const packageEntries = [
     'client/src/apps/addons/document-viewer/package/index.html',
     'client/src/apps/addons/model-viewer/package/index.html',
@@ -155,6 +151,8 @@ test('built-in sandbox package entries use raw tickets and scoped overwrite appr
     const source = fs.readFileSync(path.join(__dirname, '../..', relativePath), 'utf8');
     assert.doesNotMatch(source, /rawUrl\s*\(\s*\{\s*path\s*,\s*grantId\s*\}/, `${relativePath} must not use raw grant URLs`);
     assert.doesNotMatch(source, /approved\s*:\s*true/, `${relativePath} must not send legacy approval flags`);
+    assert.doesNotMatch(source, /approveWrite\s*\(/, `${relativePath} must not mint overwrite approval from sandbox code`);
+    assert.doesNotMatch(source, /typedConfirmation:\s*preflight\?\.approval\?\.typedConfirmation/, `${relativePath} must not echo preflight typed confirmation`);
   }
 
   const documentViewer = fs.readFileSync(
@@ -172,11 +170,10 @@ test('built-in sandbox package entries use raw tickets and scoped overwrite appr
 
   assert.match(documentViewer, /WebOS\.files\.rawTicket\(\{\s*path,\s*grantId,\s*profile:\s*'preview'/s);
   assert.match(modelViewer, /WebOS\.files\.rawTicket\(\{[\s\S]*profile:\s*'media'/);
-  assert.match(codeEditor, /WebOS\.files\.writePreflight\(\{/);
-  assert.match(codeEditor, /WebOS\.files\.approveWrite\(\{/);
+  assert.match(codeEditor, /WebOS\.files\.write\(\{[\s\S]*overwrite:\s*true/);
 });
 
-test('generated package templates use scoped host overwrite approval', () => {
+test('generated package templates use parent-owned host overwrite approval', () => {
   const packagesRoute = fs.readFileSync(
     path.join(__dirname, '../routes/packages.js'),
     'utf8'
@@ -188,7 +185,22 @@ test('generated package templates use scoped host overwrite approval', () => {
   const jsonFormatterTemplate = packagesRoute.slice(start, end);
   assert.doesNotMatch(jsonFormatterTemplate, /buildWriteApproval/);
   assert.doesNotMatch(jsonFormatterTemplate, /approved\s*:\s*true/);
-  assert.match(jsonFormatterTemplate, /files\.writePreflight\(\{/);
-  assert.match(jsonFormatterTemplate, /files\.approveWrite\(\{/);
-  assert.match(jsonFormatterTemplate, /targetHash:\s*preflight\?\.targetHash/);
+  assert.doesNotMatch(jsonFormatterTemplate, /files\.approveWrite\s*\(/);
+  assert.doesNotMatch(jsonFormatterTemplate, /typedConfirmation:\s*preflight\?\.approval\?\.typedConfirmation/);
+  assert.match(jsonFormatterTemplate, /files\.write\(\{[\s\S]*overwrite/);
+});
+
+test('sandbox parent bridge does not expose write approval minting to child frames', () => {
+  const bridgeSource = fs.readFileSync(
+    path.join(__dirname, '../../client/src/core/components/SandboxAppFrame.svelte'),
+    'utf8'
+  );
+
+  assert.doesNotMatch(bridgeSource, /'host\.file\.writeApprove'\s*:/);
+  assert.doesNotMatch(bridgeSource, /case 'host\.file\.writeApprove'/);
+  assert.match(bridgeSource, /file\/write\/approve/);
+  assert.match(bridgeSource, /bind:value=\{writeApprovalInput\}/);
+  assert.match(bridgeSource, /writeApprovalSubmitting/);
+  assert.match(bridgeSource, /SANDBOX_APPROVAL_CONFIRMATION_MISSING/);
+  assert.match(bridgeSource, /rejectPendingWriteApproval\('Sandbox frame was closed before overwrite approval completed\.'/);
 });
