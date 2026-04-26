@@ -181,12 +181,13 @@ test('terminal app access approval can start multiple NexusTerm shell sockets', 
   const preflight = approvalSocket.findEvent('terminal:app-access-preflight');
   assert.equal(preflight?.action, 'terminal.appAccess', JSON.stringify(approvalSocket.emitted));
   assert.equal(preflight?.target?.id, appInstanceId, JSON.stringify(preflight));
+  assert.equal(preflight?.approval?.mode, 'acknowledge', JSON.stringify(preflight));
+  assert.equal(preflight?.approval?.typedConfirmation, '', JSON.stringify(preflight));
   assert.ok(preflight?.operationId, JSON.stringify(preflight));
 
   approvalSocket.clientEmit('terminal:app-access-approve', {
     appInstanceId,
-    operationId: preflight.operationId,
-    typedConfirmation: 'admin'
+    operationId: preflight.operationId
   });
   const grant = approvalSocket.findEvent('terminal:app-access-grant');
   assert.equal(grant?.appInstanceId, appInstanceId, JSON.stringify(approvalSocket.emitted));

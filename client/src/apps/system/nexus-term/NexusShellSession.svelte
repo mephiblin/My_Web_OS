@@ -24,6 +24,7 @@
   let terminalStarting = $state(false);
   let terminalError = $state('');
   let sessionPreflight = $state(null);
+  let sessionStartRequested = $state(false);
   let lastPendingInputId = '';
   let queuedInputText = '';
 
@@ -41,10 +42,15 @@
     terminalStarting = nextState.sessionStarting === true;
     terminalError = nextState.sessionError || '';
     sessionPreflight = nextState.sessionPreflight || null;
+    if (terminalReady || terminalError) {
+      sessionStartRequested = false;
+    }
     emitParentState();
   }
 
   function requestTerminalSession() {
+    if (sessionStartRequested || terminalReady) return;
+    sessionStartRequested = true;
     terminalSession?.requestSession();
   }
 
@@ -104,7 +110,7 @@
   $effect(() => {
     enabled;
     appAccessGrant?.grantId;
-    if (!enabled || !appAccessGrant?.grantId || !terminalSession || terminalReady) return;
+    if (!enabled || !appAccessGrant?.grantId || !terminalSession || terminalReady || terminalStarting || sessionStartRequested) return;
     requestTerminalSession();
   });
 

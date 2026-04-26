@@ -41,6 +41,20 @@ body {
   overflow: hidden;
 }
 
+html,
+#app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  body {
+    height: 100dvh;
+    width: 100dvw;
+  }
+}
+
 .glass-effect {
   background: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur));

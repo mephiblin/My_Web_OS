@@ -49,6 +49,11 @@
     display: flex; align-items: center; justify-content: center;
     background: #0d1117;
   }
+  @supports (height: 100dvh) {
+    .loading-screen {
+      width: 100dvw; height: 100dvh;
+    }
+  }
   .spinner {
     width: 40px; height: 40px;
     border: 3px solid rgba(255,255,255,0.1);

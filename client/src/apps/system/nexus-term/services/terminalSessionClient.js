@@ -102,8 +102,9 @@ export function createTerminalSessionClient({
       sessionPreflight: null
     });
     try {
+      const preflightRequest = waitForSocketEvent('terminal:session-preflight');
       socket.emit('terminal:session-preflight', currentSize());
-      const preflight = await waitForSocketEvent('terminal:session-preflight');
+      const preflight = await preflightRequest;
       emitState({ sessionPreflight: preflight });
     } catch (err) {
       const sessionError = err.message || 'Terminal session preflight failed.';
@@ -124,10 +125,12 @@ export function createTerminalSessionClient({
       sessionPreflight: null
     });
     try {
+      const readyRequest = waitForSocketEvent('terminal:ready');
       socket.emit('terminal:init', {
         ...currentSize(),
         appAccess
       });
+      await readyRequest;
       return true;
     } catch (err) {
       const sessionError = err.message || 'Terminal session start failed.';
@@ -153,12 +156,13 @@ export function createTerminalSessionClient({
     try {
       const sizing = currentSize();
       const preflight = state.sessionPreflight;
+      const approvalRequest = waitForSocketEvent('terminal:session-approval');
       socket.emit('terminal:session-approve', {
         ...sizing,
         operationId: preflight.operationId,
         typedConfirmation
       });
-      const approval = await waitForSocketEvent('terminal:session-approval');
+      const approval = await approvalRequest;
       socket.emit('terminal:init', {
         ...sizing,
         approval: {
@@ -383,18 +387,19 @@ export function createTerminalAppAccessClient({
 
   async function requestPreflight(appInstanceId) {
     await waitForConnect();
+    const preflightRequest = waitForSocketEvent('terminal:app-access-preflight');
     socket.emit('terminal:app-access-preflight', { appInstanceId });
-    return waitForSocketEvent('terminal:app-access-preflight');
+    return preflightRequest;
   }
 
-  async function approveAccess(preflight, typedConfirmation) {
+  async function approveAccess(preflight) {
     await waitForConnect();
+    const approvalRequest = waitForSocketEvent('terminal:app-access-grant');
     socket.emit('terminal:app-access-approve', {
       appInstanceId: preflight?.evidence?.appInstanceId || preflight?.target?.id,
-      operationId: preflight?.operationId,
-      typedConfirmation
+      operationId: preflight?.operationId
     });
-    return waitForSocketEvent('terminal:app-access-grant');
+    return approvalRequest;
   }
 
   function disconnect() {

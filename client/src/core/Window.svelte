@@ -329,6 +329,12 @@
     box-shadow: none;
   }
 
+  @media (max-width: 760px) {
+    .window.maximized.app-id-nexus-term {
+      height: 100% !important;
+    }
+  }
+
   .window.active {
     border-color: var(--accent-blue);
     box-shadow: 0 12px 48px 0 rgba(0, 0, 0, 0.9);

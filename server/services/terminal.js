@@ -191,7 +191,7 @@ function buildTerminalAppAccessPreflight(socket, payload = {}) {
     userId: socket.data.user.username,
     target: targetContext.target,
     targetHash: targetContext.targetHash,
-    typedConfirmation: socket.data.user.username,
+    typedConfirmation: '',
     metadata: {
       evidence: targetContext.evidence
     }
@@ -212,7 +212,8 @@ function buildTerminalAppAccessPreflight(socket, payload = {}) {
     },
     approval: {
       required: true,
-      typedConfirmation: socket.data.user.username,
+      mode: 'acknowledge',
+      typedConfirmation: '',
       expiresAt: operation.expiresAt
     },
     targetHash: targetContext.targetHash,

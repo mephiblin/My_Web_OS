@@ -239,6 +239,13 @@
 
   // Filter windows by current desktop
   const visibleWindows = $derived($windows.filter(w => w.desktopId === $currentDesktopId));
+  const activeVisibleWindow = $derived(
+    visibleWindows.find((win) => win.id === $activeWindowId && !win.minimized) || null
+  );
+  const hidesMobileTaskbar = $derived(
+    activeVisibleWindow?.maximized === true
+    && String(activeVisibleWindow?.appId || activeVisibleWindow?.id || '') === 'nexus-term'
+  );
   const visibleShortcuts = $derived($shortcuts.filter((item) => Number(item?.desktopId || 1) === Number($currentDesktopId)));
 
   $effect(() => {
@@ -493,7 +500,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="desktop">
+<div class:nexus-term-mobile-fullscreen={hidesMobileTaskbar} class="desktop">
   {#if $systemSettings.wallpaperType === 'video'}
     <video class="wallpaper" style="object-fit: {getVideoObjectFit($systemSettings.wallpaperFit)};" src="{$systemSettings.wallpaper}" autoplay loop muted playsinline disablePictureInPicture></video>
   {:else if $systemSettings.wallpaperType === 'image'}
@@ -650,6 +657,14 @@
 
 <style>
   .desktop { width: 100vw; height: 100vh; position: relative; background: #000; overflow: hidden; }
+  @supports (height: 100dvh) {
+    .desktop { width: 100dvw; height: 100dvh; }
+  }
+  @media (max-width: 760px) {
+    .desktop.nexus-term-mobile-fullscreen :global(.taskbar) {
+      display: none;
+    }
+  }
   .wallpaper { position: absolute; inset: 0; opacity: 0.8; width: 100%; height: 100%; object-fit: cover; z-index: 0; pointer-events: none; }
   .wallpaper[style*="linear-gradient"] { opacity: 0.8; }
 

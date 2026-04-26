@@ -19,6 +19,7 @@
     FolderOpen,
     Image as ImageIcon,
     Loader,
+    MoreHorizontal,
     PanelLeftClose,
     PanelRightClose,
     Pencil,
@@ -28,6 +29,7 @@
     Search,
     Shield,
     Scissors,
+    Smartphone,
     Terminal as TerminalIcon,
     Trash2,
     X
@@ -43,13 +45,15 @@
   ]);
   const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif']);
   const MOBILE_TABS = [
-    { id: 'terminal', label: 'Terminal', icon: TerminalIcon },
-    { id: 'explorer', label: 'Explorer', icon: Folder },
-    { id: 'viewer', label: 'Viewer', icon: FileText },
-    { id: 'search', label: 'Search', icon: Search }
+    { id: 'terminal', label: '터미널', icon: TerminalIcon },
+    { id: 'explorer', label: '탐색기', icon: Folder },
+    { id: 'viewer', label: '뷰어', icon: FileText },
+    { id: 'search', label: '검색', icon: Search },
+    { id: 'more', label: '더보기', icon: MoreHorizontal }
   ];
   const DEFAULT_EXPLORER_RATIO = 0.15;
   const DEFAULT_TERMINAL_RATIO = 0.70;
+  const DEFAULT_VIEWER_RATIO = 0.15;
   const DEFAULT_EXPLORER_PANE_WIDTH = 210;
   const DEFAULT_TERMINAL_PANE_WIDTH = 980;
   const VISIBLE_EXPLORER_MIN_WIDTH = 180;
@@ -80,7 +84,6 @@
   let terminalAccessClient;
   let terminalAccessPreflight = $state(null);
   let terminalAccessGrant = $state(null);
-  let terminalAccessTypedConfirmation = $state('');
   let terminalAccessLoading = $state(false);
   let terminalAccessError = $state('');
 
@@ -128,6 +131,7 @@
 
   let sideTool = $state('explorer');
   let activeMobileTab = $state('terminal');
+  let mobilePreview = $state(false);
   let explorerPaneWidth = $state(DEFAULT_EXPLORER_PANE_WIDTH);
   let terminalPaneWidth = $state(DEFAULT_TERMINAL_PANE_WIDTH);
   let resizingPane = $state('');
@@ -157,6 +161,19 @@
     applyTerminalFitSoon();
   }
 
+  function setMobileTab(tab) {
+    activeMobileTab = tab;
+    if (tab === 'explorer') sideTool = 'explorer';
+    if (tab === 'search') sideTool = 'search';
+    if (tab === 'terminal') applyTerminalFitSoon();
+  }
+
+  function toggleMobilePreview() {
+    mobilePreview = !mobilePreview;
+    if (mobilePreview) activeMobileTab = 'terminal';
+    applyTerminalFitSoon();
+  }
+
   function closeTerminalTab(tabId, event) {
     event?.stopPropagation?.();
     if (terminalTabs.length <= 1) return;
@@ -183,6 +200,11 @@
     activeMobileTab = 'terminal';
   }
 
+  function beginMobileCreate(type) {
+    beginCreate(type);
+    setMobileTab('explorer');
+  }
+
   function getTerminalAccessClient() {
     if (!terminalAccessClient) {
       terminalAccessClient = createTerminalAppAccessClient();
@@ -194,7 +216,6 @@
     if (terminalAccessLoading || terminalAccessReady) return;
     terminalAccessLoading = true;
     terminalAccessError = '';
-    terminalAccessTypedConfirmation = '';
     try {
       terminalAccessPreflight = await getTerminalAccessClient().requestPreflight(terminalAppInstanceId);
     } catch (err) {
@@ -209,11 +230,9 @@
     terminalAccessLoading = true;
     terminalAccessError = '';
     try {
-      terminalAccessGrant = await getTerminalAccessClient().approveAccess(
-        terminalAccessPreflight,
-        terminalAccessTypedConfirmation
-      );
-      terminalAccessTypedConfirmation = '';
+      terminalAccessGrant = await getTerminalAccessClient().approveAccess(terminalAccessPreflight);
+      terminalAccessClient?.disconnect();
+      terminalAccessClient = null;
       terminalResizeSignal += 1;
     } catch (err) {
       terminalAccessError = normalizeError(err, 'Could not start terminal session.').message;
@@ -794,17 +813,45 @@
   function openExplorerContextMenu(event, target = null) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
+    const items = buildExplorerContextItems(target);
+    const nextPosition = getContextMenuPosition(event, items);
     contextMenu = {
       visible: true,
-      x: event?.clientX || 0,
-      y: event?.clientY || 0,
+      x: nextPosition.x,
+      y: nextPosition.y,
       target,
-      items: buildExplorerContextItems(target)
+      items,
+      placement: nextPosition.placement
     };
     if (target?.path) {
       if (target.isDirectory) currentPath = target.path;
       selectedFile = target.isDirectory ? selectedFile : { ...(target.item || {}), path: target.path, name: target.label || itemName(target.item, target.path) };
     }
+  }
+
+  function getContextMenuPosition(event, items = []) {
+    const viewportWidth = Math.max(0, globalThis.innerWidth || 0);
+    const viewportHeight = Math.max(0, globalThis.innerHeight || 0);
+    const isMobileViewport = mobilePreview || viewportWidth <= 760;
+    if (isMobileViewport) {
+      return { x: 0, y: 0, placement: 'sheet' };
+    }
+
+    const margin = 8;
+    const separatorCount = items.filter((item) => item.type === 'separator').length;
+    const actionCount = Math.max(0, items.length - separatorCount);
+    const estimatedWidth = 232;
+    const availableHeight = Math.max(80, viewportHeight - margin * 2);
+    const estimatedHeight = Math.min(availableHeight, 12 + actionCount * 32 + separatorCount * 11);
+    const rawX = Number(event?.clientX || 0);
+    const rawY = Number(event?.clientY || 0);
+    const maxX = Math.max(margin, viewportWidth - estimatedWidth - margin);
+    const maxY = Math.max(margin, viewportHeight - estimatedHeight - margin);
+    return {
+      x: clampNumber(rawX, margin, maxX),
+      y: clampNumber(rawY, margin, maxY),
+      placement: 'menu'
+    };
   }
 
   function runContextAction(item) {
@@ -1021,10 +1068,14 @@
         viewer: Math.round(DEFAULT_EXPLORER_PANE_WIDTH)
       };
     }
+    const explorer = Math.round(available * DEFAULT_EXPLORER_RATIO);
+    const terminal = Math.round(available * DEFAULT_TERMINAL_RATIO);
+    const viewer = Math.round(available * DEFAULT_VIEWER_RATIO);
+    const roundingRemainder = available - explorer - terminal - viewer;
     return {
-      explorer: Math.round(available * DEFAULT_EXPLORER_RATIO),
-      terminal: Math.round(available * DEFAULT_TERMINAL_RATIO),
-      viewer: Math.max(0, Math.round(available * DEFAULT_EXPLORER_RATIO))
+      explorer,
+      terminal: Math.max(MIN_TERMINAL_PANE_WIDTH, terminal + roundingRemainder),
+      viewer: Math.max(0, viewer)
     };
   }
 
@@ -1047,6 +1098,14 @@
     explorerPaneWidth = defaults.explorer;
     terminalPaneWidth = clampTerminalPaneWidth(defaults.terminal, defaults.explorer);
     applyTerminalFitSoon();
+  }
+
+  async function waitForMainLayout() {
+    await tick();
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (getMainWidth() > 0) return;
+      await new Promise((resolve) => globalThis.requestAnimationFrame?.(resolve) || setTimeout(resolve, 16));
+    }
   }
 
   function toggleExplorerPane() {
@@ -1108,6 +1167,7 @@
   }
 
   onMount(async () => {
+    await waitForMainLayout();
     resetDefaultPaneLayout();
     requestTerminalAccessPreflight();
     await loadWorkspace();
@@ -1129,10 +1189,11 @@
   onclick={closeContextMenu}
   onkeydown={(event) => {
     if (event.key === 'Escape') closeContextMenu();
+    if (event.key === 'Escape' && activeMobileTab === 'more') setMobileTab('terminal');
   }}
 />
 
-<div class="nexus-term">
+<div class:force-mobile={mobilePreview} class="nexus-term">
   <main
     bind:this={mainElement}
     class:resizing-explorer={resizingPane === 'explorer'}
@@ -1343,7 +1404,7 @@
       onpointerdown={(event) => startPaneResize('terminal', event)}
     ></button>
 
-    <section class:mobile-active={activeMobileTab === 'terminal'} class="terminal-pane panel">
+    <section class:mobile-active={activeMobileTab === 'terminal' || activeMobileTab === 'more'} class="terminal-pane panel">
       <div class="panel-title shell-tabbar">
         <div class="shell-tabs" aria-label="Shell sessions">
           {#each terminalTabs as tab}
@@ -1358,6 +1419,14 @@
           {/each}
         </div>
         <div class="shell-title-actions">
+          <button
+            class:active={mobilePreview}
+            aria-label="Toggle mobile preview"
+            title={mobilePreview ? 'Exit mobile preview' : 'Mobile preview'}
+            onclick={toggleMobilePreview}
+          >
+            <Smartphone size={15} />
+          </button>
           <button aria-label="New shell" title="New shell" onclick={addTerminalTab}>
             <Plus size={15} />
           </button>
@@ -1396,24 +1465,15 @@
                     <div><dt>Target</dt><dd>{terminalAccessPreflight.target?.label || terminalAccessPreflight.target?.id || 'NexusTerm'}</dd></div>
                     <div><dt>Impact</dt><dd>{Array.isArray(terminalAccessPreflight.impact) ? terminalAccessPreflight.impact.join(' ') : terminalAccessPreflight.impact}</dd></div>
                   </dl>
-                  <label>
-                    <span>Type <code>{terminalAccessPreflight.approval?.typedConfirmation}</code> to approve</span>
-                    <input
-                      bind:value={terminalAccessTypedConfirmation}
-                      autocomplete="off"
-                      spellcheck="false"
-                      onkeydown={(event) => event.key === 'Enter' && approveTerminalAccess()}
-                    />
-                  </label>
+                  <p class="session-warning">Terminal commands can change real host files, services, and system state. Press OK only when you want to open this local shell access.</p>
                   <div class="dialog-actions">
-                    <button class="ghost" onclick={requestTerminalAccessPreflight} disabled={terminalAccessLoading}>Refresh</button>
                     <button
                       class="primary"
                       onclick={approveTerminalAccess}
-                      disabled={terminalAccessLoading || terminalAccessTypedConfirmation !== terminalAccessPreflight.approval?.typedConfirmation}
+                      disabled={terminalAccessLoading}
                     >
                       {#if terminalAccessLoading}<Loader size={15} class="spin" />{/if}
-                      Start Shell
+                      OK
                     </button>
                   </div>
                 {:else}
@@ -1443,39 +1503,141 @@
   <nav class="mobile-tabs" aria-label="NexusTerm mobile tabs">
     {#each MOBILE_TABS as tab}
       {@const Icon = tab.icon}
-      <button class:active={activeMobileTab === tab.id} onclick={() => activeMobileTab = tab.id}>
+      <button class:active={activeMobileTab === tab.id} onclick={() => setMobileTab(tab.id)}>
         <Icon size={18} />
         <span>{tab.label}</span>
       </button>
     {/each}
   </nav>
 
-  {#if contextMenu.visible}
-    <div
-      class="explorer-context-menu"
-      style={`left:${contextMenu.x}px; top:${contextMenu.y}px;`}
-      role="menu"
-      tabindex="-1"
-      oncontextmenu={(event) => event.preventDefault()}
-      onclick={(event) => event.stopPropagation()}
-      onkeydown={(event) => event.key === 'Escape' && closeContextMenu()}
-    >
-      {#each contextMenu.items || [] as item}
-        {#if item.type === 'separator'}
-          <div class="context-separator"></div>
-        {:else}
-          {@const ItemIcon = item.icon}
-          <button
-            class:danger={item.danger}
-            disabled={item.disabled}
-            onclick={() => runContextAction(item)}
-          >
-            <ItemIcon size={15} />
-            <span>{item.label}</span>
-          </button>
-        {/if}
-      {/each}
+  {#if activeMobileTab === 'more'}
+    <div class="mobile-more-backdrop" role="presentation" onclick={() => setMobileTab('terminal')}></div>
+    <div class="mobile-more-sheet" role="dialog" aria-modal="true" aria-label="NexusTerm more actions">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">
+        <strong>더보기</strong>
+        <button aria-label="Close more actions" onclick={() => setMobileTab('terminal')}>
+          <X size={16} />
+        </button>
+      </div>
+      <div class="mobile-action-grid">
+        <button onclick={addTerminalTab}>
+          <Plus size={18} />
+          <span>새 셸</span>
+          <small>터미널 탭 열기</small>
+        </button>
+        <button onclick={() => setMobileTab('explorer')}>
+          <FolderOpen size={18} />
+          <span>탐색기</span>
+          <small>{currentPath}</small>
+        </button>
+        <button onclick={() => setMobileTab('viewer')}>
+          <FileText size={18} />
+          <span>뷰어</span>
+          <small>{documentPath ? fileName(documentPath) : '파일 선택 필요'}</small>
+        </button>
+        <button onclick={() => setMobileTab('search')}>
+          <Search size={18} />
+          <span>검색</span>
+          <small>파일/내용 찾기</small>
+        </button>
+        <button onclick={() => beginMobileCreate('file')}>
+          <FilePlus size={18} />
+          <span>새 파일</span>
+          <small>현재 폴더에 생성</small>
+        </button>
+        <button onclick={() => beginMobileCreate('folder')}>
+          <FolderPlus size={18} />
+          <span>새 폴더</span>
+          <small>현재 폴더에 생성</small>
+        </button>
+        <button onclick={beginSave} disabled={!dirty || saveLoading || !isTextDocument}>
+          <Save size={18} />
+          <span>저장</span>
+          <small>{dirty ? '현재 파일 저장' : '변경 없음'}</small>
+        </button>
+        <button onclick={() => writePathToCurrentTerminal(null)}>
+          <ClipboardPaste size={18} />
+          <span>경로 입력</span>
+          <small>터미널에 현재 경로</small>
+        </button>
+      </div>
+      <div class="mobile-session-list">
+        <strong>세션</strong>
+        <div>
+          {#each terminalTabs as tab}
+            <button class:active={tab.id === activeTerminalId} onclick={() => { activeTerminalId = tab.id; setMobileTab('terminal'); }}>
+              <TerminalIcon size={14} />
+              <span>{tab.title}</span>
+              {#if tab.state.ready}<Check size={12} />{/if}
+            </button>
+          {/each}
+        </div>
+      </div>
     </div>
+  {/if}
+
+  {#if contextMenu.visible}
+    {#if contextMenu.placement === 'sheet'}
+      <div class="context-sheet-backdrop" role="presentation" onclick={closeContextMenu}></div>
+      <div
+        class="explorer-context-sheet"
+        role="menu"
+        tabindex="-1"
+        oncontextmenu={(event) => event.preventDefault()}
+        onclick={(event) => event.stopPropagation()}
+        onkeydown={(event) => event.key === 'Escape' && closeContextMenu()}
+      >
+        <div class="sheet-handle"></div>
+        <div class="context-sheet-title">
+          <strong>{contextMenu.target?.label || contextMenu.target?.name || fileName(currentPath) || 'Explorer'}</strong>
+          <button aria-label="Close menu" onclick={closeContextMenu}><X size={16} /></button>
+        </div>
+        <div class="context-action-list">
+          {#each contextMenu.items || [] as item}
+            {#if item.type === 'separator'}
+              <div class="context-separator"></div>
+            {:else}
+              {@const ItemIcon = item.icon}
+              <button
+                class:danger={item.danger}
+                disabled={item.disabled}
+                onclick={() => runContextAction(item)}
+              >
+                <ItemIcon size={17} />
+                <span>{item.label}</span>
+              </button>
+            {/if}
+          {/each}
+        </div>
+      </div>
+    {:else}
+      <div
+        class="explorer-context-menu"
+        style={`left:${contextMenu.x}px; top:${contextMenu.y}px;`}
+        role="menu"
+        tabindex="-1"
+        oncontextmenu={(event) => event.preventDefault()}
+        onclick={(event) => event.stopPropagation()}
+        onkeydown={(event) => event.key === 'Escape' && closeContextMenu()}
+      >
+        {#each contextMenu.items || [] as item}
+          {#if item.type === 'separator'}
+            <div class="context-separator"></div>
+          {:else}
+            {@const ItemIcon = item.icon}
+            <button
+              class:danger={item.danger}
+              disabled={item.disabled}
+              onclick={() => runContextAction(item)}
+            >
+              <ItemIcon size={15} />
+              <span>{item.label}</span>
+            </button>
+          {/if}
+        {/each}
+      </div>
+    {/if}
   {/if}
 
   {#if renameReview}
@@ -1659,6 +1821,7 @@
     min-height: 420px;
     overflow: hidden;
     font-size: 13px;
+    position: relative;
   }
 
   button, input, textarea {
@@ -1836,6 +1999,12 @@
     padding: 0;
     display: inline-grid;
     place-items: center;
+  }
+
+  .shell-title-actions button.active {
+    border-color: var(--accent);
+    color: #f3f7ff;
+    background: rgba(94, 161, 255, 0.18);
   }
 
   .side-switcher button.active {
@@ -2063,6 +2232,10 @@
   .explorer-context-menu {
     position: fixed;
     z-index: 10000;
+    box-sizing: border-box;
+    width: min(232px, calc(100vw - 16px));
+    max-height: calc(100dvh - 16px);
+    overflow: auto;
     min-width: 210px;
     padding: 6px;
     border: 1px solid rgba(122, 162, 247, 0.28);
@@ -2071,7 +2244,8 @@
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
   }
 
-  .explorer-context-menu button {
+  .explorer-context-menu button,
+  .context-action-list button {
     width: 100%;
     min-height: 32px;
     display: grid;
@@ -2084,15 +2258,18 @@
     padding: 0 8px;
   }
 
-  .explorer-context-menu button:hover {
+  .explorer-context-menu button:hover,
+  .context-action-list button:hover {
     background: rgba(94, 161, 255, 0.14);
   }
 
-  .explorer-context-menu button.danger {
+  .explorer-context-menu button.danger,
+  .context-action-list button.danger {
     color: #ffc4c9;
   }
 
-  .explorer-context-menu span {
+  .explorer-context-menu span,
+  .context-action-list span {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -2103,6 +2280,11 @@
     height: 1px;
     margin: 5px 4px;
     background: var(--line);
+  }
+
+  .context-sheet-backdrop,
+  .explorer-context-sheet {
+    display: none;
   }
 
   .create-row {
@@ -2365,6 +2547,359 @@
     display: none;
   }
 
+  .mobile-more-backdrop,
+  .mobile-more-sheet {
+    display: none;
+  }
+
+  :global(.window .content:has(.nexus-term.force-mobile)) {
+    display: grid;
+    place-items: center;
+    padding: 12px;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(94, 161, 255, 0.18), transparent 42%),
+      #030814;
+  }
+
+  .nexus-term.force-mobile {
+    --mobile-nav-height: clamp(54px, 8svh, 64px);
+    --mobile-panel-title-height: clamp(38px, 5.8svh, 44px);
+    --mobile-safe-bottom: 0px;
+    width: min(430px, 100%);
+    height: min(860px, 100%);
+    min-height: 0;
+    border: 1px solid rgba(122, 162, 247, 0.32);
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: 0 22px 80px rgba(0, 0, 0, 0.52);
+    grid-template-rows:
+      minmax(0, 1fr)
+      calc(var(--mobile-nav-height) + var(--mobile-safe-bottom));
+    background:
+      radial-gradient(circle at 18% 0%, rgba(94, 161, 255, 0.17), transparent 36%),
+      linear-gradient(180deg, #061122 0%, #050a14 100%);
+  }
+
+  .nexus-term.force-mobile .nexus-main {
+    display: block;
+    background: var(--panel);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .nexus-term.force-mobile .terminal-pane,
+  .nexus-term.force-mobile .side-rail,
+  .nexus-term.force-mobile .explorer-pane,
+  .nexus-term.force-mobile .viewer-pane,
+  .nexus-term.force-mobile .search-pane {
+    display: none;
+    height: 100%;
+  }
+
+  .nexus-term.force-mobile .pane-resizer,
+  .nexus-term.force-mobile .side-tool.desktop-active {
+    display: none;
+  }
+
+  .nexus-term.force-mobile .terminal-pane.mobile-active,
+  .nexus-term.force-mobile .viewer-pane.mobile-active {
+    display: flex;
+  }
+
+  .nexus-term.force-mobile .side-rail.mobile-active {
+    display: block;
+    background: var(--panel);
+  }
+
+  .nexus-term.force-mobile .side-rail.mobile-active .panel.mobile-active {
+    display: flex;
+  }
+
+  .nexus-term.force-mobile .panel-title {
+    min-height: var(--mobile-panel-title-height);
+    padding: 0 10px;
+    background: rgba(8, 16, 30, 0.96);
+  }
+
+  .nexus-term.force-mobile .shell-title-actions button:nth-child(n+3) {
+    display: none;
+  }
+
+  .nexus-term.force-mobile .status-bar {
+    display: none;
+  }
+
+  .nexus-term.force-mobile .mobile-tabs {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    align-items: stretch;
+    padding-bottom: var(--mobile-safe-bottom);
+    background: rgba(7, 13, 24, 0.98);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -12px 28px rgba(0, 0, 0, 0.3);
+    z-index: 11;
+  }
+
+  .nexus-term.force-mobile .mobile-tabs button {
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    border: 0;
+    border-radius: 0;
+    min-height: var(--mobile-nav-height);
+    font-size: 11px;
+    color: var(--muted);
+    background: transparent;
+    padding: 4px 0 7px;
+  }
+
+  .nexus-term.force-mobile .mobile-tabs button.active {
+    color: var(--accent);
+    background: linear-gradient(180deg, rgba(94, 161, 255, 0.18), rgba(94, 161, 255, 0.05));
+    box-shadow: inset 0 2px 0 var(--accent);
+  }
+
+  .nexus-term.force-mobile .mobile-more-backdrop {
+    display: block;
+    position: absolute;
+    inset:
+      0
+      0
+      calc(var(--mobile-nav-height) + var(--mobile-safe-bottom))
+      0;
+    background: rgba(2, 5, 12, 0.36);
+    z-index: 18;
+  }
+
+  .nexus-term.force-mobile .mobile-more-sheet {
+    display: block;
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 8px);
+    max-height: min(72%, calc(100% - var(--mobile-nav-height) - var(--mobile-safe-bottom) - 18px));
+    overflow: auto;
+    z-index: 19;
+    border: 1px solid rgba(122, 162, 247, 0.28);
+    border-radius: 18px 18px 14px 14px;
+    background: rgba(8, 16, 30, 0.98);
+    box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.48);
+    padding: 8px 12px 14px;
+  }
+
+  .nexus-term.force-mobile .side-switcher,
+  .nexus-term.force-mobile .viewer-actions {
+    max-width: 68%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .nexus-term.force-mobile .side-switcher button,
+  .nexus-term.force-mobile .viewer-actions button {
+    width: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    border-radius: 9px;
+  }
+
+  .nexus-term.force-mobile .filter-input,
+  .nexus-term.force-mobile .search-row input,
+  .nexus-term.force-mobile .search-row button {
+    min-height: 40px;
+  }
+
+  .nexus-term.force-mobile .tree-row,
+  .nexus-term.force-mobile .tree-main,
+  .nexus-term.force-mobile .file-row {
+    min-height: 38px;
+  }
+
+  .nexus-term.force-mobile .doc-tabs {
+    min-height: 40px;
+    padding: 6px 8px;
+  }
+
+  .nexus-term.force-mobile .doc-tabs button {
+    min-width: 96px;
+    max-width: 154px;
+    min-height: 30px;
+    border-radius: 8px;
+  }
+
+  .nexus-term.force-mobile .editor {
+    font-size: 13px;
+    line-height: 1.55;
+    padding: 12px;
+  }
+
+  .nexus-term.force-mobile .sheet-handle {
+    width: 42px;
+    height: 4px;
+    margin: 2px auto 10px;
+    border-radius: 999px;
+    background: rgba(220, 231, 247, 0.34);
+  }
+
+  .nexus-term.force-mobile .sheet-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 36px;
+    margin-bottom: 8px;
+  }
+
+  .nexus-term.force-mobile .sheet-title button {
+    width: 34px;
+    min-height: 34px;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 9px;
+  }
+
+  .nexus-term.force-mobile .mobile-action-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .nexus-term.force-mobile .mobile-action-grid button {
+    min-height: 76px;
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-content: center;
+    align-items: center;
+    gap: 2px 8px;
+    padding: 10px;
+    text-align: left;
+    border-radius: 12px;
+    background: rgba(13, 27, 50, 0.86);
+  }
+
+  .nexus-term.force-mobile .mobile-action-grid button :global(svg) {
+    grid-row: 1 / span 2;
+    color: var(--accent);
+  }
+
+  .nexus-term.force-mobile .mobile-action-grid span,
+  .nexus-term.force-mobile .mobile-action-grid small,
+  .nexus-term.force-mobile .mobile-session-list button span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nexus-term.force-mobile .mobile-action-grid span {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .nexus-term.force-mobile .mobile-action-grid small {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .nexus-term.force-mobile .mobile-session-list {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+
+  .nexus-term.force-mobile .mobile-session-list > strong {
+    display: block;
+    margin-bottom: 8px;
+    color: #dce7f7;
+  }
+
+  .nexus-term.force-mobile .mobile-session-list > div {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .nexus-term.force-mobile .mobile-session-list button {
+    min-width: 104px;
+    min-height: 34px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    flex: 0 0 auto;
+    color: var(--muted);
+  }
+
+  .nexus-term.force-mobile .mobile-session-list button.active {
+    color: var(--text);
+    border-color: var(--accent);
+    background: rgba(94, 161, 255, 0.16);
+  }
+
+  .nexus-term.force-mobile .context-sheet-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0 0 calc(var(--mobile-nav-height) + var(--mobile-safe-bottom)) 0;
+    background: rgba(2, 5, 12, 0.38);
+    z-index: 24;
+  }
+
+  .nexus-term.force-mobile .explorer-context-sheet {
+    display: block;
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 8px);
+    max-height: min(74%, calc(100% - var(--mobile-nav-height) - var(--mobile-safe-bottom) - 16px));
+    overflow: auto;
+    z-index: 25;
+    padding: 8px 10px 12px;
+    border: 1px solid rgba(122, 162, 247, 0.28);
+    border-radius: 18px 18px 14px 14px;
+    background: rgba(8, 16, 30, 0.99);
+    box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.48);
+  }
+
+  .nexus-term.force-mobile .context-sheet-title {
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  .nexus-term.force-mobile .context-sheet-title strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #dce7f7;
+  }
+
+  .nexus-term.force-mobile .context-sheet-title button {
+    width: 34px;
+    min-height: 34px;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    border-radius: 9px;
+  }
+
+  .nexus-term.force-mobile .context-action-list {
+    display: grid;
+    gap: 2px;
+  }
+
+  .nexus-term.force-mobile .context-action-list button {
+    min-height: 42px;
+    grid-template-columns: 22px minmax(0, 1fr);
+    border-radius: 10px;
+    background: transparent;
+  }
+
   .modal-backdrop {
     position: fixed;
     z-index: 2000;
@@ -2393,13 +2928,23 @@
 
   @media (max-width: 760px) {
     .nexus-term {
-      grid-template-rows: minmax(0, 1fr) 26px 62px;
-      min-height: 360px;
+      --mobile-nav-height: clamp(54px, 8svh, 64px);
+      --mobile-panel-title-height: clamp(38px, 5.8svh, 44px);
+      --mobile-safe-bottom: env(safe-area-inset-bottom, 0px);
+      grid-template-rows:
+        minmax(0, 1fr)
+        calc(var(--mobile-nav-height) + var(--mobile-safe-bottom));
+      min-height: 0;
+      background:
+        radial-gradient(circle at 18% 0%, rgba(94, 161, 255, 0.17), transparent 36%),
+        linear-gradient(180deg, #061122 0%, #050a14 100%);
     }
 
     .nexus-main {
       display: block;
       background: var(--panel);
+      min-height: 0;
+      overflow: hidden;
     }
 
     .terminal-pane, .side-rail, .explorer-pane, .viewer-pane, .search-pane {
@@ -2435,6 +2980,124 @@
       background: var(--panel);
     }
 
+    .panel-title {
+      min-height: var(--mobile-panel-title-height);
+      padding: 0 10px;
+      background: rgba(8, 16, 30, 0.96);
+    }
+
+    .panel-title > span {
+      font-size: 13px;
+    }
+
+    .side-switcher {
+      max-width: 68%;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .side-switcher button,
+    .viewer-actions button {
+      width: 38px;
+      min-width: 38px;
+      min-height: 38px;
+      border-radius: 9px;
+    }
+
+    .filter-input {
+      min-height: 40px;
+      margin: 10px;
+    }
+
+    .tree-list, .result-list {
+      padding: 4px 8px 14px;
+    }
+
+    .tree-row {
+      min-height: 38px;
+      padding-left: calc(6px + var(--depth) * 14px);
+    }
+
+    .tree-main,
+    .file-row {
+      min-height: 38px;
+      font-size: 13px;
+    }
+
+    .chevron {
+      width: 26px;
+      height: 26px;
+      min-height: 26px;
+    }
+
+    .create-row {
+      grid-template-columns: minmax(0, 1fr) 40px 40px;
+    }
+
+    .create-row input,
+    .create-row button {
+      min-height: 40px;
+    }
+
+    .shell-tabbar {
+      min-height: 40px;
+      padding-right: 6px;
+    }
+
+    .shell-tabs {
+      padding: 0 5px;
+    }
+
+    .shell-tabs button {
+      min-width: 92px;
+      max-width: 132px;
+      min-height: 32px;
+      padding: 0 8px;
+      border-radius: 8px 8px 0 0;
+    }
+
+    .shell-title-actions {
+      gap: 2px;
+      padding-left: 4px;
+    }
+
+    .shell-title-actions button {
+      width: 34px;
+      min-height: 34px;
+      border-radius: 9px;
+    }
+
+    .shell-title-actions button:nth-child(n+3) {
+      display: none;
+    }
+
+    .terminal-wrap {
+      min-height: 0;
+    }
+
+    :global(.nexus-term .xterm-host) {
+      padding: 10px 10px 12px;
+    }
+
+    :global(.nexus-term .xterm) {
+      font-size: 12px;
+    }
+
+    .terminal-access-gate {
+      padding: 12px;
+      align-items: end;
+    }
+
+    .terminal-approval-card {
+      width: min(100%, 430px);
+      padding: 16px;
+      max-height: 88%;
+    }
+
+    .approval-heading h2 {
+      font-size: 16px;
+    }
+
     .markdown-split {
       grid-template-columns: 1fr;
     }
@@ -2447,40 +3110,274 @@
 
     .viewer-actions {
       gap: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
     }
 
-    .viewer-actions button {
-      min-width: 38px;
-      min-height: 36px;
+    .doc-tabs {
+      min-height: 40px;
+      padding: 6px 8px;
+    }
+
+    .doc-tabs button {
+      min-width: 96px;
+      max-width: 154px;
+      min-height: 30px;
+      border-radius: 8px;
+    }
+
+    .editor {
+      font-size: 13px;
+      line-height: 1.55;
+      padding: 12px;
+    }
+
+    .markdown-preview {
+      padding: 14px;
+      font-size: 14px;
+    }
+
+    .search-row {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      padding: 10px;
+      background: rgba(7, 16, 29, 0.98);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .search-row input,
+    .search-row button {
+      min-height: 40px;
     }
 
     .status-bar {
-      font-size: 11px;
-      gap: 8px;
+      display: none;
     }
 
     .mobile-tabs {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      background: #10161d;
+      grid-template-columns: repeat(5, 1fr);
+      align-items: stretch;
+      padding-bottom: var(--mobile-safe-bottom);
+      background: rgba(7, 13, 24, 0.98);
       border-top: 1px solid var(--line);
+      box-shadow: 0 -12px 28px rgba(0, 0, 0, 0.3);
+      z-index: 11;
     }
 
     .mobile-tabs button {
       justify-content: center;
       flex-direction: column;
-      gap: 3px;
+      gap: 4px;
       border: 0;
       border-radius: 0;
-      min-height: 58px;
+      min-height: var(--mobile-nav-height);
       font-size: 11px;
       color: var(--muted);
       background: transparent;
+      padding: 4px 0 7px;
     }
 
     .mobile-tabs button.active {
       color: var(--accent);
-      background: rgba(87, 199, 153, 0.08);
+      background: linear-gradient(180deg, rgba(94, 161, 255, 0.18), rgba(94, 161, 255, 0.05));
+      box-shadow: inset 0 2px 0 var(--accent);
+    }
+
+    .mobile-more-backdrop {
+      display: block;
+      position: absolute;
+      inset:
+        0
+        0
+        calc(var(--mobile-nav-height) + var(--mobile-safe-bottom))
+        0;
+      background: rgba(2, 5, 12, 0.36);
+      z-index: 18;
+    }
+
+    .mobile-more-sheet {
+      display: block;
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 8px);
+      max-height: min(72%, calc(100% - var(--mobile-nav-height) - var(--mobile-safe-bottom) - 18px));
+      overflow: auto;
+      z-index: 19;
+      border: 1px solid rgba(122, 162, 247, 0.28);
+      border-radius: 18px 18px 14px 14px;
+      background: rgba(8, 16, 30, 0.98);
+      box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.48);
+      padding: 8px 12px 14px;
+    }
+
+    .sheet-handle {
+      width: 42px;
+      height: 4px;
+      margin: 2px auto 10px;
+      border-radius: 999px;
+      background: rgba(220, 231, 247, 0.34);
+    }
+
+    .sheet-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 36px;
+      margin-bottom: 8px;
+    }
+
+    .sheet-title button {
+      width: 34px;
+      min-height: 34px;
+      padding: 0;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 9px;
+    }
+
+    .mobile-action-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .mobile-action-grid button {
+      min-height: 76px;
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      grid-template-rows: auto auto;
+      align-content: center;
+      align-items: center;
+      gap: 2px 8px;
+      padding: 10px;
+      text-align: left;
+      border-radius: 12px;
+      background: rgba(13, 27, 50, 0.86);
+    }
+
+    .mobile-action-grid button :global(svg) {
+      grid-row: 1 / span 2;
+      color: var(--accent);
+    }
+
+    .mobile-action-grid span,
+    .mobile-action-grid small {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .mobile-action-grid span {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .mobile-action-grid small {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .mobile-session-list {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    .mobile-session-list > strong {
+      display: block;
+      margin-bottom: 8px;
+      color: #dce7f7;
+    }
+
+    .mobile-session-list > div {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .mobile-session-list button {
+      min-width: 104px;
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 10px;
+      flex: 0 0 auto;
+      color: var(--muted);
+    }
+
+    .mobile-session-list button.active {
+      color: var(--text);
+      border-color: var(--accent);
+      background: rgba(94, 161, 255, 0.16);
+    }
+
+    .context-sheet-backdrop {
+      display: block;
+      position: absolute;
+      inset: 0 0 calc(var(--mobile-nav-height) + var(--mobile-safe-bottom)) 0;
+      background: rgba(2, 5, 12, 0.38);
+      z-index: 24;
+    }
+
+    .explorer-context-sheet {
+      display: block;
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: calc(var(--mobile-nav-height) + var(--mobile-safe-bottom) + 8px);
+      max-height: min(74%, calc(100% - var(--mobile-nav-height) - var(--mobile-safe-bottom) - 16px));
+      overflow: auto;
+      z-index: 25;
+      padding: 8px 10px 12px;
+      border: 1px solid rgba(122, 162, 247, 0.28);
+      border-radius: 18px 18px 14px 14px;
+      background: rgba(8, 16, 30, 0.99);
+      box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.48);
+    }
+
+    .context-sheet-title {
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+
+    .context-sheet-title strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #dce7f7;
+    }
+
+    .context-sheet-title button {
+      width: 34px;
+      min-height: 34px;
+      padding: 0;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 9px;
+    }
+
+    .context-action-list {
+      display: grid;
+      gap: 2px;
+    }
+
+    .context-action-list button {
+      min-height: 42px;
+      grid-template-columns: 22px minmax(0, 1fr);
+      border-radius: 10px;
+      background: transparent;
     }
 
     .approval-modal {
@@ -2491,6 +3388,123 @@
     dl div {
       grid-template-columns: 1fr;
       gap: 2px;
+    }
+  }
+
+  @media (max-width: 760px) and (max-height: 700px) {
+    .nexus-term {
+      --mobile-nav-height: 54px;
+      --mobile-panel-title-height: 38px;
+    }
+
+    .panel-title {
+      padding: 0 8px;
+    }
+
+    .shell-tabbar {
+      min-height: var(--mobile-panel-title-height);
+    }
+
+    .shell-tabs button {
+      min-height: 30px;
+      min-width: 84px;
+      max-width: 118px;
+    }
+
+    .shell-title-actions button {
+      width: 30px;
+      min-height: 30px;
+    }
+
+    :global(.nexus-term .xterm-host) {
+      padding: 8px 8px 10px;
+    }
+
+    .mobile-tabs button {
+      font-size: 10px;
+      gap: 2px;
+      padding: 3px 0 5px;
+    }
+
+    .mobile-tabs button :global(svg) {
+      width: 16px;
+      height: 16px;
+    }
+
+    .mobile-action-grid button {
+      min-height: 64px;
+      padding: 8px;
+    }
+
+    .mobile-more-sheet {
+      border-radius: 14px 14px 12px 12px;
+      padding: 6px 10px 12px;
+    }
+  }
+
+  @media (max-width: 760px) and (max-height: 580px) {
+    .nexus-term {
+      --mobile-nav-height: 48px;
+      --mobile-panel-title-height: 34px;
+    }
+
+    .mobile-tabs button span {
+      display: none;
+    }
+
+    .mobile-tabs button {
+      min-height: var(--mobile-nav-height);
+      padding: 0;
+    }
+
+    .panel-title > span {
+      font-size: 12px;
+    }
+
+    .side-switcher button,
+    .viewer-actions button {
+      width: 34px;
+      min-width: 34px;
+      min-height: 34px;
+    }
+
+    .filter-input,
+    .search-row input,
+    .search-row button {
+      min-height: 36px;
+    }
+
+    .tree-row,
+    .tree-main,
+    .file-row {
+      min-height: 34px;
+    }
+
+    .mobile-action-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .mobile-action-grid button {
+      min-height: 52px;
+    }
+  }
+
+  @media (max-width: 760px) and (orientation: landscape) {
+    .nexus-term {
+      --mobile-nav-height: 50px;
+      --mobile-panel-title-height: 36px;
+    }
+
+    .mobile-action-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .mobile-action-grid button {
+      min-height: 58px;
+    }
+
+    .mobile-more-sheet {
+      max-height: min(78%, calc(100% - var(--mobile-nav-height) - var(--mobile-safe-bottom) - 14px));
     }
   }
 </style>
