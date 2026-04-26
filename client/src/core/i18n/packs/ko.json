@@ -6,6 +6,7 @@
   "messages": {
     "app.title.files": "파일 스테이션",
     "app.title.terminal": "터미널",
+    "app.title.nexus-term": "NexusTerm v1.3.0",
     "app.title.monitor": "리소스 모니터",
     "app.title.docker": "도커 매니저",
     "app.title.settings": "설정",

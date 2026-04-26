@@ -3,6 +3,7 @@ import { normalizeLaunchContract } from './appOwnershipContract.js';
 const BUILTIN_COMPONENT_LOADERS = {
   files: () => import('../apps/system/file-explorer/FileExplorer.svelte'),
   terminal: () => import('../apps/system/terminal/Terminal.svelte'),
+  'nexus-term': () => import('../apps/system/nexus-term/NexusTerm.svelte'),
   monitor: () => import('../apps/system/resource-monitor/ResourceMonitor.svelte'),
   editor: () => import('../apps/addons/code-editor/CodeEditor.svelte'),
   docker: () => import('../apps/system/docker-manager/DockerManager.svelte'),

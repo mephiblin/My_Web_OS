@@ -22,6 +22,18 @@ const BUILTIN_APPS_SEED = [
     permissions: ['system.info']
   },
   {
+    id: 'nexus-term',
+    title: 'NexusTerm v1.3.0',
+    icon: 'PanelsTopLeft',
+    appModel: 'system',
+    type: 'system',
+    version: '1.3.0',
+    entry: 'nexus-term',
+    runtime: 'builtin',
+    singleton: true,
+    permissions: ['system.info']
+  },
+  {
     id: 'monitor',
     title: 'Resource Monitor',
     icon: 'Monitor',

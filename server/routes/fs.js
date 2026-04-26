@@ -16,6 +16,7 @@ const serverConfig = require('../config/serverConfig');
 const {
   resolveSafePath,
   isWithinAllowedRoots,
+  isProtectedSystemPath,
   isSafeLeafName,
   assertWithinAllowedRealRoots
 } = require('../utils/pathPolicy');
@@ -89,6 +90,75 @@ async function buildFileTargetEvidence(targetPath) {
   return {
     evidence,
     targetHash: hashJson({ scope: 'fs.target.v1', evidence })
+  };
+}
+
+async function resolveFsOperationPaths(req) {
+  const sourcePath = requireSafePath(req);
+  const destinationInput = String(req.body?.destinationPath || req.body?.destPath || '').trim();
+  if (!destinationInput) {
+    throw createFsHttpError(400, 'FS_DESTINATION_REQUIRED', 'destinationPath is required.');
+  }
+
+  const destinationPath = resolveSafePath(destinationInput);
+  const { allowedRoots, inventoryRoot } = await serverConfig.getPaths();
+  if (!isWithinAllowedRoots(destinationPath, allowedRoots)) {
+    throw createFsHttpError(403, 'FS_PERMISSION_DENIED', 'Destination path is restricted.');
+  }
+  await assertWithinAllowedRealRoots(destinationPath, allowedRoots);
+
+  const destinationParent = path.dirname(destinationPath);
+  if (!isWithinAllowedRoots(destinationParent, allowedRoots)) {
+    throw createFsHttpError(403, 'FS_PERMISSION_DENIED', 'Destination parent is restricted.');
+  }
+  await assertWithinAllowedRealRoots(destinationParent, allowedRoots);
+
+  if (isProtectedSystemPath(destinationPath, [inventoryRoot])) {
+    throw createFsHttpError(403, 'FS_SYSTEM_PROTECTED', 'System inventory is protected. Use the system or package APIs.');
+  }
+
+  return { sourcePath, destinationPath, allowedRoots };
+}
+
+async function buildFsCopyMoveEvidence(req, action) {
+  const { sourcePath, destinationPath } = await resolveFsOperationPaths(req);
+  const sourceStats = await fs.lstat(sourcePath);
+  const sourceRealPath = await fs.realpath(sourcePath).catch(() => sourcePath);
+  const destinationExists = await fs.pathExists(destinationPath);
+  const sourceType = sourceStats.isDirectory() ? 'directory' : sourceStats.isFile() ? 'file' : 'other';
+
+  if (sourceType === 'other') {
+    throw createFsHttpError(400, 'FS_UNSUPPORTED_SOURCE_TYPE', 'Only files and directories can be copied or moved.');
+  }
+  if (destinationExists) {
+    throw createFsHttpError(409, 'FS_CONFLICT', 'A file or directory already exists at the destination path.');
+  }
+  if (sourceType === 'directory') {
+    const relative = path.relative(sourcePath, destinationPath);
+    if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+      throw createFsHttpError(400, 'FS_DESTINATION_INSIDE_SOURCE', 'Destination cannot be inside the source directory.');
+    }
+  }
+
+  const evidence = {
+    action,
+    sourcePath,
+    sourceRealPath,
+    sourceType,
+    sourceSize: sourceStats.size,
+    sourceMtimeMs: Math.trunc(sourceStats.mtimeMs),
+    destinationPath,
+    destinationParent: path.dirname(destinationPath),
+    destinationName: path.basename(destinationPath),
+    destinationExists
+  };
+
+  return {
+    evidence,
+    sourcePath,
+    destinationPath,
+    targetId: `${sourcePath}\0${destinationPath}`,
+    targetHash: hashJson({ scope: `fs.${action}.v1`, evidence })
   };
 }
 
@@ -1357,6 +1427,220 @@ router.delete('/delete', async (req, res) => {
       }, 'ERROR');
     }
     sendFsError(res, err, 'FS_DELETE_FAILED', 'Failed to move item to trash.');
+  }
+});
+
+router.post('/copy/preflight', async (req, res) => {
+  try {
+    const { evidence, sourcePath, targetId, targetHash } = await buildFsCopyMoveEvidence(req, 'copy');
+    const preflight = await createFsApprovalPreflight(req, {
+      action: 'fs.copy',
+      target: {
+        type: evidence.sourceType,
+        id: targetId,
+        label: `${path.basename(sourcePath)} -> ${path.basename(evidence.destinationPath)}`
+      },
+      targetHash,
+      evidence,
+      impact: evidence.sourceType === 'directory'
+        ? 'Copies this directory and its contents to the destination.'
+        : 'Copies this file to the destination.',
+      recoverability: 'destination can be moved to trash after copy',
+      typedConfirmation: path.basename(sourcePath)
+    });
+    return res.json({ success: true, preflight });
+  } catch (err) {
+    return sendFsError(res, err, 'FS_COPY_PREFLIGHT_FAILED', 'Failed to prepare copy approval.');
+  }
+});
+
+router.post('/copy/approve', async (req, res) => {
+  try {
+    const { targetId } = await buildFsCopyMoveEvidence(req, 'copy');
+    const approval = await approveFsOperation(req, {
+      action: 'fs.copy',
+      targetId
+    });
+    return res.json({ success: true, approval });
+  } catch (err) {
+    await auditService.log('FILE_TRANSFER', 'fs.copy.approval_rejected', {
+      operationId: req.body?.operationId || null,
+      approvalCode: err?.code || null,
+      user: req.user?.username
+    }, 'WARNING');
+    return sendFsError(res, createFsHttpError(400, 'FS_COPY_APPROVAL_INVALID', err.message), 'FS_COPY_APPROVAL_INVALID', 'Copy approval is invalid.');
+  }
+});
+
+router.post('/copy', async (req, res) => {
+  let approvalContext = null;
+  try {
+    const { evidence, sourcePath, destinationPath, targetId, targetHash } = await buildFsCopyMoveEvidence(req, 'copy');
+    try {
+      approvalContext = consumeFsApproval(req, {
+        action: 'fs.copy',
+        targetId,
+        targetHash
+      });
+    } catch (approvalErr) {
+      const preflight = await createFsApprovalPreflight(req, {
+        action: 'fs.copy',
+        target: {
+          type: evidence.sourceType,
+          id: targetId,
+          label: `${path.basename(sourcePath)} -> ${path.basename(destinationPath)}`
+        },
+        targetHash,
+        evidence,
+        impact: evidence.sourceType === 'directory'
+          ? 'Copies this directory and its contents to the destination.'
+          : 'Copies this file to the destination.',
+        recoverability: 'destination can be moved to trash after copy',
+        typedConfirmation: path.basename(sourcePath)
+      });
+      await auditService.log('FILE_TRANSFER', 'fs.copy.approval_rejected', {
+        approvalCode: approvalErr?.code || null,
+        operationId: req.body?.approval?.operationId || null,
+        sourcePath,
+        destinationPath,
+        user: req.user?.username
+      }, 'WARNING');
+      return sendApprovalRequired(res, 'FS_COPY_APPROVAL_REQUIRED', approvalErr.message, preflight);
+    }
+
+    await fs.copy(sourcePath, destinationPath, {
+      overwrite: false,
+      errorOnExist: true,
+      preserveTimestamps: true
+    });
+    await auditService.log('FILE_TRANSFER', 'fs.copy', {
+      sourcePath,
+      destinationPath,
+      sourceType: evidence.sourceType,
+      operationId: approvalContext.operationId,
+      targetHash: approvalContext.targetHash,
+      approval: { nonceConsumed: true },
+      result: { status: 'success' },
+      user: req.user?.username
+    }, 'WARNING');
+    res.json({ success: true, message: 'Item copied successfully.', path: destinationPath });
+  } catch (err) {
+    if (approvalContext) {
+      await auditService.log('FILE_TRANSFER', 'fs.copy', {
+        operationId: approvalContext.operationId,
+        targetHash: approvalContext.targetHash,
+        approval: { nonceConsumed: true },
+        result: { status: 'failure', code: err?.code || 'FS_COPY_FAILED' },
+        user: req.user?.username
+      }, 'ERROR');
+    }
+    sendFsError(res, err, 'FS_COPY_FAILED', 'Failed to copy item.');
+  }
+});
+
+router.post('/move/preflight', async (req, res) => {
+  try {
+    const { evidence, sourcePath, targetId, targetHash } = await buildFsCopyMoveEvidence(req, 'move');
+    const preflight = await createFsApprovalPreflight(req, {
+      action: 'fs.move',
+      target: {
+        type: evidence.sourceType,
+        id: targetId,
+        label: `${path.basename(sourcePath)} -> ${path.basename(evidence.destinationPath)}`
+      },
+      targetHash,
+      evidence,
+      impact: evidence.sourceType === 'directory'
+        ? 'Moves this directory and its contents to the destination.'
+        : 'Moves this file to the destination.',
+      recoverability: 'recoverable by moving it back if the destination remains available',
+      typedConfirmation: path.basename(sourcePath)
+    });
+    return res.json({ success: true, preflight });
+  } catch (err) {
+    return sendFsError(res, err, 'FS_MOVE_PREFLIGHT_FAILED', 'Failed to prepare move approval.');
+  }
+});
+
+router.post('/move/approve', async (req, res) => {
+  try {
+    const { targetId } = await buildFsCopyMoveEvidence(req, 'move');
+    const approval = await approveFsOperation(req, {
+      action: 'fs.move',
+      targetId
+    });
+    return res.json({ success: true, approval });
+  } catch (err) {
+    await auditService.log('FILE_TRANSFER', 'fs.move.approval_rejected', {
+      operationId: req.body?.operationId || null,
+      approvalCode: err?.code || null,
+      user: req.user?.username
+    }, 'WARNING');
+    return sendFsError(res, createFsHttpError(400, 'FS_MOVE_APPROVAL_INVALID', err.message), 'FS_MOVE_APPROVAL_INVALID', 'Move approval is invalid.');
+  }
+});
+
+router.post('/move', async (req, res) => {
+  let approvalContext = null;
+  try {
+    const { evidence, sourcePath, destinationPath, targetId, targetHash } = await buildFsCopyMoveEvidence(req, 'move');
+    try {
+      approvalContext = consumeFsApproval(req, {
+        action: 'fs.move',
+        targetId,
+        targetHash
+      });
+    } catch (approvalErr) {
+      const preflight = await createFsApprovalPreflight(req, {
+        action: 'fs.move',
+        target: {
+          type: evidence.sourceType,
+          id: targetId,
+          label: `${path.basename(sourcePath)} -> ${path.basename(destinationPath)}`
+        },
+        targetHash,
+        evidence,
+        impact: evidence.sourceType === 'directory'
+          ? 'Moves this directory and its contents to the destination.'
+          : 'Moves this file to the destination.',
+        recoverability: 'recoverable by moving it back if the destination remains available',
+        typedConfirmation: path.basename(sourcePath)
+      });
+      await auditService.log('FILE_TRANSFER', 'fs.move.approval_rejected', {
+        approvalCode: approvalErr?.code || null,
+        operationId: req.body?.approval?.operationId || null,
+        sourcePath,
+        destinationPath,
+        user: req.user?.username
+      }, 'WARNING');
+      return sendApprovalRequired(res, 'FS_MOVE_APPROVAL_REQUIRED', approvalErr.message, preflight);
+    }
+
+    await fs.move(sourcePath, destinationPath, {
+      overwrite: false
+    });
+    await auditService.log('FILE_TRANSFER', 'fs.move', {
+      sourcePath,
+      destinationPath,
+      sourceType: evidence.sourceType,
+      operationId: approvalContext.operationId,
+      targetHash: approvalContext.targetHash,
+      approval: { nonceConsumed: true },
+      result: { status: 'success' },
+      user: req.user?.username
+    }, 'WARNING');
+    res.json({ success: true, message: 'Item moved successfully.', path: destinationPath });
+  } catch (err) {
+    if (approvalContext) {
+      await auditService.log('FILE_TRANSFER', 'fs.move', {
+        operationId: approvalContext.operationId,
+        targetHash: approvalContext.targetHash,
+        approval: { nonceConsumed: true },
+        result: { status: 'failure', code: err?.code || 'FS_MOVE_FAILED' },
+        user: req.user?.username
+      }, 'ERROR');
+    }
+    sendFsError(res, err, 'FS_MOVE_FAILED', 'Failed to move item.');
   }
 });
 

@@ -3,205 +3,48 @@
   import { Terminal } from 'xterm';
   import { FitAddon } from 'xterm-addon-fit';
   import 'xterm/css/xterm.css';
-  import { io } from 'socket.io-client';
-  import { API_BASE } from '../../../utils/constants.js';
+  import { createTerminalSessionClient } from '../nexus-term/services/terminalSessionClient.js';
 
   let terminalElement;
   let term;
-  let socket;
   let fitAddon;
   let resizeHandler;
-  let commandBuffer = '';
+  let terminalSession;
   let initialized = $state(false);
-  let hasConnectedOnce = false;
   let sessionRequested = $state(false);
   let sessionStarting = $state(false);
   let sessionError = $state('');
   let sessionPreflight = $state(null);
   let typedConfirmation = $state('');
 
-  function waitForSocketEvent(eventName, timeoutMs = 8000) {
-    return new Promise((resolve, reject) => {
-      if (!socket) {
-        reject(new Error('Terminal socket is not connected.'));
-        return;
-      }
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error(`${eventName} timed out.`));
-      }, timeoutMs);
-      const onSuccess = (payload) => {
-        cleanup();
-        resolve(payload || {});
-      };
-      const onError = (payload = {}) => {
-        cleanup();
-        reject(new Error(payload.message || 'Terminal approval failed.'));
-      };
-      function cleanup() {
-        clearTimeout(timer);
-        socket.off(eventName, onSuccess);
-        socket.off('terminal:error', onError);
-      }
-      socket.once(eventName, onSuccess);
-      socket.once('terminal:error', onError);
-    });
-  }
-
-  async function requestSessionPreflight() {
-    if (!socket || sessionStarting || initialized) return;
-    sessionStarting = true;
-    sessionError = '';
-    sessionPreflight = null;
-    typedConfirmation = '';
-    try {
-      const sizing = {
-        cols: term?.cols || 80,
-        rows: term?.rows || 24
-      };
-      socket.emit('terminal:session-preflight', sizing);
-      const preflight = await waitForSocketEvent('terminal:session-preflight');
-      sessionPreflight = preflight;
+  function syncSessionState(nextState) {
+    const previousPreflight = sessionPreflight;
+    initialized = nextState.initialized;
+    sessionRequested = nextState.sessionRequested;
+    sessionStarting = nextState.sessionStarting;
+    sessionError = nextState.sessionError;
+    sessionPreflight = nextState.sessionPreflight;
+    if (nextState.sessionPreflight !== previousPreflight) {
       typedConfirmation = '';
-    } catch (err) {
-      sessionError = err.message || 'Terminal session preflight failed.';
-      term?.writeln(`\r\n\x1b[31m[terminal] ${sessionError}\x1b[0m`);
-    } finally {
-      sessionStarting = false;
     }
   }
 
-  async function approveAndStartSession() {
-    if (!socket || sessionStarting || initialized || !sessionPreflight) return;
-    sessionStarting = true;
-    sessionError = '';
-    try {
-      const sizing = {
-        cols: term?.cols || 80,
-        rows: term?.rows || 24
-      };
-      const preflight = sessionPreflight;
-      socket.emit('terminal:session-approve', {
-        ...sizing,
-        operationId: preflight.operationId,
-        typedConfirmation
-      });
-      const approval = await waitForSocketEvent('terminal:session-approval');
-      socket.emit('terminal:init', {
-        ...sizing,
-        approval: {
-          operationId: approval.operationId,
-          nonce: approval.nonce,
-          targetHash: approval.targetHash || preflight.targetHash
-        }
-      });
-    } catch (err) {
-      sessionError = err.message || 'Terminal session approval failed.';
-      term?.writeln(`\r\n\x1b[31m[terminal] ${sessionError}\x1b[0m`);
-    } finally {
-      sessionStarting = false;
-    }
+  function requestSessionPreflight() {
+    typedConfirmation = '';
+    terminalSession?.requestSessionPreflight();
+  }
+
+  function approveAndStartSession() {
+    terminalSession?.approveAndStartSession(typedConfirmation);
   }
 
   function requestSession() {
-    sessionRequested = true;
-    if (!socket) {
-      connectSocket();
-      return;
-    }
-    if (socket.connected) requestSessionPreflight();
-  }
-
-  function connectSocket() {
-    const token = localStorage.getItem('web_os_token');
-    socket = io(API_BASE, {
-      auth: { token },
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 600
-    });
-
-    socket.on('connect', () => {
-      initialized = false;
-      term.writeln(hasConnectedOnce
-        ? '\x1b[32mReconnected to Web OS Terminal. Starting a new local shell...\x1b[0m'
-        : '\x1b[32mConnected to Web OS Terminal\x1b[0m'
-      );
-      hasConnectedOnce = true;
-      sessionPreflight = null;
-      typedConfirmation = '';
-      if (sessionRequested) requestSessionPreflight();
-      commandBuffer = '';
-    });
-
-    socket.on('disconnect', (reason) => {
-      term.writeln(`\r\n\x1b[33m[terminal] disconnected: ${reason}\x1b[0m`);
-      initialized = false;
-    });
-
-    socket.on('connect_error', (error) => {
-      term.writeln(`\r\n\x1b[31m[terminal] connection failed: ${error?.message || 'unknown error'}\x1b[0m`);
-    });
-
-    socket.on('terminal:output', (data) => {
-      term.write(data);
-    });
-
-    socket.on('terminal:ready', ({ cwd } = {}) => {
-      initialized = true;
-      sessionError = '';
-      sessionPreflight = null;
-      typedConfirmation = '';
-      if (cwd) {
-        term.writeln(`\r\n\x1b[36m[terminal] local shell ready: ${cwd}\x1b[0m`);
-      }
-    });
-
-    socket.on('terminal:error', ({ message } = {}) => {
-      if (message) sessionError = message;
-    });
-
-    socket.on('terminal:exit', ({ exitCode, signal }) => {
-      term.writeln(`\r\n\x1b[33m[terminal] session ended (exit=${exitCode}, signal=${signal || '-'})\x1b[0m`);
-      initialized = false;
-    });
+    terminalSession?.requestSession();
   }
 
   function bindInputBridge() {
     term.onData((data) => {
-      if (!socket || !initialized) return;
-
-      if (data === '\r') {
-        socket.emit('terminal:input', data);
-        commandBuffer = '';
-        return;
-      }
-
-      if (data === '\u007f') {
-        if (commandBuffer.length > 0) {
-          commandBuffer = commandBuffer.slice(0, -1);
-        }
-        socket.emit('terminal:input', data);
-        return;
-      }
-
-      if (data === '\u0003') {
-        commandBuffer = '';
-        socket.emit('terminal:input', data);
-        return;
-      }
-
-      if (data === '\u0015') {
-        commandBuffer = '';
-        socket.emit('terminal:input', data);
-        return;
-      }
-
-      if (data.length === 1 && data >= ' ') {
-        commandBuffer += data;
-      }
-
-      socket.emit('terminal:input', data);
+      terminalSession?.sendInput(data);
     });
   }
 
@@ -223,17 +66,25 @@
     term.open(terminalElement);
     fitAddon.fit();
 
+    terminalSession = createTerminalSessionClient({
+      getTerminalSize: () => ({
+        cols: term?.cols || 80,
+        rows: term?.rows || 24
+      }),
+      write: (data) => term?.write(data),
+      writeln: (data) => term?.writeln(data),
+      onStateChange: syncSessionState
+    });
+
     bindInputBridge();
 
     resizeHandler = () => {
       if (!fitAddon || !term) return;
       fitAddon.fit();
-      if (socket && initialized) {
-        socket.emit('terminal:resize', {
-          cols: term.cols,
-          rows: term.rows
-        });
-      }
+      terminalSession?.resize({
+        cols: term.cols,
+        rows: term.rows
+      });
     };
     globalThis.addEventListener('resize', resizeHandler);
   });
@@ -242,7 +93,7 @@
     if (resizeHandler) {
       globalThis.removeEventListener('resize', resizeHandler);
     }
-    if (socket) socket.disconnect();
+    terminalSession?.disconnect();
     if (term) term.dispose();
   });
 </script>

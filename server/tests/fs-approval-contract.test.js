@@ -530,3 +530,131 @@ test('fs extract blocks traversal and requires approval for overwrite conflicts'
     await serverConfig.reload();
   }
 });
+
+test('fs directory copy and move require scoped approval', async () => {
+  operationApprovalService._resetForTests();
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'webos-fs-copy-move-'));
+  const previousAllowedRoots = process.env.ALLOWED_ROOTS;
+  const previousInitialPath = process.env.INITIAL_PATH;
+  process.env.ALLOWED_ROOTS = fixtureRoot;
+  process.env.INITIAL_PATH = fixtureRoot;
+  await serverConfig.reload();
+
+  const server = await createServer();
+  const token = signToken('fs-owner');
+  const sourceDir = path.join(fixtureRoot, 'source-dir');
+  const copyDir = path.join(fixtureRoot, 'source-copy');
+  const movedDir = path.join(fixtureRoot, 'moved-dir');
+
+  try {
+    await fs.ensureDir(path.join(sourceDir, 'nested'));
+    await fs.writeFile(path.join(sourceDir, 'nested', 'file.txt'), 'tree payload', 'utf8');
+
+    const blockedCopy = await requestJson(server.baseUrl, '/api/fs/copy', token, {
+      method: 'POST',
+      body: { path: sourceDir, destinationPath: copyDir }
+    });
+    assert.equal(blockedCopy.status, 428, JSON.stringify(blockedCopy.json));
+    assert.equal(blockedCopy.json?.code, 'FS_COPY_APPROVAL_REQUIRED', JSON.stringify(blockedCopy.json));
+    assert.equal(await fs.pathExists(copyDir), false);
+
+    const copyPreflight = await requestJson(server.baseUrl, '/api/fs/copy/preflight', token, {
+      method: 'POST',
+      body: { path: sourceDir, destinationPath: copyDir }
+    });
+    assert.equal(copyPreflight.status, 200, JSON.stringify(copyPreflight.json));
+    assert.equal(copyPreflight.json?.preflight?.action, 'fs.copy', JSON.stringify(copyPreflight.json));
+    assert.equal(copyPreflight.json?.preflight?.evidence?.sourceType, 'directory', JSON.stringify(copyPreflight.json));
+
+    const copyApprove = await requestJson(server.baseUrl, '/api/fs/copy/approve', token, {
+      method: 'POST',
+      body: {
+        path: sourceDir,
+        destinationPath: copyDir,
+        operationId: copyPreflight.json.preflight.operationId,
+        typedConfirmation: 'source-dir'
+      }
+    });
+    assert.equal(copyApprove.status, 200, JSON.stringify(copyApprove.json));
+
+    const copied = await requestJson(server.baseUrl, '/api/fs/copy', token, {
+      method: 'POST',
+      body: {
+        path: sourceDir,
+        destinationPath: copyDir,
+        approval: {
+          operationId: copyPreflight.json.preflight.operationId,
+          targetHash: copyPreflight.json.preflight.targetHash,
+          nonce: copyApprove.json.approval.nonce
+        }
+      }
+    });
+    assert.equal(copied.status, 200, JSON.stringify(copied.json));
+    assert.equal(await fs.readFile(path.join(copyDir, 'nested', 'file.txt'), 'utf8'), 'tree payload');
+
+    await fs.remove(copyDir);
+    const copyReplay = await requestJson(server.baseUrl, '/api/fs/copy', token, {
+      method: 'POST',
+      body: {
+        path: sourceDir,
+        destinationPath: copyDir,
+        approval: {
+          operationId: copyPreflight.json.preflight.operationId,
+          targetHash: copyPreflight.json.preflight.targetHash,
+          nonce: copyApprove.json.approval.nonce
+        }
+      }
+    });
+    assert.equal(copyReplay.status, 428, JSON.stringify(copyReplay.json));
+
+    const blockedMove = await requestJson(server.baseUrl, '/api/fs/move', token, {
+      method: 'POST',
+      body: { path: sourceDir, destinationPath: movedDir }
+    });
+    assert.equal(blockedMove.status, 428, JSON.stringify(blockedMove.json));
+    assert.equal(blockedMove.json?.code, 'FS_MOVE_APPROVAL_REQUIRED', JSON.stringify(blockedMove.json));
+    assert.equal(await fs.pathExists(sourceDir), true);
+
+    const movePreflight = await requestJson(server.baseUrl, '/api/fs/move/preflight', token, {
+      method: 'POST',
+      body: { path: sourceDir, destinationPath: movedDir }
+    });
+    assert.equal(movePreflight.status, 200, JSON.stringify(movePreflight.json));
+    assert.equal(movePreflight.json?.preflight?.action, 'fs.move', JSON.stringify(movePreflight.json));
+
+    const moveApprove = await requestJson(server.baseUrl, '/api/fs/move/approve', token, {
+      method: 'POST',
+      body: {
+        path: sourceDir,
+        destinationPath: movedDir,
+        operationId: movePreflight.json.preflight.operationId,
+        typedConfirmation: 'source-dir'
+      }
+    });
+    assert.equal(moveApprove.status, 200, JSON.stringify(moveApprove.json));
+
+    const moved = await requestJson(server.baseUrl, '/api/fs/move', token, {
+      method: 'POST',
+      body: {
+        path: sourceDir,
+        destinationPath: movedDir,
+        approval: {
+          operationId: movePreflight.json.preflight.operationId,
+          targetHash: movePreflight.json.preflight.targetHash,
+          nonce: moveApprove.json.approval.nonce
+        }
+      }
+    });
+    assert.equal(moved.status, 200, JSON.stringify(moved.json));
+    assert.equal(await fs.pathExists(sourceDir), false);
+    assert.equal(await fs.readFile(path.join(movedDir, 'nested', 'file.txt'), 'utf8'), 'tree payload');
+  } finally {
+    await server.close();
+    await fs.remove(fixtureRoot);
+    if (previousAllowedRoots === undefined) delete process.env.ALLOWED_ROOTS;
+    else process.env.ALLOWED_ROOTS = previousAllowedRoots;
+    if (previousInitialPath === undefined) delete process.env.INITIAL_PATH;
+    else process.env.INITIAL_PATH = previousInitialPath;
+    await serverConfig.reload();
+  }
+});

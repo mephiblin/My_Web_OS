@@ -7,6 +7,8 @@ const OPERATION_META = {
   write: { title: 'Save Failed', defaultMessage: 'Could not save this file.' },
   createDir: { title: 'Create Folder Failed', defaultMessage: 'Could not create this folder.' },
   delete: { title: 'Delete Failed', defaultMessage: 'Could not move this item to trash.' },
+  copy: { title: 'Copy Failed', defaultMessage: 'Could not copy this item.' },
+  move: { title: 'Move Failed', defaultMessage: 'Could not move this item.' },
   rename: { title: 'Rename Failed', defaultMessage: 'Could not rename this item.' },
   upload: { title: 'Upload Failed', defaultMessage: 'Could not upload this file.' },
   extract: { title: 'Extract Failed', defaultMessage: 'Could not extract this archive.' },
@@ -201,6 +203,20 @@ export async function readFile(path) {
   return withNormalizedError('read', () => apiFetch(`/api/fs/read?path=${encodeURIComponent(path)}`));
 }
 
+export async function createRawTicket(path, options = {}) {
+  return withNormalizedError('raw', () => apiFetch('/api/fs/raw-ticket', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      appId: options.appId || '',
+      profile: options.profile || 'preview',
+      ttlMs: options.ttlMs,
+      absoluteTtlMs: options.absoluteTtlMs,
+      idleTimeoutMs: options.idleTimeoutMs
+    })
+  }));
+}
+
 export async function writeFile(path, content) {
   return withNormalizedError('write', () => apiFetch('/api/fs/write', {
     method: 'POST',
@@ -323,6 +339,58 @@ export async function executeDelete(path, approval) {
   return withNormalizedError('delete', () => apiFetch('/api/fs/delete', {
     method: 'DELETE',
     body: JSON.stringify({ path, approval })
+  }));
+}
+
+export async function preflightCopy(path, destinationPath) {
+  return withNormalizedError('copy', () => apiFetch('/api/fs/copy/preflight', {
+    method: 'POST',
+    body: JSON.stringify({ path, destinationPath })
+  }));
+}
+
+export async function approveCopy(path, destinationPath, preflight, typedConfirmation = '') {
+  return withNormalizedError('copy', () => apiFetch('/api/fs/copy/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      destinationPath,
+      operationId: preflight?.operationId,
+      typedConfirmation
+    })
+  }));
+}
+
+export async function executeCopy(path, destinationPath, approval) {
+  return withNormalizedError('copy', () => apiFetch('/api/fs/copy', {
+    method: 'POST',
+    body: JSON.stringify({ path, destinationPath, approval })
+  }));
+}
+
+export async function preflightMove(path, destinationPath) {
+  return withNormalizedError('move', () => apiFetch('/api/fs/move/preflight', {
+    method: 'POST',
+    body: JSON.stringify({ path, destinationPath })
+  }));
+}
+
+export async function approveMove(path, destinationPath, preflight, typedConfirmation = '') {
+  return withNormalizedError('move', () => apiFetch('/api/fs/move/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      destinationPath,
+      operationId: preflight?.operationId,
+      typedConfirmation
+    })
+  }));
+}
+
+export async function executeMove(path, destinationPath, approval) {
+  return withNormalizedError('move', () => apiFetch('/api/fs/move', {
+    method: 'POST',
+    body: JSON.stringify({ path, destinationPath, approval })
   }));
 }
 

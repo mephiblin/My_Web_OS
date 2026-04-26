@@ -6,6 +6,7 @@ const builtinPackModules = import.meta.glob('./packs/*.json', { eager: true });
 const APP_TITLE_KEY_BY_ID = {
   files: 'app.title.files',
   terminal: 'app.title.terminal',
+  'nexus-term': 'app.title.nexus-term',
   monitor: 'app.title.monitor',
   docker: 'app.title.docker',
   settings: 'app.title.settings',

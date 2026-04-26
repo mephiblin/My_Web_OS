@@ -86,6 +86,7 @@
     monitor: Gauge,
     'model-viewer': Cuboid,
     'music-station': Headphones,
+    'nexus-term': PanelsTopLeft,
     'package-center': PackageOpen,
     photo: ImageUp,
     'photo-station': ImageUp,
