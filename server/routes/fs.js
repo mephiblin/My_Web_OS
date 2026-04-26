@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const fs = require('fs-extra');
 const multer = require('multer');
 const path = require('path');
@@ -8,6 +9,7 @@ const auth = require('../middleware/auth');
 const auditService = require('../services/auditService');
 const indexService = require('../services/indexService');
 const trashService = require('../services/trashService');
+const operationApprovalService = require('../services/operationApprovalService');
 const fileGrantService = require('../services/fileGrantService');
 const fileTicketService = require('../services/fileTicketService');
 const serverConfig = require('../config/serverConfig');
@@ -68,6 +70,290 @@ function sendFsError(res, err, fallbackCode, fallbackMessage) {
   });
 }
 
+function hashJson(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+async function buildFileTargetEvidence(targetPath) {
+  const stats = await fs.lstat(targetPath);
+  const realPath = await fs.realpath(targetPath).catch(() => targetPath);
+  const evidence = {
+    path: targetPath,
+    realPath,
+    type: stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other',
+    size: stats.size,
+    mtimeMs: Math.trunc(stats.mtimeMs),
+    inode: stats.ino || null,
+    device: stats.dev || null
+  };
+  return {
+    evidence,
+    targetHash: hashJson({ scope: 'fs.target.v1', evidence })
+  };
+}
+
+async function buildTrashTargetEvidence() {
+  const items = await trashService.getTrashItems();
+  const evidence = {
+    count: items.length,
+    items: items.map((item) => ({
+      id: item.id,
+      originalPath: item.originalPath,
+      fileName: item.fileName,
+      deletedAt: item.deletedAt
+    })).sort((a, b) => String(a.id).localeCompare(String(b.id)))
+  };
+  return {
+    evidence,
+    targetHash: hashJson({ scope: 'fs.empty-trash.v1', evidence })
+  };
+}
+
+async function getTrashItemById(id) {
+  const itemId = String(id || '').trim();
+  if (!itemId) {
+    throw createFsHttpError(400, 'FS_TRASH_RESTORE_ID_REQUIRED', 'A valid trash item id is required.');
+  }
+  const items = await trashService.getTrashItems();
+  const item = items.find((candidate) => candidate.id === itemId);
+  if (!item) {
+    throw createFsHttpError(404, 'FS_TRASH_ITEM_NOT_FOUND', 'Trash item was not found.');
+  }
+  return item;
+}
+
+async function buildRestoreTargetEvidence(id) {
+  const item = await getTrashItemById(id);
+  const { allowedRoots } = await serverConfig.getPaths();
+  await assertWithinAllowedRealRoots(item.originalPath, allowedRoots);
+  const sourcePath = trashService.getTrashItemPath(item.id);
+  if (!(await fs.pathExists(sourcePath))) {
+    throw createFsHttpError(404, 'FS_TRASH_SOURCE_NOT_FOUND', 'Trash payload was not found.');
+  }
+  const sourceStats = await fs.lstat(sourcePath);
+  const conflict = await fs.pathExists(item.originalPath);
+  const evidence = {
+    id: item.id,
+    fileName: item.fileName,
+    originalPath: item.originalPath,
+    deletedAt: item.deletedAt,
+    sourcePath,
+    sourceType: sourceStats.isDirectory() ? 'directory' : sourceStats.isFile() ? 'file' : 'other',
+    sourceSize: sourceStats.size,
+    sourceMtimeMs: Math.trunc(sourceStats.mtimeMs),
+    conflict: conflict
+      ? {
+          path: item.originalPath,
+          reason: 'target_exists'
+        }
+      : null
+  };
+  return {
+    item,
+    evidence,
+    targetHash: hashJson({ scope: 'fs.restore.v1', evidence })
+  };
+}
+
+function normalizeZipEntryName(entryName) {
+  return String(entryName || '').replace(/\\/g, '/');
+}
+
+function isUnsafeZipEntryName(entryName) {
+  const normalized = normalizeZipEntryName(entryName);
+  if (!normalized || normalized.startsWith('/') || path.isAbsolute(normalized)) return true;
+  return normalized.split('/').some((segment) => segment === '..');
+}
+
+async function resolveExtractDestPath(sourcePath, rawDestPath) {
+  const { allowedRoots } = await serverConfig.getPaths();
+  const destPath = rawDestPath
+    ? resolveSafePath(rawDestPath)
+    : path.dirname(sourcePath);
+  if (!isWithinAllowedRoots(destPath, allowedRoots)) {
+    throw createFsHttpError(403, 'FS_RESTRICTED_DESTINATION', 'Destination path is restricted.');
+  }
+  await assertWithinAllowedRealRoots(destPath, allowedRoots);
+  return { destPath, allowedRoots };
+}
+
+async function hashFileContent(filePath) {
+  return await new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+async function buildExtractTargetEvidence(sourcePath, rawDestPath) {
+  const AdmZip = require('adm-zip');
+  const stats = await fs.stat(sourcePath);
+  if (stats.isDirectory()) {
+    throw createFsHttpError(400, 'FS_ARCHIVE_INVALID', 'Not an archive file.');
+  }
+  const { destPath, allowedRoots } = await resolveExtractDestPath(sourcePath, rawDestPath);
+  const zip = new AdmZip(sourcePath);
+  const sourceHash = await hashFileContent(sourcePath);
+  const blockers = [];
+  const conflicts = [];
+  const entries = [];
+
+  for (const entry of zip.getEntries()) {
+    const entryName = normalizeZipEntryName(entry.entryName);
+    const destinationPath = path.resolve(destPath, entryName);
+    const unsafe = isUnsafeZipEntryName(entryName) || !isWithinAllowedRoots(destinationPath, [destPath]);
+    if (unsafe) {
+      blockers.push({
+        entryName,
+        code: 'FS_ARCHIVE_ENTRY_TRAVERSAL',
+        message: 'Archive entry would extract outside the destination.'
+      });
+    } else {
+      await assertWithinAllowedRealRoots(destinationPath, allowedRoots);
+      if (!entry.isDirectory && await fs.pathExists(destinationPath)) {
+        conflicts.push({
+          entryName,
+          path: destinationPath,
+          reason: 'target_exists'
+        });
+      }
+    }
+    entries.push({
+      name: entryName,
+      isDirectory: entry.isDirectory,
+      size: entry.header?.size || 0,
+      destinationPath
+    });
+  }
+
+  if (blockers.length > 0) {
+    throw createFsHttpError(400, 'FS_ARCHIVE_ENTRY_TRAVERSAL', 'Archive contains entries that would extract outside the destination.', {
+      blockers
+    });
+  }
+
+  const evidence = {
+    sourcePath,
+    sourceHash,
+    sourceSize: stats.size,
+    sourceMtimeMs: Math.trunc(stats.mtimeMs),
+    destPath,
+    entryCount: entries.length,
+    entries,
+    conflicts,
+    overwriteRequired: conflicts.length > 0
+  };
+
+  return {
+    evidence,
+    targetHash: hashJson({ scope: 'fs.extract.v1', evidence })
+  };
+}
+
+function getApprovalInput(body = {}) {
+  return body.approval && typeof body.approval === 'object' && !Array.isArray(body.approval)
+    ? body.approval
+    : {};
+}
+
+function sendApprovalRequired(res, code, message, preflight) {
+  return res.status(428).json({
+    error: true,
+    code,
+    message,
+    preflight
+  });
+}
+
+async function createFsApprovalPreflight(req, {
+  action,
+  target,
+  targetHash,
+  evidence,
+  impact,
+  recoverability,
+  typedConfirmation = ''
+}) {
+  const operation = operationApprovalService.createOperation({
+    action,
+    userId: req.user?.username,
+    target,
+    targetHash,
+    typedConfirmation,
+    metadata: {
+      impact,
+      recoverability,
+      evidence,
+      riskLevel: 'high'
+    }
+  });
+
+  await auditService.log('FILE_TRANSFER', `${action}.preflight`, {
+    operationId: operation.operationId,
+    target,
+    targetHash,
+    impact,
+    recoverability,
+    expiresAt: operation.expiresAt,
+    user: req.user?.username
+  }, 'WARNING');
+
+  return {
+    action,
+    operationId: operation.operationId,
+    target,
+    targetHash,
+    impact,
+    recoverability,
+    evidence,
+    expiresAt: operation.expiresAt,
+    approval: {
+      required: true,
+      typedConfirmation
+    }
+  };
+}
+
+async function approveFsOperation(req, { action, targetId }) {
+  const approval = operationApprovalService.approveOperation({
+    operationId: req.body?.operationId,
+    userId: req.user?.username,
+    action,
+    targetId,
+    typedConfirmation: req.body?.typedConfirmation
+  });
+
+  await auditService.log('FILE_TRANSFER', `${action}.approved`, {
+    operationId: approval.operationId,
+    targetId,
+    expiresAt: approval.expiresAt,
+    user: req.user?.username
+  }, 'WARNING');
+
+  return approval;
+}
+
+function consumeFsApproval(req, { action, targetId, targetHash }) {
+  const approval = getApprovalInput(req.body);
+  const approvalTargetHash = String(approval.targetHash || '').trim();
+  if (!String(approval.operationId || '').trim() || !String(approval.nonce || '').trim() || !approvalTargetHash) {
+    throw createFsHttpError(428, 'FS_OPERATION_APPROVAL_REQUIRED', 'This file operation requires scoped approval evidence.');
+  }
+  if (approvalTargetHash !== targetHash) {
+    throw createFsHttpError(428, 'FS_OPERATION_APPROVAL_TARGET_CHANGED', 'Approval target changed after preflight.');
+  }
+  return operationApprovalService.consumeApproval({
+    operationId: approval.operationId,
+    nonce: approval.nonce,
+    userId: req.user?.username,
+    action,
+    targetId,
+    targetHash
+  });
+}
+
 function requireSafePath(req) {
   if (!req.safePath) {
     throw createFsHttpError(400, 'FS_INVALID_PATH', 'A valid path is required.');
@@ -104,14 +390,22 @@ function mapFileGrantHttpError(err) {
   return err;
 }
 
-function sendRawFile(targetPath, res) {
-  console.log(`[FS] Sending raw file: ${targetPath}`);
+function sendRawFile(targetPath, res, options = {}) {
+  console.log(`[FS] Sending raw file (${path.basename(targetPath)})`);
   return res.sendFile(targetPath, (err) => {
     if (err) {
       console.error(`[FS] Error sending file: ${err.message}`);
       if (!res.headersSent) {
         sendFsError(res, err, 'FS_RAW_STREAM_FAILED', 'Failed to stream file.');
       }
+      return;
+    }
+    if (options.ticket && options.profile === fileTicketService.PROFILE_MEDIA) {
+      fileTicketService.touchTicket(options.ticket, {
+        metadata: {
+          lastRequestRange: options.range || ''
+        }
+      });
     }
   });
 }
@@ -138,8 +432,13 @@ router.get('/raw', async (req, res, next) => {
     const record = fileTicketService.getTicket(ticket, { scope: 'fs.raw' });
     const { allowedRoots } = await serverConfig.getPaths();
     await assertWithinAllowedRealRoots(record.path, allowedRoots);
-    await assertRawFileTarget(record.path);
-    return sendRawFile(record.path, res);
+    const stats = await assertRawFileTarget(record.path);
+    fileTicketService.assertTicketTargetUnchanged(record, stats);
+    return sendRawFile(record.path, res, {
+      ticket: record.ticket,
+      profile: record.profile,
+      range: req.headers.range || ''
+    });
   } catch (err) {
     return sendFsError(res, err, 'FS_RAW_TICKET_FAILED', 'Failed to redeem raw file ticket.');
   }
@@ -166,16 +465,111 @@ router.get('/trash', async (req, res) => {
  * POST /api/fs/restore
  * Restore from trash
  */
+router.post('/restore/preflight', async (req, res) => {
+  try {
+    const { id } = req.body || {};
+    const { item, evidence, targetHash } = await buildRestoreTargetEvidence(id);
+    const preflight = await createFsApprovalPreflight(req, {
+      action: 'fs.restore',
+      target: {
+        type: 'trash-item',
+        id: item.id,
+        label: item.fileName || item.id
+      },
+      targetHash,
+      evidence,
+      impact: evidence.conflict
+        ? `Restores ${item.fileName || item.id}; restore target already exists and must be resolved first.`
+        : `Restores ${item.fileName || item.id} to its original path.`,
+      recoverability: evidence.conflict ? 'blocked until conflict is resolved' : 'moves item out of trash',
+      typedConfirmation: item.fileName || item.id
+    });
+    return res.json({ success: true, preflight });
+  } catch (err) {
+    return sendFsError(res, err, 'FS_TRASH_RESTORE_PREFLIGHT_FAILED', 'Failed to prepare restore approval.');
+  }
+});
+
+router.post('/restore/approve', async (req, res) => {
+  try {
+    const { id } = req.body || {};
+    const item = await getTrashItemById(id);
+    const approval = await approveFsOperation(req, {
+      action: 'fs.restore',
+      targetId: item.id
+    });
+    return res.json({ success: true, approval });
+  } catch (err) {
+    await auditService.log('FILE_TRANSFER', 'fs.restore.approval_rejected', {
+      operationId: req.body?.operationId || null,
+      approvalCode: err?.code || null,
+      trashItemId: req.body?.id || null,
+      user: req.user?.username
+    }, 'WARNING');
+    return sendFsError(res, createFsHttpError(400, 'FS_TRASH_RESTORE_APPROVAL_INVALID', err.message), 'FS_TRASH_RESTORE_APPROVAL_INVALID', 'Restore approval is invalid.');
+  }
+});
+
 router.post('/restore', async (req, res) => {
   const { id } = req.body;
+  let approvalContext = null;
   try {
-    if (!id || typeof id !== 'string') {
-      throw createFsHttpError(400, 'FS_TRASH_RESTORE_ID_REQUIRED', 'A valid trash item id is required.');
+    const { item, evidence, targetHash } = await buildRestoreTargetEvidence(id);
+    if (evidence.conflict) {
+      throw createFsHttpError(409, 'FS_TRASH_RESTORE_CONFLICT', 'Restore target already exists.', {
+        conflict: evidence.conflict
+      });
     }
-    await trashService.restore(id);
-    await auditService.log('FILE_TRANSFER', 'Restore from Trash', { id, user: req.user?.username }, 'INFO');
+    try {
+      approvalContext = consumeFsApproval(req, {
+        action: 'fs.restore',
+        targetId: item.id,
+        targetHash
+      });
+    } catch (approvalErr) {
+      const preflight = await createFsApprovalPreflight(req, {
+        action: 'fs.restore',
+        target: {
+          type: 'trash-item',
+          id: item.id,
+          label: item.fileName || item.id
+        },
+        targetHash,
+        evidence,
+        impact: `Restores ${item.fileName || item.id} to its original path.`,
+        recoverability: 'moves item out of trash',
+        typedConfirmation: item.fileName || item.id
+      });
+      await auditService.log('FILE_TRANSFER', 'fs.restore.approval_rejected', {
+        approvalCode: approvalErr?.code || null,
+        operationId: req.body?.approval?.operationId || null,
+        trashItemId: item.id,
+        user: req.user?.username
+      }, 'WARNING');
+      return sendApprovalRequired(res, 'FS_TRASH_RESTORE_APPROVAL_REQUIRED', approvalErr.message, preflight);
+    }
+
+    await trashService.restore(item.id);
+    await auditService.log('FILE_TRANSFER', 'fs.restore', {
+      id: item.id,
+      originalPath: item.originalPath,
+      operationId: approvalContext.operationId,
+      targetHash: approvalContext.targetHash,
+      approval: { nonceConsumed: true },
+      result: { status: 'success' },
+      user: req.user?.username
+    }, 'WARNING');
     res.json({ success: true });
   } catch (err) {
+    if (approvalContext) {
+      await auditService.log('FILE_TRANSFER', 'fs.restore', {
+        operationId: approvalContext.operationId,
+        targetHash: approvalContext.targetHash,
+        approval: { nonceConsumed: true },
+        result: { status: 'failure', code: err?.code || 'FS_TRASH_RESTORE_FAILED' },
+        user: req.user?.username
+      }, 'ERROR');
+    }
     sendFsError(res, err, 'FS_TRASH_RESTORE_FAILED', 'Failed to restore trash item.');
   }
 });
@@ -183,12 +577,98 @@ router.post('/restore', async (req, res) => {
 /**
  * DELETE /api/fs/empty-trash
  */
-router.delete('/empty-trash', async (req, res) => {
+router.post('/empty-trash/preflight', async (req, res) => {
   try {
+    const { evidence, targetHash } = await buildTrashTargetEvidence();
+    const preflight = await createFsApprovalPreflight(req, {
+      action: 'fs.empty-trash',
+      target: {
+        type: 'trash',
+        id: 'trash',
+        label: 'Trash'
+      },
+      targetHash,
+      evidence,
+      impact: evidence.count > 0
+        ? `Permanently removes ${evidence.count} trash item(s).`
+        : 'Trash is already empty.',
+      recoverability: 'unrecoverable'
+    });
+    return res.json({ success: true, preflight });
+  } catch (err) {
+    return sendFsError(res, err, 'FS_TRASH_EMPTY_PREFLIGHT_FAILED', 'Failed to prepare empty trash approval.');
+  }
+});
+
+router.post('/empty-trash/approve', async (req, res) => {
+  try {
+    const approval = await approveFsOperation(req, {
+      action: 'fs.empty-trash',
+      targetId: 'trash'
+    });
+    return res.json({ success: true, approval });
+  } catch (err) {
+    await auditService.log('FILE_TRANSFER', 'fs.empty-trash.approval_rejected', {
+      operationId: req.body?.operationId || null,
+      approvalCode: err?.code || null,
+      user: req.user?.username
+    }, 'WARNING');
+    return sendFsError(res, createFsHttpError(400, 'FS_TRASH_EMPTY_APPROVAL_INVALID', err.message), 'FS_TRASH_EMPTY_APPROVAL_INVALID', 'Empty trash approval is invalid.');
+  }
+});
+
+router.delete('/empty-trash', async (req, res) => {
+  let approvalContext = null;
+  try {
+    const { evidence, targetHash } = await buildTrashTargetEvidence();
+    try {
+      approvalContext = consumeFsApproval(req, {
+        action: 'fs.empty-trash',
+        targetId: 'trash',
+        targetHash
+      });
+    } catch (approvalErr) {
+      const preflight = await createFsApprovalPreflight(req, {
+        action: 'fs.empty-trash',
+        target: {
+          type: 'trash',
+          id: 'trash',
+          label: 'Trash'
+        },
+        targetHash,
+        evidence,
+        impact: evidence.count > 0
+          ? `Permanently removes ${evidence.count} trash item(s).`
+          : 'Trash is already empty.',
+        recoverability: 'unrecoverable'
+      });
+      await auditService.log('FILE_TRANSFER', 'fs.empty-trash.approval_rejected', {
+        approvalCode: approvalErr?.code || null,
+        operationId: req.body?.approval?.operationId || null,
+        user: req.user?.username
+      }, 'WARNING');
+      return sendApprovalRequired(res, 'FS_TRASH_EMPTY_APPROVAL_REQUIRED', approvalErr.message, preflight);
+    }
+
     await trashService.emptyTrash();
-    await auditService.log('SYSTEM', 'Empty Trash', { user: req.user?.username }, 'WARNING');
+    await auditService.log('SYSTEM', 'fs.empty-trash', {
+      operationId: approvalContext.operationId,
+      targetHash: approvalContext.targetHash,
+      approval: { nonceConsumed: true },
+      result: { status: 'success' },
+      user: req.user?.username
+    }, 'WARNING');
     res.json({ success: true });
   } catch (err) {
+    if (approvalContext) {
+      await auditService.log('SYSTEM', 'fs.empty-trash', {
+        operationId: approvalContext.operationId,
+        targetHash: approvalContext.targetHash,
+        approval: { nonceConsumed: true },
+        result: { status: 'failure', code: err?.code || 'FS_TRASH_EMPTY_FAILED' },
+        user: req.user?.username
+      }, 'ERROR');
+    }
     sendFsError(res, err, 'FS_TRASH_EMPTY_FAILED', 'Failed to empty trash.');
   }
 });
@@ -358,14 +838,20 @@ router.post('/raw-ticket', async (req, res) => {
     const targetPath = requireSafePath(req);
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const appId = String(body.appId || '').trim();
+    const profile = String(body.profile || body.purpose || fileTicketService.PROFILE_PREVIEW).trim().toLowerCase();
 
-    await assertRawFileTarget(targetPath);
+    const stats = await assertRawFileTarget(targetPath);
 
     const ticket = fileTicketService.createTicket({
       scope: 'fs.raw',
+      profile,
       user: req.user?.username,
       appId,
-      path: targetPath
+      path: targetPath,
+      stats,
+      ttlMs: body.ttlMs,
+      absoluteTtlMs: body.absoluteTtlMs,
+      idleTimeoutMs: body.idleTimeoutMs
     });
 
     await auditService.log(
@@ -375,7 +861,11 @@ router.post('/raw-ticket', async (req, res) => {
         path: targetPath,
         appId,
         scope: ticket.scope,
+        profile: ticket.profile,
         expiresAt: new Date(ticket.expiresAt).toISOString(),
+        absoluteExpiresAt: ticket.absoluteExpiresAt
+          ? new Date(ticket.absoluteExpiresAt).toISOString()
+          : null,
         user: req.user?.username
       },
       'INFO'
@@ -386,10 +876,20 @@ router.post('/raw-ticket', async (req, res) => {
       ticket: ticket.ticket,
       url: `/api/fs/raw?ticket=${encodeURIComponent(ticket.ticket)}`,
       scope: ticket.scope,
+      profile: ticket.profile,
       path: targetPath,
       appId,
       expiresAt: new Date(ticket.expiresAt).toISOString(),
-      ttlMs: ticket.expiresAt - ticket.createdAt
+      ttlMs: ticket.expiresAt - ticket.createdAt,
+      ...(ticket.profile === fileTicketService.PROFILE_MEDIA
+        ? {
+            idleTimeoutMs: ticket.idleTimeoutMs,
+            absoluteExpiresAt: new Date(ticket.absoluteExpiresAt).toISOString(),
+            lastAccess: new Date(ticket.lastAccess).toISOString(),
+            size: ticket.size,
+            mtime: ticket.mtime
+          }
+        : {})
     });
   } catch (err) {
     sendFsError(res, err, 'FS_RAW_TICKET_CREATE_FAILED', 'Failed to create raw file ticket.');
@@ -612,7 +1112,53 @@ router.get('/raw', async (req, res) => {
  * POST /api/fs/write
  * Create or update file content
  */
+router.post('/write/preflight', async (req, res) => {
+  try {
+    const targetPath = requireSafePath(req);
+    const exists = await fs.pathExists(targetPath);
+    if (!exists) {
+      throw createFsHttpError(400, 'FS_WRITE_APPROVAL_NOT_REQUIRED', 'Overwrite approval is only required for an existing file.');
+    }
+    const { evidence, targetHash } = await buildFileTargetEvidence(targetPath);
+    const preflight = await createFsApprovalPreflight(req, {
+      action: 'fs.write.overwrite',
+      target: {
+        type: evidence.type,
+        id: targetPath,
+        label: path.basename(targetPath)
+      },
+      targetHash,
+      evidence,
+      impact: 'Overwrites the current file contents.',
+      recoverability: 'recoverable only from external backup or previous app state',
+      typedConfirmation: path.basename(targetPath)
+    });
+    return res.json({ success: true, preflight });
+  } catch (err) {
+    return sendFsError(res, err, 'FS_WRITE_PREFLIGHT_FAILED', 'Failed to prepare overwrite approval.');
+  }
+});
+
+router.post('/write/approve', async (req, res) => {
+  try {
+    const targetPath = requireSafePath(req);
+    const approval = await approveFsOperation(req, {
+      action: 'fs.write.overwrite',
+      targetId: targetPath
+    });
+    return res.json({ success: true, approval });
+  } catch (err) {
+    await auditService.log('FILE_TRANSFER', 'fs.write.overwrite.approval_rejected', {
+      operationId: req.body?.operationId || null,
+      approvalCode: err?.code || null,
+      user: req.user?.username
+    }, 'WARNING');
+    return sendFsError(res, createFsHttpError(400, 'FS_WRITE_APPROVAL_INVALID', err.message), 'FS_WRITE_APPROVAL_INVALID', 'Overwrite approval is invalid.');
+  }
+});
+
 router.post('/write', async (req, res) => {
+  let approvalContext = null;
   try {
     const targetPath = requireSafePath(req);
     const body = req.body && typeof req.body === 'object' ? req.body : {};
@@ -621,8 +1167,8 @@ router.post('/write', async (req, res) => {
     const appId = String(body.appId || '').trim();
     const operationSource = String(body.operationSource || '').trim().toLowerCase();
     const overwrite = body.overwrite === true;
-    const approval = body.approval && typeof body.approval === 'object' ? body.approval : {};
-    const approvalReceived = approval.approved === true;
+    const legacyApproval = body.approval && typeof body.approval === 'object' ? body.approval : {};
+    let approvalReceived = legacyApproval.approved === true;
 
     if (typeof content !== 'string' && content !== undefined && content !== null) {
       throw createFsHttpError(400, 'FS_WRITE_CONTENT_INVALID', 'File content must be a string.');
@@ -649,16 +1195,39 @@ router.post('/write', async (req, res) => {
         }
       );
     }
-    if (operationSource === 'addon' && exists && overwrite && !approvalReceived) {
-      throw createFsHttpError(
-        400,
-        'FS_WRITE_APPROVAL_REQUIRED',
-        'Addon overwrite approval is required.',
-        {
-          path: targetPath,
-          requiresApproval: true
+    if (exists) {
+      const { evidence, targetHash } = await buildFileTargetEvidence(targetPath);
+      try {
+        approvalContext = consumeFsApproval(req, {
+          action: 'fs.write.overwrite',
+          targetId: targetPath,
+          targetHash
+        });
+        approvalReceived = true;
+      } catch (approvalErr) {
+        if (operationSource === 'addon' && legacyApproval.approved === true) {
+          await auditService.log('FILE_TRANSFER', 'fs.write.overwrite.legacy_approval_rejected', {
+            path: targetPath,
+            appId: appId || null,
+            approvalCode: approvalErr?.code || null,
+            user: req.user?.username
+          }, 'WARNING');
         }
-      );
+        const preflight = await createFsApprovalPreflight(req, {
+          action: 'fs.write.overwrite',
+          target: {
+            type: evidence.type,
+            id: targetPath,
+            label: path.basename(targetPath)
+          },
+          targetHash,
+          evidence,
+          impact: 'Overwrites the current file contents.',
+          recoverability: 'recoverable only from external backup or previous app state',
+          typedConfirmation: path.basename(targetPath)
+        });
+        return sendApprovalRequired(res, 'FS_WRITE_APPROVAL_REQUIRED', approvalErr.message, preflight);
+      }
     }
 
     await fs.writeFile(targetPath, content || '', 'utf8');
@@ -672,6 +1241,8 @@ router.post('/write', async (req, res) => {
         grantId: grantId || null,
         overwrite,
         approvalReceived,
+        operationId: approvalContext?.operationId || null,
+        targetHash: approvalContext?.targetHash || null,
         user: req.user?.username
       },
       'INFO'
@@ -686,13 +1257,105 @@ router.post('/write', async (req, res) => {
  * DELETE /api/fs/delete
  * Delete file or directory
  */
-router.delete('/delete', async (req, res) => {
+router.post('/delete/preflight', async (req, res) => {
   try {
     const targetPath = requireSafePath(req);
+    const { evidence, targetHash } = await buildFileTargetEvidence(targetPath);
+    const preflight = await createFsApprovalPreflight(req, {
+      action: 'fs.delete',
+      target: {
+        type: evidence.type,
+        id: targetPath,
+        label: path.basename(targetPath)
+      },
+      targetHash,
+      evidence,
+      impact: evidence.type === 'directory'
+        ? 'Moves this directory and its contents to trash.'
+        : 'Moves this item to trash.',
+      recoverability: 'trash-restore',
+      typedConfirmation: path.basename(targetPath)
+    });
+    return res.json({ success: true, preflight });
+  } catch (err) {
+    return sendFsError(res, err, 'FS_DELETE_PREFLIGHT_FAILED', 'Failed to prepare delete approval.');
+  }
+});
+
+router.post('/delete/approve', async (req, res) => {
+  try {
+    const targetPath = requireSafePath(req);
+    const approval = await approveFsOperation(req, {
+      action: 'fs.delete',
+      targetId: targetPath
+    });
+    return res.json({ success: true, approval });
+  } catch (err) {
+    await auditService.log('FILE_TRANSFER', 'fs.delete.approval_rejected', {
+      operationId: req.body?.operationId || null,
+      approvalCode: err?.code || null,
+      user: req.user?.username
+    }, 'WARNING');
+    return sendFsError(res, createFsHttpError(400, 'FS_DELETE_APPROVAL_INVALID', err.message), 'FS_DELETE_APPROVAL_INVALID', 'Delete approval is invalid.');
+  }
+});
+
+router.delete('/delete', async (req, res) => {
+  let approvalContext = null;
+  try {
+    const targetPath = requireSafePath(req);
+    const { evidence, targetHash } = await buildFileTargetEvidence(targetPath);
+    try {
+      approvalContext = consumeFsApproval(req, {
+        action: 'fs.delete',
+        targetId: targetPath,
+        targetHash
+      });
+    } catch (approvalErr) {
+      const preflight = await createFsApprovalPreflight(req, {
+        action: 'fs.delete',
+        target: {
+          type: evidence.type,
+          id: targetPath,
+          label: path.basename(targetPath)
+        },
+        targetHash,
+        evidence,
+        impact: evidence.type === 'directory'
+          ? 'Moves this directory and its contents to trash.'
+          : 'Moves this item to trash.',
+        recoverability: 'trash-restore',
+        typedConfirmation: path.basename(targetPath)
+      });
+      await auditService.log('FILE_TRANSFER', 'fs.delete.approval_rejected', {
+        approvalCode: approvalErr?.code || null,
+        operationId: req.body?.approval?.operationId || null,
+        path: targetPath,
+        user: req.user?.username
+      }, 'WARNING');
+      return sendApprovalRequired(res, 'FS_DELETE_APPROVAL_REQUIRED', approvalErr.message, preflight);
+    }
+
     await trashService.moveToTrash(targetPath);
-    await auditService.log('FILE_TRANSFER', 'Move to Trash', { path: targetPath, user: req.user?.username }, 'INFO');
+    await auditService.log('FILE_TRANSFER', 'fs.delete', {
+      path: targetPath,
+      operationId: approvalContext.operationId,
+      targetHash: approvalContext.targetHash,
+      approval: { nonceConsumed: true },
+      result: { status: 'success' },
+      user: req.user?.username
+    }, 'WARNING');
     res.json({ success: true, message: 'Item moved to trash.' });
   } catch (err) {
+    if (approvalContext) {
+      await auditService.log('FILE_TRANSFER', 'fs.delete', {
+        operationId: approvalContext.operationId,
+        targetHash: approvalContext.targetHash,
+        approval: { nonceConsumed: true },
+        result: { status: 'failure', code: err?.code || 'FS_DELETE_FAILED' },
+        user: req.user?.username
+      }, 'ERROR');
+    }
     sendFsError(res, err, 'FS_DELETE_FAILED', 'Failed to move item to trash.');
   }
 });
@@ -786,34 +1449,119 @@ router.get('/archive-list', async (req, res) => {
  * POST /api/fs/extract
  * Extract a ZIP archive to a destination
  */
+router.post('/extract/preflight', async (req, res) => {
+  try {
+    const sourcePath = requireSafePath(req);
+    const { destPath } = req.body || {};
+    const { evidence, targetHash } = await buildExtractTargetEvidence(sourcePath, destPath);
+    const preflight = await createFsApprovalPreflight(req, {
+      action: 'fs.extract',
+      target: {
+        type: 'archive',
+        id: `${sourcePath} -> ${evidence.destPath}`,
+        label: path.basename(sourcePath)
+      },
+      targetHash,
+      evidence,
+      impact: evidence.overwriteRequired
+        ? `Extracts ${evidence.entryCount} ZIP item(s) and overwrites ${evidence.conflicts.length} existing item(s).`
+        : `Extracts ${evidence.entryCount} ZIP item(s).`,
+      recoverability: evidence.overwriteRequired
+        ? 'overwritten files are recoverable only from backup'
+        : 'creates files in the destination folder',
+      typedConfirmation: path.basename(sourcePath)
+    });
+    return res.json({ success: true, preflight });
+  } catch (err) {
+    return sendFsError(res, err, 'FS_ARCHIVE_EXTRACT_PREFLIGHT_FAILED', 'Failed to prepare archive extraction approval.');
+  }
+});
+
+router.post('/extract/approve', async (req, res) => {
+  try {
+    const sourcePath = requireSafePath(req);
+    const { destPath } = req.body || {};
+    const { evidence } = await buildExtractTargetEvidence(sourcePath, destPath);
+    const approval = await approveFsOperation(req, {
+      action: 'fs.extract',
+      targetId: `${sourcePath} -> ${evidence.destPath}`
+    });
+    return res.json({ success: true, approval });
+  } catch (err) {
+    await auditService.log('FILE_TRANSFER', 'fs.extract.approval_rejected', {
+      operationId: req.body?.operationId || null,
+      approvalCode: err?.code || null,
+      path: req.body?.path || null,
+      user: req.user?.username
+    }, 'WARNING');
+    return sendFsError(res, createFsHttpError(400, 'FS_ARCHIVE_EXTRACT_APPROVAL_INVALID', err.message), 'FS_ARCHIVE_EXTRACT_APPROVAL_INVALID', 'Archive extraction approval is invalid.');
+  }
+});
+
 router.post('/extract', async (req, res) => {
+  let approvalContext = null;
   try {
     const AdmZip = require('adm-zip');
     const sourcePath = requireSafePath(req);
-    let { destPath } = req.body;
-    
-    if (!destPath) {
-       destPath = path.dirname(sourcePath); 
-    } else {
-       const resolvedDest = resolveSafePath(destPath);
-       const { allowedRoots } = await serverConfig.getPaths();
-       const isAllowed = isWithinAllowedRoots(resolvedDest, allowedRoots);
-       if (!isAllowed) {
-         throw createFsHttpError(403, 'FS_RESTRICTED_DESTINATION', 'Destination path is restricted.');
-       }
-       await assertWithinAllowedRealRoots(resolvedDest, allowedRoots);
-       destPath = resolvedDest;
+    const { destPath } = req.body || {};
+    const { evidence, targetHash } = await buildExtractTargetEvidence(sourcePath, destPath);
+    try {
+      approvalContext = consumeFsApproval(req, {
+        action: 'fs.extract',
+        targetId: `${sourcePath} -> ${evidence.destPath}`,
+        targetHash
+      });
+    } catch (approvalErr) {
+      const preflight = await createFsApprovalPreflight(req, {
+        action: 'fs.extract',
+        target: {
+          type: 'archive',
+          id: `${sourcePath} -> ${evidence.destPath}`,
+          label: path.basename(sourcePath)
+        },
+        targetHash,
+        evidence,
+        impact: evidence.overwriteRequired
+          ? `Extracts ${evidence.entryCount} ZIP item(s) and overwrites ${evidence.conflicts.length} existing item(s).`
+          : `Extracts ${evidence.entryCount} ZIP item(s).`,
+        recoverability: evidence.overwriteRequired
+          ? 'overwritten files are recoverable only from backup'
+          : 'creates files in the destination folder',
+        typedConfirmation: path.basename(sourcePath)
+      });
+      await auditService.log('FILE_TRANSFER', 'fs.extract.approval_rejected', {
+        approvalCode: approvalErr?.code || null,
+        operationId: req.body?.approval?.operationId || null,
+        path: sourcePath,
+        destPath: evidence.destPath,
+        user: req.user?.username
+      }, 'WARNING');
+      return sendApprovalRequired(res, 'FS_ARCHIVE_EXTRACT_APPROVAL_REQUIRED', approvalErr.message, preflight);
     }
 
     const zip = new AdmZip(sourcePath);
-    zip.extractAllToAsync(destPath, true, false, async (err) => {
-       if (err) {
-         return sendFsError(res, err, 'FS_ARCHIVE_EXTRACT_FAILED', 'Failed to extract archive.');
-       }
-       await auditService.log('FILE_TRANSFER', 'Extract Archive', { path: sourcePath, destPath, user: req.user?.username }, 'INFO');
-       res.json({ success: true, message: 'Extracted successfully.' });
-    });
+    zip.extractAllTo(evidence.destPath, evidence.overwriteRequired);
+    await auditService.log('FILE_TRANSFER', 'fs.extract', {
+      path: sourcePath,
+      destPath: evidence.destPath,
+      conflicts: evidence.conflicts,
+      operationId: approvalContext.operationId,
+      targetHash: approvalContext.targetHash,
+      approval: { nonceConsumed: true },
+      result: { status: 'success' },
+      user: req.user?.username
+    }, 'WARNING');
+    return res.json({ success: true, message: 'Extracted successfully.' });
   } catch (err) {
+    if (approvalContext) {
+      await auditService.log('FILE_TRANSFER', 'fs.extract', {
+        operationId: approvalContext.operationId,
+        targetHash: approvalContext.targetHash,
+        approval: { nonceConsumed: true },
+        result: { status: 'failure', code: err?.code || 'FS_ARCHIVE_EXTRACT_FAILED' },
+        user: req.user?.username
+      }, 'ERROR');
+    }
     sendFsError(res, err, 'FS_ARCHIVE_EXTRACT_FAILED', 'Failed to extract archive.');
   }
 });

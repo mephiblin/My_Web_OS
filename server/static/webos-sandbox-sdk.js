@@ -207,11 +207,18 @@
     files: {
       rawUrl: function rawUrl(input) {
         var payload = input && typeof input === 'object' ? input : {};
-        var appId = context && context.app && context.app.id ? context.app.id : '';
-        var path = payload.path || '';
-        var grantId = payload.grantId || '';
-        if (!appId || !path || !grantId) return '';
-        return '/api/sandbox/' + encodeURIComponent(appId) + '/file/raw?path=' + encodeURIComponent(path) + '&grantId=' + encodeURIComponent(grantId);
+        return payload.url || '';
+      },
+      rawTicket: function rawTicket(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('host.file.read', 'host.file.rawTicket', {
+          path: payload.path || '',
+          grantId: payload.grantId || '',
+          profile: payload.profile || payload.purpose || 'preview',
+          ttlMs: payload.ttlMs,
+          absoluteTtlMs: payload.absoluteTtlMs,
+          idleTimeoutMs: payload.idleTimeoutMs
+        });
       },
       read: function read(input) {
         var payload = input && typeof input === 'object' ? input : {};
@@ -228,6 +235,21 @@
           content: payload.content == null ? '' : payload.content,
           overwrite: payload.overwrite === true,
           approval: payload.approval && typeof payload.approval === 'object' ? payload.approval : undefined
+        });
+      },
+      writePreflight: function writePreflight(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('host.file.write', 'host.file.writePreflight', {
+          path: payload.path || '',
+          grantId: payload.grantId || ''
+        });
+      },
+      approveWrite: function approveWrite(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('host.file.write', 'host.file.writeApprove', {
+          path: payload.path || '',
+          operationId: payload.operationId || '',
+          typedConfirmation: payload.typedConfirmation || ''
         });
       }
     }

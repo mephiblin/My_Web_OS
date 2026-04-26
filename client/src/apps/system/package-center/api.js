@@ -12,13 +12,17 @@ function buildManifestApprovalEnvelope(manifest, options = {}) {
           mediaScopesAccepted: options.mediaScopesAccepted === true
         };
 
-  return {
+  const envelope = {
     manifest: manifest || {},
     approvals: {
       ...approvals,
       mediaScopesAccepted: approvals.mediaScopesAccepted === true
     }
   };
+  if (options.approval && typeof options.approval === 'object') {
+    envelope.approval = options.approval;
+  }
+  return envelope;
 }
 
 export async function fetchInstalledPackages() {
@@ -126,10 +130,14 @@ export async function cancelPackageBackupJob(appId, jobId) {
   });
 }
 
-export async function rollbackPackageBackup(appId, backupId) {
+export async function rollbackPackageBackup(appId, backupId, options = {}) {
+  const payload = { backupId };
+  if (options.approval && typeof options.approval === 'object') {
+    payload.approval = options.approval;
+  }
   return apiFetch(`/api/packages/${encodeAppId(appId)}/rollback`, {
     method: 'POST',
-    body: JSON.stringify({ backupId })
+    body: JSON.stringify(payload)
   });
 }
 
@@ -164,6 +172,18 @@ export async function approvePackageDelete(appId, approval = {}) {
     body: JSON.stringify({
       operationId: String(approval.operationId || ''),
       typedConfirmation: String(approval.typedConfirmation || '')
+    })
+  });
+}
+
+export async function approvePackageLifecycle(preflight = {}, typedConfirmation = '') {
+  return apiFetch('/api/packages/lifecycle/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      operationId: String(preflight.operationId || ''),
+      action: String(preflight.action || ''),
+      targetId: String(preflight.target?.id || ''),
+      typedConfirmation: String(typedConfirmation || '')
     })
   });
 }
@@ -262,18 +282,22 @@ export async function fetchRegistryInstallPreflight(payload = {}) {
 }
 
 export async function installRegistryPackage(payload = {}) {
+  const body = {
+    sourceId: payload.sourceId || '',
+    packageId: payload.packageId || '',
+    zipUrl: payload.zipUrl || '',
+    overwrite: payload.overwrite === true,
+    forcePolicyBypass: payload.forcePolicyBypass === true,
+    localWorkspace: payload.localWorkspace && typeof payload.localWorkspace === 'object'
+      ? payload.localWorkspace
+      : undefined
+  };
+  if (payload.approval && typeof payload.approval === 'object') {
+    body.approval = payload.approval;
+  }
   return apiFetch('/api/packages/registry/install', {
     method: 'POST',
-    body: JSON.stringify({
-      sourceId: payload.sourceId || '',
-      packageId: payload.packageId || '',
-      zipUrl: payload.zipUrl || '',
-      overwrite: payload.overwrite === true,
-      forcePolicyBypass: payload.forcePolicyBypass === true,
-      localWorkspace: payload.localWorkspace && typeof payload.localWorkspace === 'object'
-        ? payload.localWorkspace
-        : undefined
-    })
+    body: JSON.stringify(body)
   });
 }
 
@@ -283,6 +307,9 @@ function buildZipImportFormData(file, options = {}) {
   formData.append('overwrite', options.overwrite === true ? 'true' : 'false');
   if (options.localWorkspace && typeof options.localWorkspace === 'object') {
     formData.append('localWorkspace', JSON.stringify(options.localWorkspace));
+  }
+  if (options.approval && typeof options.approval === 'object') {
+    formData.append('approval', JSON.stringify(options.approval));
   }
   return formData;
 }

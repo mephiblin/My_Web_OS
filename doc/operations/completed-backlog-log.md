@@ -423,3 +423,135 @@
   - `npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json` 통과(`fails=0`; 후속 package doctor 정리에서 builtin warning debt는 `warns=0`으로 해소).
   - backend/frontend HTTP smoke 통과.
   - Terminal socket/PTY 한글 출력 smoke 통과.
+
+## LFC-1 Raw Ticket And Media Lease Contract (2026-04-26)
+
+- `/api/fs/raw-ticket` purpose-aware contract 추가:
+  - existing callers keep `profile: preview` default behavior.
+  - `profile: media` issues memory-only media leases.
+- Preview ticket policy 유지:
+  - 5 minute default TTL.
+  - 10 minute max TTL.
+  - no query JWT fallback in generated raw URLs.
+- Media lease policy 추가:
+  - 45 minute idle timeout.
+  - 8 hour absolute expiry.
+  - lease records keep `createdAt`, `lastAccess`, `absoluteExpiresAt`, `size`, and `mtime`.
+  - successful full/Range raw redemption refreshes `lastAccess`.
+  - `size + mtime` target mutation returns `FS_MEDIA_LEASE_TARGET_CHANGED`.
+- Structured media lease errors:
+  - `FS_MEDIA_LEASE_INVALID`
+  - `FS_MEDIA_LEASE_EXPIRED`
+  - `FS_MEDIA_LEASE_IDLE_TIMEOUT`
+  - `FS_MEDIA_LEASE_TARGET_CHANGED`
+- Tests:
+  - `server/tests/ticket-url-contract.test.js` now covers media Range/`Content-Range`, expiry, idle timeout, mutation, scope/app mismatch, and URL redaction.
+- Verification:
+  - `node --check server/services/fileTicketService.js` 통과.
+  - `node --check server/routes/fs.js` 통과.
+  - `npm test -- server/tests/ticket-url-contract.test.js` 통과(86개).
+
+## LFC-2 Frontend Media Lease Recovery (2026-04-26)
+
+- Shared frontend helper 추가:
+  - `fetchRawMediaLeaseUrl(path, { appId, disposition, signal })`.
+  - existing `fetchRawFileTicketUrl()` preview behavior 유지.
+- Media Player recovery:
+  - video/audio initial open now requests `profile: media`.
+  - first media element error quietly reacquires a media lease.
+  - video/audio restore `currentTime` and resume playback when possible.
+  - image preview retries once with a fresh media lease on image load error.
+  - unrecoverable second failure uses the existing error state.
+- Document Viewer recovery:
+  - binary preview opens through `profile: media`.
+  - iframe error triggers one quiet media lease retry.
+  - target-changed, missing path, auth/permission, and lease expiry map to explicit user-facing messages.
+- Verification:
+  - `cd client && npm run build` 통과.
+- Remaining caveat:
+  - browser PDF plugins may render some HTTP failures inside the frame without firing `error`; LFC-2 covers recoverable browser events available to the app.
+
+## LFC-3 Share Download Policy (2026-04-26)
+
+- Public share download remains independent from preview tickets and media leases.
+- `GET /api/share/download/:id` policy:
+  - checks share expiry at request start.
+  - supports `Range` with `206 Partial Content`, `Content-Range`, and `Accept-Ranges: bytes`.
+  - revalidates target path against allowed roots before streaming.
+  - rejects deleted/moved targets with `SHARE_TARGET_NOT_FOUND`.
+  - rejects directory shares with `SHARE_DIRECTORY_UNSUPPORTED` until archive/package policy exists.
+  - writes audit evidence with share id, path, ip, user-agent, result, and status/range where available.
+- `POST /api/share/create` policy:
+  - keeps existing `{ success, linkId }` compatibility for File Explorer.
+  - rejects directory share creation.
+  - rejects staged optional policy fields with `SHARE_POLICY_UNSUPPORTED` before external exposure.
+  - represents default policy fields as non-secret additive metadata.
+- Tests:
+  - `server/tests/share-download-policy.test.js` covers Range, expired new request, directory rejection, moved/deleted target, and unsupported optional policy fields.
+- Verification:
+  - `node --check server/routes/share.js` 통과.
+  - `node --check server/services/shareService.js` 통과.
+  - `node --check server/tests/share-download-policy.test.js` 통과.
+  - `node --test --test-concurrency=1 server/tests/share-download-policy.test.js` 통과.
+  - `npm test` 통과(91개).
+
+## LFC-4 Durable Transfer Job Store (2026-04-26)
+
+- Transfer Manager jobs now persist to a JSON runtime store:
+  - default path: `server/storage/transfer-jobs.json`
+  - test override: `TRANSFER_JOBS_FILE` / `_resetForTests({ jobStoreFile })`
+  - runtime file is ignored in `.gitignore`.
+- Restart/reload behavior:
+  - persisted `queued` jobs remain queued and are processed after reload.
+  - persisted `running` jobs reload as `interrupted`.
+  - interrupted jobs include `TRANSFER_JOB_INTERRUPTED` evidence with `previousStatus: running`.
+  - interrupted jobs remain visible, counted in summary, retryable, and intentionally prunable.
+- Partial destination policy:
+  - transfer jobs expose `partialPolicy: { mode: "cleanup-on-failure", tempPath: null, resume: false }`.
+  - current implementation removes partial destination files on failure/cancel.
+- UI compatibility:
+  - Transfer UI treats `interrupted`, `retryable_failed`, `backoff`, and `paused_by_quota` as attention states.
+  - `interrupted` jobs can be retried from Transfer UI.
+- Tests:
+  - `server/tests/transfer-jobs.integration.test.js` covers persisted reload, `running -> interrupted`, interrupted retry, and explicit prune.
+- Verification:
+  - `node --check server/services/transferJobService.js` 통과.
+  - `node --check server/tests/transfer-jobs.integration.test.js` 통과.
+  - `node --test --test-concurrency=1 server/tests/transfer-jobs.integration.test.js` 통과.
+  - `npm test` 통과(95개).
+  - `cd client && npm run build` 통과.
+- Remaining gap:
+  - `cloudService` upload jobs still use a separate memory-only `uploadJobs` map. LFC-5 will handle rclone/provider policy next; durable cloud upload job persistence remains a follow-up unless unified into the transfer job store.
+
+## LFC-5 rclone Provider Policy (2026-04-26)
+
+- Cloud upload rclone policy:
+  - upload jobs keep provider, rclone command, retry flags, stderr summary, and `nextRetryAt` evidence.
+  - rclone upload uses explicit retry flags:
+    - `--retries`
+    - `--low-level-retries`
+    - `--retries-sleep`
+  - missing rclone remains a clear `CLOUD_RCLONE_NOT_FOUND` setup error.
+- Provider state mapping:
+  - Google Drive 403/429/quota-like stderr maps to `paused_by_quota` or `backoff`.
+  - WebDAV timeout/rate-like stderr maps to retryable provider state (`backoff`).
+  - provider states include retryable details and stderr/stdout summaries without exposing raw command internals in UI copy.
+- VFS cache policy:
+  - mount-like `rclone serve webdav` now passes explicit cache settings:
+    - `RCLONE_VFS_CACHE_DIR`
+    - `RCLONE_VFS_CACHE_MAX_SIZE`
+    - `RCLONE_VFS_CACHE_MAX_AGE`
+- UI compatibility:
+  - Transfer UI, Download Station, and File Explorer label `backoff`, `paused_by_quota`, and `retryable_failed`.
+  - Cloud Manager surfaces backend rclone/provider setup messages instead of generic failure text.
+  - File Explorer retry handler now accepts `retryable_failed`.
+- Tests:
+  - `server/tests/cloud-upload-validation.test.js` covers Google Drive quota/rate mapping, WebDAV timeout/rate mapping, rclone retry flags, and missing rclone setup error.
+- Verification:
+  - `node --check server/services/cloudService.js` 통과.
+  - `node --check server/tests/cloud-upload-validation.test.js` 통과.
+  - `node --test --test-concurrency=1 server/tests/cloud-upload-validation.test.js` 통과.
+  - `npm test` 통과(99개).
+  - `cd client && npm run build` 통과.
+- Remaining gap:
+  - cloud upload jobs are still memory-only; provider policy is first-class, but durable cloud upload persistence is still a follow-up to unify with the transfer job store.

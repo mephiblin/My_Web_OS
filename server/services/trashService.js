@@ -49,6 +49,10 @@ const trashService = {
     await fs.writeJson(TRASH_INFO_FILE, info);
   },
 
+  getTrashItemPath(id) {
+    return path.join(TRASH_ROOT, String(id || ''));
+  },
+
   async emptyTrash() {
     await fs.emptyDir(TRASH_ROOT);
     await fs.writeJson(TRASH_INFO_FILE, {});

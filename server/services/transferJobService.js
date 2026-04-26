@@ -6,9 +6,16 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const serverConfig = require('../config/serverConfig');
-const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath, isSafeLeafName } = require('../utils/pathPolicy');
+const {
+  resolveSafePath,
+  isWithinAllowedRoots,
+  isProtectedSystemPath,
+  isSafeLeafName,
+  assertWithinAllowedRealRoots
+} = require('../utils/pathPolicy');
 
 const MAX_REDIRECTS = 5;
+const DEFAULT_JOB_STORE_FILE = path.join(__dirname, '../storage/transfer-jobs.json');
 
 function createTransferError(status, code, message, details = null) {
   const err = new Error(message);
@@ -29,6 +36,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function timestampForFileName() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
 function cloneJob(job) {
   const error = job.error ? { ...job.error } : null;
   return {
@@ -39,6 +50,7 @@ function cloneJob(job) {
     source: job.source,
     destinationDir: job.destinationDir,
     destinationPath: job.destinationPath,
+    partialPolicy: job.partialPolicy ? { ...job.partialPolicy } : null,
     createdAt: job.createdAt,
     startedAt: job.startedAt,
     endedAt: job.endedAt,
@@ -75,6 +87,17 @@ async function validateManagedPath(inputPath, label) {
     );
   }
 
+  try {
+    await assertWithinAllowedRealRoots(absolutePath, paths.allowedRoots);
+  } catch (err) {
+    throw createTransferError(
+      err?.status || 403,
+      err?.code || 'TRANSFER_PATH_NOT_ALLOWED',
+      `${label} path is outside allowed roots.`,
+      { path: absolutePath, label }
+    );
+  }
+
   return absolutePath;
 }
 
@@ -86,6 +109,49 @@ function setProgress(job, transferredBytes, totalBytes = null) {
     percent,
     updatedAt: nowIso()
   };
+}
+
+function serializeJob(job) {
+  const cloned = cloneJob(job);
+  delete cloned.errors;
+  return cloned;
+}
+
+function normalizeStoredJob(job) {
+  if (!job || typeof job !== 'object') return null;
+  const status = String(job.status || '').trim().toLowerCase() || 'queued';
+  const normalized = {
+    id: String(job.id || '').trim(),
+    type: String(job.type || '').trim(),
+    fileName: String(job.fileName || '').trim(),
+    status,
+    source: job.source && typeof job.source === 'object' ? { ...job.source } : {},
+    destinationDir: String(job.destinationDir || ''),
+    destinationPath: String(job.destinationPath || ''),
+    partialPolicy: job.partialPolicy && typeof job.partialPolicy === 'object'
+      ? { ...job.partialPolicy }
+      : {
+          mode: 'cleanup-on-failure',
+          tempPath: null,
+          resume: false
+        },
+    createdAt: job.createdAt || nowIso(),
+    startedAt: job.startedAt || null,
+    endedAt: job.endedAt || null,
+    progress: job.progress && typeof job.progress === 'object'
+      ? { ...job.progress }
+      : {
+          transferredBytes: 0,
+          totalBytes: null,
+          percent: 0,
+          updatedAt: nowIso()
+        },
+    error: job.error && typeof job.error === 'object' ? { ...job.error } : null,
+    abortController: null
+  };
+
+  if (!normalized.id || !normalized.type || !normalized.destinationPath) return null;
+  return normalized;
 }
 
 function mapJobRuntimeError(err) {
@@ -266,6 +332,8 @@ class TransferJobService {
     this.jobs = new Map();
     this.queue = [];
     this.runningJobId = null;
+    this.jobStoreFile = process.env.TRANSFER_JOBS_FILE || DEFAULT_JOB_STORE_FILE;
+    this.#loadJobsFromStore();
   }
 
   async enqueueDownload(input) {
@@ -373,6 +441,7 @@ class TransferJobService {
         code: 'TRANSFER_JOB_CANCELED',
         message: 'Transfer job was canceled before execution.'
       };
+      this.#persistJobs();
       return cloneJob(job);
     }
 
@@ -391,11 +460,11 @@ class TransferJobService {
       throw createTransferError(404, 'TRANSFER_JOB_NOT_FOUND', 'Transfer job was not found.');
     }
 
-    if (!(job.status === 'failed' || job.status === 'canceled')) {
+    if (!(job.status === 'failed' || job.status === 'canceled' || job.status === 'interrupted')) {
       throw createTransferError(
         409,
         'TRANSFER_JOB_RETRY_NOT_ALLOWED',
-        `Retry is only allowed for failed/canceled jobs (current: '${job.status}').`
+        `Retry is only allowed for failed/canceled/interrupted jobs (current: '${job.status}').`
       );
     }
 
@@ -426,7 +495,7 @@ class TransferJobService {
         .filter(Boolean)
     );
 
-    const defaultStatuses = new Set(['completed', 'failed', 'canceled']);
+    const defaultStatuses = new Set(['completed', 'failed', 'canceled', 'interrupted']);
     const targetStatuses = normalized.size > 0 ? normalized : defaultStatuses;
 
     if (targetStatuses.has('queued') || targetStatuses.has('running')) {
@@ -442,6 +511,7 @@ class TransferJobService {
     }
 
     this.queue = this.queue.filter((id) => this.jobs.has(id));
+    this.#persistJobs();
     return {
       removed,
       remaining: this.jobs.size
@@ -455,7 +525,8 @@ class TransferJobService {
       running: 0,
       completed: 0,
       failed: 0,
-      canceled: 0
+      canceled: 0,
+      interrupted: 0
     };
 
     for (const job of this.jobs.values()) {
@@ -477,6 +548,11 @@ class TransferJobService {
       source,
       destinationDir,
       destinationPath,
+      partialPolicy: {
+        mode: 'cleanup-on-failure',
+        tempPath: null,
+        resume: false
+      },
       status: 'queued',
       createdAt: nowIso(),
       startedAt: null,
@@ -495,6 +571,7 @@ class TransferJobService {
   #enqueue(job) {
     this.jobs.set(job.id, job);
     this.queue.push(job.id);
+    this.#persistJobs();
     this.#processQueue();
   }
 
@@ -514,6 +591,7 @@ class TransferJobService {
     job.status = 'running';
     job.startedAt = nowIso();
     job.abortController = new AbortController();
+    this.#persistJobs();
 
     try {
       await fs.pathExists(job.destinationPath).then((exists) => {
@@ -557,7 +635,114 @@ class TransferJobService {
     } finally {
       job.abortController = null;
       this.runningJobId = null;
+      this.#persistJobs();
       this.#processQueue();
+    }
+  }
+
+  #loadJobsFromStore() {
+    this.jobs.clear();
+    this.queue = [];
+    this.runningJobId = null;
+
+    let payload = null;
+    try {
+      payload = fs.readJsonSync(this.jobStoreFile);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') {
+        console.warn(`[TRANSFER] Failed to load transfer jobs store (${this.jobStoreFile}): ${err.message}`);
+        const corruptPath = `${this.jobStoreFile}.corrupt-${timestampForFileName()}`;
+        try {
+          if (fs.pathExistsSync(this.jobStoreFile)) {
+            fs.moveSync(this.jobStoreFile, corruptPath, { overwrite: false });
+            console.warn(`[TRANSFER] Preserved corrupt transfer jobs store at ${corruptPath}`);
+          }
+        } catch (moveErr) {
+          console.warn(`[TRANSFER] Failed to preserve corrupt transfer jobs store (${this.jobStoreFile}): ${moveErr.message}`);
+        }
+      }
+      return;
+    }
+
+    const storedJobs = Array.isArray(payload?.jobs) ? payload.jobs : Array.isArray(payload) ? payload : [];
+    let changed = false;
+
+    for (const item of storedJobs) {
+      const job = normalizeStoredJob(item);
+      if (!job) {
+        changed = true;
+        continue;
+      }
+
+      if (job.status === 'running') {
+        job.status = 'interrupted';
+        job.endedAt = nowIso();
+        job.error = {
+          code: 'TRANSFER_JOB_INTERRUPTED',
+          message: 'Transfer job was interrupted by backend restart.',
+          details: {
+            previousStatus: 'running'
+          }
+        };
+        changed = true;
+      }
+
+      this.jobs.set(job.id, job);
+      if (job.status === 'queued') {
+        this.queue.push(job.id);
+      }
+    }
+
+    if (changed) {
+      this.#persistJobs();
+    }
+
+    if (this.queue.length > 0) {
+      setImmediate(() => this.#processQueue());
+    }
+  }
+
+  #persistJobs() {
+    const payload = {
+      version: 1,
+      updatedAt: nowIso(),
+      jobs: Array.from(this.jobs.values()).map((job) => serializeJob(job))
+    };
+    const storeDir = path.dirname(this.jobStoreFile);
+    const tempFile = path.join(
+      storeDir,
+      `.${path.basename(this.jobStoreFile)}.${process.pid}.${Date.now()}.tmp`
+    );
+    try {
+      fs.ensureDirSync(storeDir);
+      fs.writeJsonSync(tempFile, payload, { spaces: 2 });
+      fs.renameSync(tempFile, this.jobStoreFile);
+    } catch (err) {
+      fs.removeSync(tempFile);
+      console.warn(`[TRANSFER] Failed to persist transfer jobs store (${this.jobStoreFile}): ${err.message}`);
+    }
+  }
+
+  _reloadForTests(options = {}) {
+    if (options.jobStoreFile) {
+      this.jobStoreFile = options.jobStoreFile;
+    } else {
+      this.jobStoreFile = process.env.TRANSFER_JOBS_FILE || DEFAULT_JOB_STORE_FILE;
+    }
+    this.#loadJobsFromStore();
+  }
+
+  _resetForTests(options = {}) {
+    this.jobs.clear();
+    this.queue = [];
+    this.runningJobId = null;
+    if (options.jobStoreFile) {
+      this.jobStoreFile = options.jobStoreFile;
+    } else {
+      this.jobStoreFile = process.env.TRANSFER_JOBS_FILE || DEFAULT_JOB_STORE_FILE;
+    }
+    if (options.removeStore !== false) {
+      fs.removeSync(this.jobStoreFile);
     }
   }
 }

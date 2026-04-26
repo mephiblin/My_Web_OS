@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Cloud, Plus, Trash2, ExternalLink, RefreshCw, AlertCircle } from 'lucide-svelte';
   import { addToast } from '../../../core/stores/toastStore.js';
+  import { redactSensitiveText } from '../../../utils/api.js';
   import {
     fetchCloudProviders,
     fetchCloudRemotes,
@@ -23,6 +24,10 @@
   let writeContent = $state('');
   let writing = $state(false);
 
+  function errorMessage(err, fallback) {
+    return redactSensitiveText(err?.message || err?.error || fallback);
+  }
+
   function getMountState(remote) {
     if (remote?.mountStatus) return remote.mountStatus;
     if (remote?.mounted === true || remote?.mountUrl || remote?.url) return 'mounted';
@@ -31,7 +36,7 @@
   }
 
   function getMountUrl(remote) {
-    return remote?.mountUrl || remote?.url || '';
+    return redactSensitiveText(remote?.mountUrl || remote?.url || '');
   }
 
   async function fetchProviders() {
@@ -70,16 +75,16 @@
       const res = await setupCloudRemote({ name: newRemoteName, provider: selectedProvider });
 
       if (res.success) {
-        addToast(res.message || 'Cloud storage added successfully', 'success');
+        addToast(redactSensitiveText(res.message || 'Cloud storage added successfully'), 'success');
         showAddModal = false;
         newRemoteName = '';
         selectedProvider = '';
         await fetchCloudData();
       } else {
-        addToast(res.error || 'Setup failed', 'error');
+        addToast(redactSensitiveText(res.error || 'Setup failed'), 'error');
       }
     } catch (err) {
-      addToast('Error during setup', 'error');
+      addToast(errorMessage(err, 'Cloud provider setup failed. Check rclone/provider configuration.'), 'error');
     } finally {
       settingUp = false;
     }
@@ -90,13 +95,13 @@
       const res = await mountCloudRemote(name);
 
       if (res.success) {
-        addToast(`Mounted ${name} at ${res.url}`, 'success');
+        addToast(redactSensitiveText(`Mounted ${name} at ${res.url || ''}`), 'success');
         await refreshRemotes();
       } else {
-        addToast(res.error || 'Mount failed', 'error');
+        addToast(redactSensitiveText(res.error || 'Mount failed'), 'error');
       }
     } catch (err) {
-      addToast('Error during mount', 'error');
+      addToast(errorMessage(err, 'Cloud mount failed. Check rclone/provider setup.'), 'error');
     }
   }
 
@@ -128,10 +133,10 @@
       if (result.success) {
         addToast('Cloud write test succeeded', 'success');
       } else {
-        addToast(result.error || result.message || 'Cloud write test failed', 'error');
+        addToast(redactSensitiveText(result.error || result.message || 'Cloud write test failed'), 'error');
       }
     } catch (err) {
-      addToast('Cloud write request failed', 'error');
+      addToast(errorMessage(err, 'Cloud write request failed. Check rclone/provider setup.'), 'error');
     } finally {
       writing = false;
     }

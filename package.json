@@ -8,6 +8,7 @@
     "verify:syntax": "node tools/verify-syntax.js",
     "verify:packages": "npm run apps:registry:migrate -- --dry-run --fail-on-removal && npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json",
     "verify:client": "npm --prefix client run build",
+    "verify:ui-smoke": "node tools/ui-smoke-gate.js",
     "verify:docker-config": "docker compose config",
     "verify": "npm run verify:syntax && npm test && npm run verify:packages && npm run verify:client",
     "verify:ci": "npm run verify:syntax && npm test && npm run verify:packages && npm run verify:client",

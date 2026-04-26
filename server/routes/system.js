@@ -13,7 +13,12 @@ const { APP_API_POLICY, checkCompatibility } = require('../services/appApiPolicy
 const storageService = require('../services/storageService');
 const stateStore = require('../services/stateStore');
 const serverConfig = require('../config/serverConfig');
-const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath } = require('../utils/pathPolicy');
+const {
+  resolveSafePath,
+  isWithinAllowedRoots,
+  isProtectedSystemPath,
+  assertWithinAllowedRealRoots
+} = require('../utils/pathPolicy');
 const inventoryPaths = require('../utils/inventoryPaths');
 const mediaLibraryPaths = require('../utils/mediaLibraryPaths');
 
@@ -261,6 +266,17 @@ async function resolveAndValidateBackupPath(rawPath, fieldName) {
       403,
       `BACKUP_JOB_${fieldName.toUpperCase()}_SYSTEM_PROTECTED`,
       `${fieldName} cannot target protected system inventory paths.`,
+      { path: absolutePath }
+    );
+  }
+
+  try {
+    await assertWithinAllowedRealRoots(absolutePath, allowedRoots);
+  } catch (err) {
+    throw createBackupError(
+      err?.status || 403,
+      `BACKUP_JOB_${fieldName.toUpperCase()}_FORBIDDEN`,
+      `${fieldName} must stay inside allowed roots after symlink resolution.`,
       { path: absolutePath }
     );
   }

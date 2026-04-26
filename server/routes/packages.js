@@ -335,6 +335,212 @@ function buildPackageDeleteApprovalAudit(input = {}) {
   };
 }
 
+function stableJsonStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJsonStringify(item)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableJsonStringify(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function computeObjectHash(label, value) {
+  const hash = crypto.createHash('sha256');
+  hash.update(`${label}\0`);
+  hash.update(stableJsonStringify(value));
+  return `sha256:${hash.digest('hex')}`;
+}
+
+async function computeFileHash(filePath) {
+  const hash = crypto.createHash('sha256');
+  await new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', resolve);
+  });
+  return `sha256:${hash.digest('hex')}`;
+}
+
+function getLifecycleApprovalAction(operationType) {
+  const type = String(operationType || '').trim();
+  if (type === 'rollback') return 'package.rollback';
+  if (type === 'manifest-update') return 'package.manifest.update';
+  if (type === 'update') return 'package.update';
+  return 'package.install';
+}
+
+function getLifecycleApprovalCodePrefix(action) {
+  if (action === 'package.rollback') return 'PACKAGE_ROLLBACK_APPROVAL';
+  if (action === 'package.manifest.update') return 'PACKAGE_MANIFEST_APPROVAL';
+  if (action === 'package.import') return 'PACKAGE_IMPORT_APPROVAL';
+  if (action === 'package.update') return 'PACKAGE_UPDATE_APPROVAL';
+  return 'PACKAGE_INSTALL_APPROVAL';
+}
+
+function getLifecycleApprovalImpact(action, preflight = {}) {
+  const operationType = preflight.operation?.type || '';
+  if (action === 'package.rollback') {
+    return [
+      'The selected package backup will replace the current package files.',
+      'Runtime state may be stopped and restarted during rollback.',
+      'Current package code and manifest behavior can change.'
+    ];
+  }
+  if (action === 'package.manifest.update') {
+    return [
+      'Package manifest permissions, runtime settings, and file associations may change.',
+      'Package lifecycle metadata may be updated.',
+      'Runtime behavior can change after the manifest is saved.'
+    ];
+  }
+  if (action === 'package.update' || operationType === 'update') {
+    return [
+      'Existing package files may be replaced.',
+      'A backup snapshot may be created before overwrite.',
+      'Executable package code, permissions, runtime behavior, and file associations can change.'
+    ];
+  }
+  return [
+    'A new package will be installed into the local inventory.',
+    'Executable package code, permissions, runtime behavior, and file associations can be added.',
+    'Package lifecycle state will be recorded.'
+  ];
+}
+
+function buildLifecycleRecoverability(preflight = {}) {
+  const backupPlan = preflight.backupPlan || {};
+  const backups = Array.isArray(preflight.availableBackups) ? preflight.availableBackups : [];
+  return {
+    backupPlanned: Boolean(backupPlan.required),
+    backupReason: backupPlan.reason || null,
+    backupAvailable: backups.length > 0,
+    rollbackSupported: backups.length > 0 || Boolean(backupPlan.required),
+    selectedBackupId: preflight.selectedBackup?.id || preflight.operation?.backupId || null
+  };
+}
+
+function createLifecycleApprovalTargetHash(action, evidence = {}) {
+  return computeObjectHash('package-lifecycle-approval-target-v1', {
+    action,
+    ...evidence
+  });
+}
+
+function attachLifecycleApproval(preflight, options = {}) {
+  const action = options.action || getLifecycleApprovalAction(preflight?.operation?.type);
+  const target = {
+    type: action === 'package.rollback' ? 'package.rollback' : 'package',
+    id: String(options.targetId || preflight?.operation?.appId || '').trim(),
+    label: String(options.label || preflight?.operation?.appId || '').trim()
+  };
+  const recoverability = buildLifecycleRecoverability(preflight);
+  const operation = operationApprovalService.createOperation({
+    action,
+    userId: options.userId,
+    target,
+    targetHash: options.targetHash,
+    typedConfirmation: target.id,
+    metadata: {
+      recoverability,
+      operation: preflight.operation || null,
+      lifecycleSafeguards: preflight.lifecycleSafeguards || null
+    }
+  });
+
+  return {
+    ...preflight,
+    action,
+    target,
+    riskLevel: 'high',
+    impact: getLifecycleApprovalImpact(action, preflight),
+    recoverability,
+    operationId: operation.operationId,
+    targetHash: options.targetHash,
+    approval: {
+      required: true,
+      typedConfirmation: target.id,
+      expiresAt: operation.expiresAt
+    }
+  };
+}
+
+function normalizeApprovalPayload(body = {}) {
+  const approval = body?.approval && typeof body.approval === 'object' && !Array.isArray(body.approval)
+    ? body.approval
+    : body;
+  return approval && typeof approval === 'object' && !Array.isArray(approval) ? approval : {};
+}
+
+function hasApprovalEvidence(approval = {}) {
+  return Boolean(
+    String(approval.operationId || '').trim() &&
+    String(approval.nonce || '').trim() &&
+    String(approval.targetHash || '').trim()
+  );
+}
+
+function assertNoLegacyApprovalShortcut(approval = {}, prefix) {
+  if (approval && approval.approved === true && !hasApprovalEvidence(approval)) {
+    const err = new Error('Legacy approval shortcuts are not accepted for package lifecycle operations.');
+    err.code = `${prefix}_LEGACY_APPROVAL_REJECTED`;
+    err.status = 428;
+    throw err;
+  }
+}
+
+function consumeLifecycleApproval({ approval, action, targetId, targetHash, userId }) {
+  const prefix = getLifecycleApprovalCodePrefix(action);
+  assertNoLegacyApprovalShortcut(approval, prefix);
+  if (!hasApprovalEvidence(approval)) {
+    const err = new Error('Package lifecycle operation requires a scoped approval nonce.');
+    err.code = `${prefix}_REQUIRED`;
+    err.status = 428;
+    throw err;
+  }
+  if (String(approval.targetHash || '').trim() !== targetHash) {
+    const err = new Error('Package lifecycle approval target hash does not match the current package state.');
+    err.code = `${prefix}_TARGET_CHANGED`;
+    err.status = 428;
+    throw err;
+  }
+  try {
+    return operationApprovalService.consumeApproval({
+      operationId: approval.operationId,
+      nonce: approval.nonce,
+      userId,
+      action,
+      targetId,
+      targetHash
+    });
+  } catch (err) {
+    const wrapped = new Error(err.message);
+    wrapped.code = `${prefix}_INVALID`;
+    wrapped.status = 428;
+    wrapped.cause = err;
+    throw wrapped;
+  }
+}
+
+async function logLifecycleApprovalAudit(action, details = {}, level = 'INFO') {
+  await auditService.log(
+    'PACKAGES',
+    action,
+    {
+      operationId: details.operationId || null,
+      appId: details.appId || details.target?.id || null,
+      target: details.target || null,
+      targetHash: details.targetHash || '',
+      approval: details.approval || null,
+      result: details.result || null,
+      user: details.user
+    },
+    level
+  );
+}
+
 async function resolvePackagePath(appId, relativePath = '') {
   const appRoot = await appPaths.getAppRoot(appId);
   const safeRelativePath = normalizeRelativePath(relativePath);
@@ -1914,8 +2120,8 @@ function createTemplateEntryContent(templateId, options = {}) {
         if (code === 'FS_FILE_GRANT_INVALID') return 'Grant is invalid or expired';
         if (code === 'FS_FILE_GRANT_SCOPE_MISMATCH') return 'Grant does not match selected host path';
         if (code === 'FS_FILE_GRANT_MODE_DENIED') return 'Grant does not allow this operation';
-        if (code === 'FS_WRITE_OVERWRITE_APPROVAL_REQUIRED') return 'Target exists. Enable overwrite and approval.';
-        if (code === 'FS_WRITE_APPROVAL_REQUIRED') return 'Overwrite approval is required for host write.';
+        if (code === 'FS_WRITE_OVERWRITE_APPROVAL_REQUIRED' || code === 'SANDBOX_FILE_WRITE_OVERWRITE_APPROVAL_REQUIRED') return 'Target exists. Enable overwrite and approval.';
+        if (code === 'FS_WRITE_APPROVAL_REQUIRED' || code === 'SANDBOX_FILE_WRITE_APPROVAL_REQUIRED') return 'Overwrite approval is required for host write.';
         if (code === 'FS_PERMISSION_DENIED') return 'Path is outside allowed roots';
         if (code === 'FS_INVALID_PATH') return 'Host path is invalid';
         if (code) return code + ': ' + (raw || 'Host operation failed');
@@ -1930,10 +2136,27 @@ function createTemplateEntryContent(templateId, options = {}) {
           return { ok: false, message: 'Invalid JSON. Disable validation to write raw text.' };
         }
       }
-      function buildWriteApproval() {
+      async function requestWriteApproval(sdk, path, grantId) {
         if (!approveOverwriteEl.checked) return undefined;
-        const reason = String(approvalReasonEl.value || '').trim() || 'json-formatter-host-write';
-        return { approved: true, reason };
+        if (!sdk?.files?.writePreflight || !sdk?.files?.approveWrite) {
+          throw new Error('WebOS overwrite approval API unavailable');
+        }
+        const preflight = await sdk.files.writePreflight({
+          path,
+          grantId
+        });
+        const approval = await sdk.files.approveWrite({
+          path,
+          operationId: preflight?.operationId,
+          typedConfirmation: preflight?.approval?.typedConfirmation
+        });
+        const reason = String(approvalReasonEl.value || '').trim();
+        return {
+          operationId: approval?.operationId,
+          nonce: approval?.nonce,
+          targetHash: preflight?.targetHash,
+          reason: reason || undefined
+        };
       }
       document.getElementById('format').addEventListener('click', () => {
         try {
@@ -2024,12 +2247,12 @@ function createTemplateEntryContent(templateId, options = {}) {
           return;
         }
         const overwrite = overwriteHostEl.checked;
-        const approval = buildWriteApproval();
-        if (overwrite && (!approval || approval.approved !== true)) {
+        if (overwrite && !approveOverwriteEl.checked) {
           setStatus('Enable overwrite approval before writing existing host file');
           return;
         }
         try {
+          const approval = overwrite ? await requestWriteApproval(sdk, path, grantId) : undefined;
           await sdk.files.write({
             path,
             grantId,
@@ -4020,6 +4243,7 @@ async function buildZipImportPreflight(filePath, options = {}) {
   const incomingManifest = await readManifestFromZip(filePath);
   const appId = incomingManifest.id;
   const overwrite = parseBooleanBody(body.overwrite);
+  const archiveHash = await computeFileHash(filePath);
   const existing = await packageRegistryService.getSandboxApp(appId);
   const localWorkspaceInput = parseMultipartJsonField(body.localWorkspace, 'localWorkspace');
   const localWorkspaceBridge = await resolveLocalWorkspaceBridge(localWorkspaceInput, {
@@ -4097,11 +4321,12 @@ async function buildZipImportPreflight(filePath, options = {}) {
 
   blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
 
-  return {
+  const preflight = {
     operation: {
       type: operationType,
       appId,
       overwrite,
+      archiveHash,
       source: 'upload:zip',
       localWorkspaceBridge,
       existing: existing
@@ -4136,6 +4361,25 @@ async function buildZipImportPreflight(filePath, options = {}) {
       blockers
     }
   };
+  const approvalAction = operationType === 'install' ? 'package.import' : 'package.update';
+  const targetHash = createLifecycleApprovalTargetHash(approvalAction, {
+    source: 'upload:zip',
+    archiveHash,
+    manifestId: incomingManifest.id,
+    manifestHash: computeObjectHash('package-import-manifest-v1', incomingManifest),
+    existingAppId: existing?.id || null,
+    existingVersion: existing?.version || null,
+    requestedOverwrite: overwrite,
+    localWorkspaceBridge,
+    lifecycleSafeguards,
+    blockers
+  });
+  return attachLifecycleApproval(preflight, {
+    userId: options.userId,
+    targetId: appId,
+    action: approvalAction,
+    targetHash
+  });
 }
 
 function mapPreflightStatusToHttpStatus(err) {
@@ -4719,6 +4963,74 @@ router.get(`/${APP_ID_ROUTE}/export`, async (req, res) => {
   }
 });
 
+router.post('/lifecycle/approve', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const action = String(body.action || '').trim();
+    const targetId = appPaths.assertSafeAppId(body.targetId || body.appId);
+    const operationId = String(body.operationId || '').trim();
+    const typedConfirmation = String(body.typedConfirmation || '').trim();
+    const allowedActions = new Set([
+      'package.install',
+      'package.update',
+      'package.import',
+      'package.rollback',
+      'package.manifest.update'
+    ]);
+
+    if (!allowedActions.has(action)) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_LIFECYCLE_APPROVAL_ACTION_INVALID',
+        message: 'Package lifecycle approval action is invalid.'
+      });
+    }
+    if (!operationId) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_LIFECYCLE_APPROVAL_OPERATION_REQUIRED',
+        message: 'Body "operationId" is required.'
+      });
+    }
+
+    const approval = operationApprovalService.approveOperation({
+      operationId,
+      userId: req.user?.username,
+      action,
+      targetId,
+      typedConfirmation
+    });
+
+    await logLifecycleApprovalAudit(action, {
+      operationId,
+      appId: targetId,
+      user: req.user?.username,
+      approval: {
+        approved: true,
+        expiresAt: approval.expiresAt
+      },
+      result: { status: 'approved' }
+    }, 'WARN');
+
+    return res.json({
+      success: true,
+      approval
+    });
+  } catch (err) {
+    const status =
+      err.code === 'OPERATION_APPROVAL_ALREADY_APPROVED'
+        ? 409
+        : (err.code === 'APP_ID_INVALID' ? 400 : 400);
+    return res.status(status).json({
+      error: true,
+      code: err.code === 'OPERATION_APPROVAL_ALREADY_APPROVED'
+        ? 'PACKAGE_LIFECYCLE_APPROVAL_ALREADY_APPROVED'
+        : 'PACKAGE_LIFECYCLE_APPROVAL_INVALID',
+      message: err.message
+    });
+  }
+});
+
 router.post('/import/preflight', upload.single('package'), async (req, res) => {
   try {
     if (!req.file) {
@@ -4731,6 +5043,7 @@ router.post('/import/preflight', upload.single('package'), async (req, res) => {
 
     const preflight = await buildZipImportPreflight(req.file.path, {
       body: req.body,
+      userId: req.user?.username,
       runtimeManager: req.app.get('runtimeManager')
     });
 
@@ -4773,6 +5086,29 @@ router.post('/import', upload.single('package'), async (req, res) => {
       operationType: existing ? 'update' : 'install',
       appId
     });
+    const approval = parseMultipartJsonField(req.body?.approval, 'approval') || {};
+    const preflight = await buildZipImportPreflight(req.file.path, {
+      body: req.body,
+      userId: req.user?.username,
+      runtimeManager
+    });
+    let approvalContext = null;
+    try {
+      approvalContext = consumeLifecycleApproval({
+        approval,
+        action: preflight.action,
+        targetId: appId,
+        targetHash: preflight.targetHash,
+        userId: req.user?.username
+      });
+    } catch (approvalErr) {
+      return res.status(approvalErr.status || 428).json({
+        error: true,
+        code: approvalErr.code || 'PACKAGE_IMPORT_APPROVAL_INVALID',
+        message: approvalErr.message,
+        preflight
+      });
+    }
     const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
     const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
 
@@ -4818,6 +5154,14 @@ router.post('/import', upload.single('package'), async (req, res) => {
         overwrite,
         localWorkspaceBridge,
         backupId: backup?.id || null,
+        operationId: approvalContext.operationId,
+        approval: {
+          operationId: approvalContext.operationId,
+          nonceConsumed: true,
+          approvedAt: approvalContext.approvedAt,
+          consumedAt: approvalContext.consumedAt,
+          targetHash: approvalContext.targetHash
+        },
         user: req.user?.username
       },
       'INFO'
@@ -5094,6 +5438,7 @@ router.post('/registry/preflight', async (req, res) => {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const target = await resolveRegistryInstallTarget(body);
     tempZipFile = await downloadRegistryPackageZip(target.zipUrl);
+    const archiveHash = await computeFileHash(tempZipFile);
 
     const incomingManifest = await readManifestFromZip(tempZipFile);
     const appId = incomingManifest.id;
@@ -5211,9 +5556,7 @@ router.post('/registry/preflight', async (req, res) => {
 
     blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
 
-    return res.json({
-      success: true,
-      preflight: {
+    const preflight = {
         operation: {
           type: operationType,
           appId,
@@ -5222,6 +5565,7 @@ router.post('/registry/preflight', async (req, res) => {
           sourceId: target.sourceId || null,
           packageId: target.packageId || null,
           zipUrl: target.zipUrl,
+          archiveHash,
           existing: existing
             ? {
                 installed: true,
@@ -5253,7 +5597,34 @@ router.post('/registry/preflight', async (req, res) => {
           ready: blockers.length === 0,
           blockers
         }
-      }
+      };
+    const targetHash = createLifecycleApprovalTargetHash(getLifecycleApprovalAction(operationType), {
+      source: target.sourceId ? `registry:${target.sourceId}` : 'registry:direct-url',
+      sourceId: target.sourceId || null,
+      packageId: target.packageId || null,
+      zipUrl: target.zipUrl,
+      registryMetadata: target.targetPackage || null,
+      archiveHash,
+      manifestId: incomingManifest.id,
+      manifestHash: computeObjectHash('package-registry-manifest-v1', incomingManifest),
+      existingAppId: existing?.id || null,
+      existingVersion: existing?.version || null,
+      requestedOverwrite: target.overwrite,
+      forcePolicyBypass: target.forcePolicyBypass,
+      localWorkspaceBridge,
+      lifecycleSafeguards,
+      updatePolicy,
+      blockers
+    });
+
+    return res.json({
+      success: true,
+      preflight: attachLifecycleApproval(preflight, {
+        userId: req.user?.username,
+        targetId: appId,
+        action: getLifecycleApprovalAction(operationType),
+        targetHash
+      })
     });
   } catch (err) {
     return res.status(mapPreflightStatusToHttpStatus(err)).json({
@@ -5320,6 +5691,7 @@ router.post('/registry/install', async (req, res) => {
     }
 
     tempZipFile = await downloadRegistryPackageZip(zipUrl);
+    const archiveHash = await computeFileHash(tempZipFile);
     const runtimeManager = req.app.get('runtimeManager');
     const incomingManifest = await readManifestFromZip(tempZipFile);
     const appId = incomingManifest.id;
@@ -5330,9 +5702,20 @@ router.post('/registry/install', async (req, res) => {
     });
     const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
     const wasRunning = runtimeStatus && ['running', 'starting', 'degraded'].includes(runtimeStatus.status);
+    const lifecycle = existing ? await packageLifecycleService.getLifecycle(appId).catch(() => null) : null;
+    const dependencyCompatibility = await evaluateManifestDependencyCompatibility(incomingManifest);
+    const backupPlan = buildBackupPlanSummary({ overwrite, existing });
+    const lifecycleSafeguards = buildLifecycleSafeguards({
+      operationType: existing ? 'update' : 'install',
+      existing: Boolean(existing),
+      lifecycle,
+      runtimeStatus,
+      dependencyCompatibility,
+      backupPlan
+    });
 
+    let updatePolicy = null;
     if (overwrite && existing && targetPackage) {
-      const lifecycle = await packageLifecycleService.getLifecycle(appId).catch(() => null);
       const policy = channelUpdatePolicyService.evaluateCandidate({
         installedVersion: String(existing.version || '0.0.0').trim() || '0.0.0',
         candidateVersion: incomingManifest.version,
@@ -5341,6 +5724,10 @@ router.post('/registry/install', async (req, res) => {
         publishedAt: targetPackage.release?.publishedAt || '',
         rolloutDelayMs: targetPackage.release?.rolloutDelayMs
       });
+      updatePolicy = {
+        evaluated: true,
+        policy
+      };
 
       if (!policy.allowed && !forcePolicyBypass) {
         return res.status(409).json({
@@ -5363,6 +5750,77 @@ router.post('/registry/install', async (req, res) => {
           });
         }
       }
+    }
+    const operationType = existing ? 'update' : 'install';
+    const blockers = toSafeguardBlockers(lifecycleSafeguards);
+    const preflight = attachLifecycleApproval({
+      operation: {
+        type: operationType,
+        appId,
+        overwrite,
+        localWorkspaceBridge,
+        sourceId: sourceId || null,
+        packageId: packageId || null,
+        zipUrl,
+        archiveHash,
+        existing: existing
+          ? {
+              installed: true,
+              id: existing.id,
+              title: existing.title,
+              version: String(existing.version || '0.0.0').trim() || '0.0.0'
+            }
+          : { installed: false }
+      },
+      permissionsReview: buildPermissionReview(incomingManifest),
+      dependencyCompatibility,
+      backupPlan,
+      lifecycleSafeguards,
+      localWorkspaceBridge,
+      updatePolicy: updatePolicy || { evaluated: false },
+      executionReadiness: {
+        ready: blockers.length === 0,
+        blockers
+      }
+    }, {
+      userId: req.user?.username,
+      targetId: appId,
+      action: getLifecycleApprovalAction(operationType),
+      targetHash: createLifecycleApprovalTargetHash(getLifecycleApprovalAction(operationType), {
+        source: sourceId ? `registry:${sourceId}` : 'registry:direct-url',
+        sourceId: sourceId || null,
+        packageId: packageId || null,
+        zipUrl,
+        registryMetadata: targetPackage || null,
+        archiveHash,
+        manifestId: incomingManifest.id,
+        manifestHash: computeObjectHash('package-registry-manifest-v1', incomingManifest),
+        existingAppId: existing?.id || null,
+        existingVersion: existing?.version || null,
+        requestedOverwrite: overwrite,
+        forcePolicyBypass,
+        localWorkspaceBridge,
+        lifecycleSafeguards,
+        updatePolicy,
+        blockers
+      })
+    });
+    let approvalContext = null;
+    try {
+      approvalContext = consumeLifecycleApproval({
+        approval: normalizeApprovalPayload(body),
+        action: preflight.action,
+        targetId: appId,
+        targetHash: preflight.targetHash,
+        userId: req.user?.username
+      });
+    } catch (approvalErr) {
+      return res.status(approvalErr.status || 428).json({
+        error: true,
+        code: approvalErr.code || 'REGISTRY_PACKAGE_APPROVAL_INVALID',
+        message: approvalErr.message,
+        preflight
+      });
     }
 
     let backup = null;
@@ -5409,6 +5867,14 @@ router.post('/registry/install', async (req, res) => {
         overwrite,
         localWorkspaceBridge,
         backupId: backup?.id || null,
+        operationId: approvalContext.operationId,
+        approval: {
+          operationId: approvalContext.operationId,
+          nonceConsumed: true,
+          approvedAt: approvalContext.approvedAt,
+          consumedAt: approvalContext.consumedAt,
+          targetHash: approvalContext.targetHash
+        },
         user: req.user?.username
       },
       'INFO'
@@ -5983,9 +6449,7 @@ router.post(`/${APP_ID_ROUTE}/rollback/preflight`, async (req, res) => {
         : [])
     ];
 
-    return res.json({
-      success: true,
-      preflight: {
+    const preflight = {
         operation: {
           type: 'rollback',
           appId,
@@ -5998,7 +6462,26 @@ router.post(`/${APP_ID_ROUTE}/rollback/preflight`, async (req, res) => {
           ready: blockers.length === 0,
           blockers
         }
-      }
+      };
+    const currentManifest = await readManifestRaw(appId).catch(() => null);
+    const targetHash = createLifecycleApprovalTargetHash('package.rollback', {
+      appId,
+      backupId: backupId || null,
+      selectedBackup,
+      currentManifestHash: currentManifest ? computeObjectHash('package-rollback-current-manifest-v1', currentManifest) : null,
+      runtimeStatus,
+      lifecycleSafeguards: safeguards,
+      blockers
+    });
+
+    return res.json({
+      success: true,
+      preflight: attachLifecycleApproval(preflight, {
+        userId: req.user?.username,
+        targetId: appId,
+        action: 'package.rollback',
+        targetHash
+      })
     });
   } catch (err) {
     const status =
@@ -6028,6 +6511,8 @@ router.post(`/${APP_ID_ROUTE}/rollback`, async (req, res) => {
     const runtimeManager = req.app.get('runtimeManager');
     const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
     const rollbackPreflightLifecycle = await packageLifecycleService.getLifecycle(appId).catch(() => null);
+    const backups = Array.isArray(rollbackPreflightLifecycle?.backups) ? rollbackPreflightLifecycle.backups : [];
+    const selectedBackup = backups.find((item) => item.id === backupId) || null;
     const rollbackPreflight = buildLifecycleSafeguards({
       operationType: 'rollback',
       existing: true,
@@ -6036,7 +6521,62 @@ router.post(`/${APP_ID_ROUTE}/rollback`, async (req, res) => {
       dependencyCompatibility: null,
       backupPlan: { required: true, reason: 'rollback' }
     });
-    const rollbackBlockers = toSafeguardBlockers(rollbackPreflight);
+    const rollbackBlockers = [
+      ...toSafeguardBlockers(rollbackPreflight),
+      ...(!selectedBackup
+        ? [{
+            code: 'PACKAGE_BACKUP_NOT_FOUND',
+            message: `Backup "${backupId}" was not found.`,
+            area: 'rollback'
+          }]
+        : [])
+    ];
+    const currentManifest = await readManifestRaw(appId).catch(() => null);
+    const preflight = attachLifecycleApproval({
+      operation: {
+        type: 'rollback',
+        appId,
+        backupId
+      },
+      availableBackups: backups,
+      selectedBackup,
+      lifecycleSafeguards: rollbackPreflight,
+      executionReadiness: {
+        ready: rollbackBlockers.length === 0,
+        blockers: rollbackBlockers
+      }
+    }, {
+      userId: req.user?.username,
+      targetId: appId,
+      action: 'package.rollback',
+      targetHash: createLifecycleApprovalTargetHash('package.rollback', {
+        appId,
+        backupId,
+        selectedBackup,
+        currentManifestHash: currentManifest ? computeObjectHash('package-rollback-current-manifest-v1', currentManifest) : null,
+        runtimeStatus,
+        lifecycleSafeguards: rollbackPreflight,
+        blockers: rollbackBlockers
+      })
+    });
+    let approvalContext = null;
+    try {
+      approvalContext = consumeLifecycleApproval({
+        approval: normalizeApprovalPayload(req.body || {}),
+        action: 'package.rollback',
+        targetId: appId,
+        targetHash: preflight.targetHash,
+        userId: req.user?.username
+      });
+    } catch (approvalErr) {
+      return res.status(approvalErr.status || 428).json({
+        error: true,
+        code: approvalErr.code || 'PACKAGE_ROLLBACK_APPROVAL_INVALID',
+        message: approvalErr.message,
+        preflight
+      });
+    }
+
     if (rollbackBlockers.length > 0) {
       return res.status(400).json({
         error: true,
@@ -6063,7 +6603,19 @@ router.post(`/${APP_ID_ROUTE}/rollback`, async (req, res) => {
     await auditService.log(
       'PACKAGES',
       `Rollback Package: ${appId}`,
-      { appId, backupId, user: req.user?.username },
+      {
+        appId,
+        backupId,
+        operationId: approvalContext.operationId,
+        approval: {
+          operationId: approvalContext.operationId,
+          nonceConsumed: true,
+          approvedAt: approvalContext.approvedAt,
+          consumedAt: approvalContext.consumedAt,
+          targetHash: approvalContext.targetHash
+        },
+        user: req.user?.username
+      },
       'WARN'
     );
 
@@ -6286,9 +6838,7 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
     });
     blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
 
-    return res.json({
-      success: true,
-      preflight: {
+    const preflight = {
         operation: {
           type: 'manifest-update',
           appId: routeAppId
@@ -6306,7 +6856,27 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
           ready: blockers.length === 0,
           blockers
         }
-      }
+      };
+    const targetHash = createLifecycleApprovalTargetHash('package.manifest.update', {
+      appId: routeAppId,
+      previousManifestHash: previousManifest ? computeObjectHash('package-manifest-previous-v1', previousManifest) : null,
+      incomingManifestHash: computeObjectHash('package-manifest-incoming-v1', manifest),
+      permissionsReview,
+      mediaScopeReview,
+      dependencyCompatibility,
+      runtimeProfile,
+      lifecycleSafeguards,
+      blockers
+    });
+
+    return res.json({
+      success: true,
+      preflight: attachLifecycleApproval(preflight, {
+        userId: req.user?.username,
+        targetId: routeAppId,
+        action: 'package.manifest.update',
+        targetHash
+      })
     });
   } catch (err) {
     const status =
@@ -6375,6 +6945,89 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
         message: `Entry file "${manifest.entry}" does not exist.`
       });
     }
+    let dependencyCompatibility = null;
+    try {
+      dependencyCompatibility = await evaluateManifestDependencyCompatibility(manifest);
+    } catch (err) {
+      const wrapped = new Error('Failed to evaluate dependency and compatibility checks.');
+      wrapped.code = 'PACKAGE_MANIFEST_COMPATIBILITY_CHECK_FAILED';
+      wrapped.cause = err;
+      throw wrapped;
+    }
+    const runtimeManager = req.app.get('runtimeManager');
+    const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[routeAppId] || null;
+    const lifecycle = await packageLifecycleService.getLifecycle(routeAppId).catch(() => null);
+    const lifecycleSafeguards = buildLifecycleSafeguards({
+      operationType: 'manifest-update',
+      existing: true,
+      lifecycle,
+      runtimeStatus,
+      dependencyCompatibility,
+      backupPlan: { required: true, reason: 'manifest-update' }
+    });
+    const blockers = [
+      ...mediaScopeReview.blockers,
+      ...toSafeguardBlockers(lifecycleSafeguards)
+    ];
+    const preflight = attachLifecycleApproval({
+      operation: {
+        type: 'manifest-update',
+        appId: routeAppId
+      },
+      permissionsReview: buildPermissionReview(manifest),
+      mediaScopeReview,
+      dependencyCompatibility,
+      lifecycleSafeguards,
+      onboarding: buildExternalOnboardingGuide({
+        manifest,
+        operationType: 'manifest-update',
+        dependencyCompatibility
+      }),
+      executionReadiness: {
+        ready: blockers.length === 0,
+        blockers
+      }
+    }, {
+      userId: req.user?.username,
+      targetId: routeAppId,
+      action: 'package.manifest.update',
+      targetHash: createLifecycleApprovalTargetHash('package.manifest.update', {
+        appId: routeAppId,
+        previousManifestHash: previousManifest ? computeObjectHash('package-manifest-previous-v1', previousManifest) : null,
+        incomingManifestHash: computeObjectHash('package-manifest-incoming-v1', manifest),
+        permissionsReview: buildPermissionReview(manifest),
+        mediaScopeReview,
+        dependencyCompatibility,
+        runtimeProfile,
+        lifecycleSafeguards,
+        blockers
+      })
+    });
+    let approvalContext = null;
+    try {
+      approvalContext = consumeLifecycleApproval({
+        approval: normalizeApprovalPayload(body),
+        action: 'package.manifest.update',
+        targetId: routeAppId,
+        targetHash: preflight.targetHash,
+        userId: req.user?.username
+      });
+    } catch (approvalErr) {
+      return res.status(approvalErr.status || 428).json({
+        error: true,
+        code: approvalErr.code || 'PACKAGE_MANIFEST_APPROVAL_INVALID',
+        message: approvalErr.message,
+        preflight
+      });
+    }
+    if (blockers.length > 0) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_MANIFEST_GUARD_BLOCKED',
+        message: 'Manifest update is blocked by package lifecycle safeguards.',
+        preflight
+      });
+    }
 
     await fs.writeJson(await getManifestFilePath(routeAppId), manifest, { spaces: 2 });
     if (String(previousManifest?.version || '') !== String(manifest.version || '')) {
@@ -6392,6 +7045,14 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
       {
         appId: routeAppId,
         user: req.user?.username,
+        operationId: approvalContext.operationId,
+        approval: {
+          operationId: approvalContext.operationId,
+          nonceConsumed: true,
+          approvedAt: approvalContext.approvedAt,
+          consumedAt: approvalContext.consumedAt,
+          targetHash: approvalContext.targetHash
+        },
         mediaScopeChanges: mediaScopeReview.changes,
         mediaScopeApproval: {
           required: mediaScopeReview.requiresApproval,

@@ -46,16 +46,29 @@ const shareService = {
       path: filePath,
       createdAt: Date.now(),
       expiryDate,
-      name: path.basename(filePath)
+      name: path.basename(filePath),
+      policy: {
+        passwordRequired: false,
+        maxDownloads: null,
+        rateLimit: null
+      }
     });
     await this.save();
     return id;
   },
 
+  isExpired(share, currentTime = Date.now()) {
+    return Boolean(share?.expiryDate && currentTime > share.expiryDate);
+  },
+
+  getShareRecord(id) {
+    return shares.get(id) || null;
+  },
+
   getShare(id) {
     const share = shares.get(id);
     if (!share) return null;
-    if (share.expiryDate && Date.now() > share.expiryDate) {
+    if (this.isExpired(share)) {
       this.removeShare(id);
       return null;
     }

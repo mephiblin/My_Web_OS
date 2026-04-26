@@ -1,6 +1,27 @@
 import { apiFetch } from '../../../../utils/api.js';
 
+function isCloudPath(path) {
+  return String(path || '').trim().startsWith('cloud://');
+}
+
+function parseCloudPath(path) {
+  const normalized = String(path || '').trim().replace(/^cloud:\/\//, '');
+  const segments = normalized.split('/');
+  const remote = String(segments.shift() || '').trim();
+  const remotePath = segments.join('/');
+  return { remote, remotePath };
+}
+
 export async function readFile(path, options = {}) {
+  if (isCloudPath(path)) {
+    const { remote, remotePath } = parseCloudPath(path);
+    const cloudParams = new URLSearchParams({
+      remote,
+      path: remotePath
+    });
+    return apiFetch(`/api/cloud/read?${cloudParams.toString()}`);
+  }
+
   const params = new URLSearchParams({
     path: String(path || '')
   });
@@ -14,6 +35,12 @@ export async function readFile(path, options = {}) {
 }
 
 export async function saveFile(path, content, options = {}) {
+  if (isCloudPath(path)) {
+    const err = new Error('Cloud/WebDAV files are opened read-only from File Station.');
+    err.code = 'CLOUD_FILE_READ_ONLY';
+    throw err;
+  }
+
   const payload = {
     path,
     content,
@@ -26,6 +53,32 @@ export async function saveFile(path, content, options = {}) {
   return apiFetch('/api/fs/write', {
     method: 'POST',
     body: JSON.stringify(payload)
+  });
+}
+
+export async function preflightOverwrite(path, options = {}) {
+  return apiFetch('/api/fs/write/preflight', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      grantId: options.grantId || '',
+      appId: options.appId || '',
+      operationSource: options.operationSource || ''
+    })
+  });
+}
+
+export async function approveOverwrite(path, preflight, options = {}) {
+  return apiFetch('/api/fs/write/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      grantId: options.grantId || '',
+      appId: options.appId || '',
+      operationSource: options.operationSource || '',
+      operationId: preflight?.operationId || '',
+      typedConfirmation: preflight?.approval?.typedConfirmation || ''
+    })
   });
 }
 

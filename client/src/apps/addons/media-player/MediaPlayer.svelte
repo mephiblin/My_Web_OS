@@ -14,7 +14,7 @@
   } from 'lucide-svelte';
   import { addToast } from '../../../core/stores/toastStore.js';
   import { activeWindowId, windows, updateWindowTitle } from '../../../core/stores/windowStore.js';
-  import { fetchRawFileTicketUrl } from '../../../utils/api.js';
+  import { fetchRawFileTicketUrl, fetchRawMediaLeaseUrl, redactSensitiveText } from '../../../utils/api.js';
   import {
     fetchMediaInfo,
     fetchMediaSubtitles,
@@ -56,6 +56,9 @@
   let pendingAutoplay = $state(false);
   let mediaUrl = $state('');
   let mediaUrlError = $state('');
+  let mediaRecoveryAttempted = $state(false);
+  let pendingRecoveryTime = $state(null);
+  let pendingRecoveryPlay = $state(false);
 
   const currentWindow = $derived(
     $windows.find((win) => win.appId === 'player' && win.data === data) || null
@@ -66,6 +69,10 @@
   const repeatLabel = $derived(
     repeatMode === 'one' ? 'Repeat: One' : repeatMode === 'all' ? 'Repeat: All' : 'Repeat: Off'
   );
+
+  function isCloudPath(path) {
+    return String(path || '').trim().startsWith('cloud://');
+  }
 
   // Sync prop path to local state ONLY if it changes from outside (e.g. double click new file)
   $effect(() => {
@@ -127,6 +134,18 @@
 
   async function fetchMetadata() {
     if (!mediaPath) return;
+    if (isCloudPath(mediaPath)) {
+      metadata = null;
+      subtitlePath = '';
+      neighbors = { prev: null, next: null };
+      playlist = (isVideo || isAudio)
+        ? [{ path: mediaPath, name: mediaPath.split('/').pop() || mediaPath }]
+        : [];
+      playlistError = '';
+      loadingMeta = false;
+      playlistLoading = false;
+      return;
+    }
     try {
       loadingMeta = true;
       playlistLoading = isVideo || isAudio;
@@ -159,7 +178,7 @@
     } catch (err) {
       console.error('Failed to load metadata', err);
       playlist = [];
-      playlistError = err?.message || 'Failed to load playlist.';
+      playlistError = redactSensitiveText(err?.message || 'Failed to load playlist.');
     } finally {
       loadingMeta = false;
       playlistLoading = false;
@@ -227,7 +246,20 @@
 
   function handleLoadedMetadata(e) {
     duration = e.target.duration || 0;
-    if (pendingAutoplay) {
+    if (pendingRecoveryTime !== null && Number.isFinite(pendingRecoveryTime)) {
+      e.target.currentTime = Math.min(pendingRecoveryTime, e.target.duration || pendingRecoveryTime);
+      currentTime = e.target.currentTime || 0;
+      pendingRecoveryTime = null;
+    }
+
+    if (pendingRecoveryPlay) {
+      pendingRecoveryPlay = false;
+      e.target.play().then(() => {
+        playing = true;
+      }).catch(() => {
+        playing = false;
+      });
+    } else if (pendingAutoplay) {
       pendingAutoplay = false;
       e.target.play().then(() => {
         playing = true;
@@ -235,6 +267,33 @@
         playing = false;
         addToast('Autoplay was blocked by the browser policy.', 'error');
       });
+    }
+  }
+
+  async function handleMediaError() {
+    if (!(isVideo || isAudio || isImage) || !mediaPath) return;
+    if (mediaRecoveryAttempted) {
+      mediaUrlError = 'Media playback could not be recovered. Reopen the file to try again.';
+      return;
+    }
+
+    const el = isVideo ? videoEl : audioEl;
+    const recoveryPath = mediaPath;
+    const resumeTime = (isVideo || isAudio) && Number.isFinite(el?.currentTime) ? el.currentTime : currentTime;
+    const resumePlaying = Boolean((isVideo || isAudio) && el && !el.paused && !el.ended);
+    mediaRecoveryAttempted = true;
+    pendingRecoveryTime = resumeTime;
+    pendingRecoveryPlay = resumePlaying;
+
+    try {
+      const nextUrl = await fetchRawMediaLeaseUrl(recoveryPath, { appId: 'media-player' });
+      if (mediaPath !== recoveryPath) return;
+      mediaUrlError = '';
+      mediaUrl = nextUrl;
+    } catch (err) {
+      pendingRecoveryTime = null;
+      pendingRecoveryPlay = false;
+      mediaUrlError = redactSensitiveText(err?.message || 'Failed to recover media playback.');
     }
   }
 
@@ -331,6 +390,9 @@
       currentTime = 0;
       progress = 0;
       duration = 0;
+      mediaRecoveryAttempted = false;
+      pendingRecoveryTime = null;
+      pendingRecoveryPlay = false;
       fetchMetadata();
       // Synchronize window title
       const fileName = mediaPath.split('/').pop();
@@ -347,14 +409,18 @@
     if (!path) return;
 
     const controller = new AbortController();
-    fetchRawFileTicketUrl(path, { signal: controller.signal })
+    const loadMediaUrl = isVideo || isAudio
+      ? (targetPath, options) => fetchRawMediaLeaseUrl(targetPath, { ...options, appId: 'media-player' })
+      : fetchRawFileTicketUrl;
+    loadMediaUrl(path, { signal: controller.signal })
       .then((url) => {
         if (controller.signal.aborted) return;
+        mediaRecoveryAttempted = false;
         mediaUrl = url;
       })
       .catch((err) => {
         if (err?.name === 'AbortError') return;
-        mediaUrlError = err?.message || 'Failed to load media.';
+        mediaUrlError = redactSensitiveText(err?.message || 'Failed to load media.');
       });
 
     return () => {
@@ -399,6 +465,7 @@
         onended={handleMediaEnded}
         ontimeupdate={handleTimeUpdate}
         onloadedmetadata={handleLoadedMetadata}
+        onerror={handleMediaError}
         onclick={togglePlay}
         crossorigin="anonymous"
       >
@@ -420,6 +487,7 @@
           onended={handleMediaEnded}
           ontimeupdate={handleTimeUpdate}
           onloadedmetadata={handleLoadedMetadata}
+          onerror={handleMediaError}
         ></audio>
       </div>
     {:else if isImage}
@@ -445,6 +513,7 @@
           alt={mediaPath} 
           class={zoomed ? 'zoomed' : ''} 
           style={zoomed ? 'cursor: zoom-out' : 'cursor: zoom-in'}
+          onerror={handleMediaError}
         />
         
         <div class="nav-overlay">

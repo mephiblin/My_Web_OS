@@ -1,6 +1,6 @@
 <script>
   import { FileText, Download, Maximize, ZoomIn, ZoomOut, RotateCcw, Search, ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { fetchRawFileTicketUrl } from '../../../../utils/api.js';
+  import { fetchRawFileTicketUrl, fetchRawMediaLeaseUrl, redactSensitiveText } from '../../../../utils/api.js';
   import { fetchDocumentText } from '../services/documentApi.js';
   import { collectMatchOffsets, renderHighlightedText } from '../services/textSearch.js';
 
@@ -22,6 +22,8 @@
   let binaryError = $state('');
   let contentContainer = $state(null);
   let rawDocUrl = $state('');
+  let binaryLeaseRecoveryAttempted = $state(false);
+  let binaryLeaseRequestId = 0;
 
   let iframeDocUrl = $derived.by(() => {
     if (!rawDocUrl || !isPdf) return rawDocUrl;
@@ -46,8 +48,57 @@
       a.click();
       document.body.removeChild(a);
     } catch (err) {
-      binaryError = err?.message || '다운로드를 준비하지 못했습니다.';
+      binaryError = redactSensitiveText(err?.message || '다운로드를 준비하지 못했습니다.');
     }
+  }
+
+  function getBinaryPreviewErrorMessage(err) {
+    if (err?.code === 'FS_MEDIA_LEASE_TARGET_CHANGED') {
+      return '파일이 변경되어 미리보기를 다시 열 수 없습니다.';
+    }
+    if (err?.code === 'FS_PATH_NOT_FOUND' || err?.code === 'ENOENT') {
+      return '파일을 찾을 수 없어 문서를 불러오지 못했습니다.';
+    }
+    if (err?.code === 'FS_ACCESS_DENIED' || err?.status === 401 || err?.status === 403) {
+      return '권한이 없어 문서를 불러오지 못했습니다.';
+    }
+    if (err?.code === 'FS_MEDIA_LEASE_EXPIRED' || err?.code === 'FS_MEDIA_LEASE_IDLE_TIMEOUT') {
+      return '문서 미리보기 연결이 만료되었습니다. 다시 열어 주세요.';
+    }
+    return redactSensitiveText(err?.message || '문서를 불러오지 못했습니다.');
+  }
+
+  async function loadBinaryPreviewUrl(path, options = {}) {
+    const requestId = ++binaryLeaseRequestId;
+    try {
+      const url = await fetchRawMediaLeaseUrl(path, {
+        signal: options.signal,
+        appId: 'document-viewer'
+      });
+      if (options.signal?.aborted || requestId !== binaryLeaseRequestId || path !== docPath) {
+        return false;
+      }
+      rawDocUrl = url;
+      binaryError = '';
+      return true;
+    } catch (err) {
+      if (err?.name === 'AbortError') return false;
+      if (requestId !== binaryLeaseRequestId || path !== docPath) {
+        return false;
+      }
+      binaryError = getBinaryPreviewErrorMessage(err);
+      return false;
+    }
+  }
+
+  async function handleBinaryPreviewError() {
+    if (!docPath || isTextDoc) return;
+    if (binaryLeaseRecoveryAttempted) {
+      binaryError = '문서 미리보기를 복구하지 못했습니다. 다시 열어 주세요.';
+      return;
+    }
+    binaryLeaseRecoveryAttempted = true;
+    await loadBinaryPreviewUrl(docPath);
   }
 
   let matchOffsets = $derived(collectMatchOffsets(textContent, searchQuery.trim()));
@@ -74,7 +125,7 @@
       currentMatchIndex = 0;
     } catch (err) {
       textContent = '';
-      textError = err?.message || '텍스트 문서를 불러오지 못했습니다.';
+      textError = redactSensitiveText(err?.message || '텍스트 문서를 불러오지 못했습니다.');
     } finally {
       loadingText = false;
     }
@@ -136,18 +187,11 @@
     const path = docPath;
     rawDocUrl = '';
     binaryError = '';
+    binaryLeaseRecoveryAttempted = false;
     if (!path || isTextDoc) return;
 
     const controller = new AbortController();
-    fetchRawFileTicketUrl(path, { signal: controller.signal })
-      .then((url) => {
-        if (controller.signal.aborted) return;
-        rawDocUrl = url;
-      })
-      .catch((err) => {
-        if (err?.name === 'AbortError') return;
-        binaryError = err?.message || '문서를 불러오지 못했습니다.';
-      });
+    loadBinaryPreviewUrl(path, { signal: controller.signal });
 
     return () => {
       controller.abort();
@@ -234,7 +278,7 @@
       {:else if !rawDocUrl}
         <div class="empty-state"><p>문서를 불러오는 중...</p></div>
       {:else}
-        <iframe src={iframeDocUrl} title={fileName} frameborder="0" width="100%" height="100%"></iframe>
+        <iframe src={iframeDocUrl} title={fileName} frameborder="0" width="100%" height="100%" onerror={handleBinaryPreviewError}></iframe>
       {/if}
     {/if}
   </div>

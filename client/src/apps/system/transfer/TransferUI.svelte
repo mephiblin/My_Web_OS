@@ -11,17 +11,22 @@
     FolderInput,
     Clock3,
     RotateCcw,
-    Trash2
+    Trash2,
+    CloudUpload
   } from 'lucide-svelte';
   import { addToast } from '../../../core/stores/toastStore.js';
   import { notifications } from '../../../core/stores/notificationStore.js';
+  import { redactSensitiveText } from '../../../utils/api.js';
   import {
     cancelTransferJob,
+    cancelCloudTransferJob,
     clearTransferJobs,
+    createCloudTransferJob,
     createLocalCopyJob,
     createUrlDownloadJob,
     isRunningStatus,
     listTransferJobs,
+    retryCloudTransferJob,
     retryTransferJob
   } from './api.js';
   import { normalizeOpsStatus } from '../../../utils/opsStatus.js';
@@ -36,8 +41,12 @@
     total: 0,
     queued: 0,
     running: 0,
+    backoff: 0,
+    paused_by_quota: 0,
     completed: 0,
     failed: 0,
+    retryable_failed: 0,
+    interrupted: 0,
     canceled: 0
   });
   let activeFilter = $state('all');
@@ -46,6 +55,7 @@
   let clearing = $state(false);
   let operationError = $state('');
   let lastSyncAt = $state(null);
+  let cloudOverwriteReview = $state(null);
   let pollTimer = null;
 
   let urlForm = $state({
@@ -60,17 +70,25 @@
     fileName: ''
   });
 
+  let cloudForm = $state({
+    sourcePath: '',
+    remote: '',
+    remotePath: '',
+    fileName: ''
+  });
+
   const runningJobs = $derived(jobs.filter((job) => isRunningStatus(job.status)));
-  const failedJobs = $derived(jobs.filter((job) => normalizeOpsStatus(job.status) === 'failed'));
+  const failedJobs = $derived(jobs.filter((job) => isAttentionStatus(job.status)));
   const filteredJobs = $derived(jobs.filter((job) => {
     if (activeFilter === 'all') return true;
     const status = normalizeOpsStatus(job.status);
     if (activeFilter === 'running') return isRunningStatus(status);
+    if (activeFilter === 'failed') return isAttentionStatus(status);
     return status === activeFilter;
   }));
 
   function showError(message, code = 'TRANSFER_UI_ERROR') {
-    const text = message || '전송 작업에 실패했습니다.';
+    const text = redactSensitiveText(message || '전송 작업에 실패했습니다.');
     operationError = text;
     addToast(text, 'error');
     notifications.add({
@@ -91,7 +109,12 @@
     const value = normalizeOpsStatus(status);
     if (value === 'queued' || value === 'pending') return '대기중';
     if (value === 'running') return '진행중';
+    if (value === 'paused') return '일시중지';
+    if (value === 'backoff') return '재시도 대기';
+    if (value === 'paused_by_quota') return '할당량 대기';
     if (value === 'completed') return '완료';
+    if (value === 'retryable_failed') return '재시도 가능';
+    if (value === 'interrupted') return '중단됨';
     if (value === 'failed') return '실패';
     if (value === 'canceled') return '취소됨';
     return '알 수 없음';
@@ -101,16 +124,49 @@
     const value = String(type || '').trim().toLowerCase();
     if (value === 'url-download') return 'URL 다운로드';
     if (value === 'local-copy') return '로컬 복사';
+    if (value === 'cloud-transfer') return '서버 클라우드 전송';
     return '기타';
   }
 
   function statusClass(status) {
     const value = normalizeOpsStatus(status);
     if (value === 'completed') return 'completed';
-    if (value === 'failed') return 'error';
+    if (isAttentionStatus(value)) return 'error';
     if (value === 'canceled') return 'cancelled';
     if (isRunningStatus(value)) return 'running';
     return 'unknown';
+  }
+
+  function isAttentionStatus(status) {
+    const value = normalizeOpsStatus(status);
+    return value === 'failed'
+      || value === 'retryable_failed'
+      || value === 'interrupted'
+      || value === 'backoff'
+      || value === 'paused_by_quota';
+  }
+
+  function canRetryJob(job) {
+    const value = normalizeOpsStatus(job?.status);
+    if (value === 'retryable_failed' || value === 'interrupted' || value === 'canceled') return true;
+    if (value !== 'failed') return false;
+    return job?.raw?.retryable === true || job?.raw?.error?.details?.retryable === true;
+  }
+
+  function displayJobSource(job) {
+    return redactSensitiveText(job?.sourcePath || job?.url || '-');
+  }
+
+  function displayJobTarget(job) {
+    if (job?.type === 'cloud-transfer' || job?.scope === 'cloud-transfer') {
+      const remote = job?.remote ? `${job.remote}:` : 'cloud:';
+      return redactSensitiveText(`${remote}${job?.remotePath || job?.destinationDir || ''}`);
+    }
+    return redactSensitiveText(job?.destinationDir || '-');
+  }
+
+  function displayJobError(job) {
+    return redactSensitiveText(job?.error || '');
   }
 
   function formatBytes(value) {
@@ -159,7 +215,11 @@
       urlForm = { url: '', destinationDir: '', fileName: '' };
       return;
     }
-    copyForm = { sourcePath: '', destinationDir: '', fileName: '' };
+    if (createMode === 'local-copy') {
+      copyForm = { sourcePath: '', destinationDir: '', fileName: '' };
+      return;
+    }
+    cloudForm = { sourcePath: '', remote: '', remotePath: '', fileName: '' };
   }
 
   async function handleCreateJob() {
@@ -175,7 +235,7 @@
         await createUrlDownloadJob(urlForm);
         addToast('URL 다운로드 작업을 생성했습니다.', 'success');
         notifications.add({ title: 'Transfer', message: 'URL 다운로드 작업이 큐에 등록되었습니다.', type: 'success' });
-      } else {
+      } else if (createMode === 'local-copy') {
         if (!copyForm.sourcePath.trim() || !copyForm.destinationDir.trim()) {
           showError('원본 경로와 대상 디렉터리는 필수입니다.', 'TRANSFER_CREATE_COPY_INVALID_INPUT');
           return;
@@ -183,8 +243,47 @@
         await createLocalCopyJob(copyForm);
         addToast('로컬 복사 작업을 생성했습니다.', 'success');
         notifications.add({ title: 'Transfer', message: '로컬 복사 작업이 큐에 등록되었습니다.', type: 'success' });
+      } else {
+        if (!cloudForm.sourcePath.trim() || !cloudForm.remote.trim() || !cloudForm.remotePath.trim()) {
+          showError('원본 경로, 원격, 원격 경로는 필수입니다.', 'CLOUD_TRANSFER_CREATE_INVALID_INPUT');
+          return;
+        }
+        const result = await createCloudTransferJob(cloudForm);
+        if (result?.approvalRequired) {
+          cloudOverwriteReview = result;
+          showError(result.message, 'CLOUD_TRANSFER_APPROVAL_REQUIRED');
+          return;
+        }
+        addToast('서버 소유 클라우드 전송 작업을 생성했습니다.', 'success');
+        notifications.add({ title: 'Transfer', message: '서버 클라우드 전송 작업이 큐에 등록되었습니다.', type: 'success' });
       }
 
+      resetCurrentForm();
+      await refreshJobs(true);
+    } catch (err) {
+      showError(err?.message, err?.code);
+    } finally {
+      creating = false;
+    }
+  }
+
+  async function approveCloudOverwrite() {
+    if (!cloudOverwriteReview?.expectedConfirmation) return;
+    operationError = '';
+    creating = true;
+    try {
+      const result = await createCloudTransferJob({
+        ...cloudForm,
+        typedConfirmation: cloudOverwriteReview.expectedConfirmation
+      });
+      if (result?.approvalRequired) {
+        cloudOverwriteReview = result;
+        showError(result.message, 'CLOUD_TRANSFER_APPROVAL_REQUIRED');
+        return;
+      }
+      cloudOverwriteReview = null;
+      addToast('덮어쓰기 승인 후 서버 클라우드 전송 작업을 생성했습니다.', 'success');
+      notifications.add({ title: 'Transfer', message: '서버 클라우드 전송 작업이 큐에 등록되었습니다.', type: 'success' });
       resetCurrentForm();
       await refreshJobs(true);
     } catch (err) {
@@ -205,7 +304,11 @@
     operationError = '';
 
     try {
-      await cancelTransferJob(job.id);
+      if (job.scope === 'cloud-transfer' || job.type === 'cloud-transfer') {
+        await cancelCloudTransferJob(job.id);
+      } else {
+        await cancelTransferJob(job.id);
+      }
       addToast(`작업 ${job.id} 취소 요청을 보냈습니다.`, 'success');
       notifications.add({
         title: 'Transfer',
@@ -233,7 +336,11 @@
     operationError = '';
 
     try {
-      await retryTransferJob(job.id);
+      if (job.scope === 'cloud-transfer' || job.type === 'cloud-transfer') {
+        await retryCloudTransferJob(job.id);
+      } else {
+        await retryTransferJob(job.id);
+      }
       addToast(`작업 ${job.id} 재시도를 큐에 등록했습니다.`, 'success');
       notifications.add({
         title: 'Transfer',
@@ -254,7 +361,7 @@
     clearing = true;
     operationError = '';
     try {
-      const result = await clearTransferJobs(['completed', 'failed', 'canceled']);
+      const result = await clearTransferJobs(['completed', 'failed', 'retryable_failed', 'interrupted', 'canceled']);
       addToast(`완료된 전송 작업 ${Number(result?.removed || 0)}개를 정리했습니다.`, 'success');
       await refreshJobs(true);
     } catch (err) {
@@ -321,6 +428,10 @@
         <Copy size={14} />
         로컬 복사
       </button>
+      <button class:active={createMode === 'cloud-transfer'} onclick={() => (createMode = 'cloud-transfer')}>
+        <CloudUpload size={14} />
+        서버 클라우드 전송
+      </button>
     </div>
 
     {#if createMode === 'url-download'}
@@ -338,7 +449,7 @@
           <input type="text" bind:value={urlForm.fileName} placeholder="archive.zip" />
         </label>
       </div>
-    {:else}
+    {:else if createMode === 'local-copy'}
       <div class="form-grid">
         <label>
           원본 경로
@@ -353,6 +464,46 @@
           <input type="text" bind:value={copyForm.fileName} placeholder="file-copy.iso" />
         </label>
       </div>
+    {:else}
+      <div class="form-grid cloud-transfer-grid">
+        <label>
+          서버 원본 경로
+          <input type="text" bind:value={cloudForm.sourcePath} placeholder="/home/user/source/file.iso" />
+        </label>
+        <label>
+          원격
+          <input type="text" bind:value={cloudForm.remote} placeholder="gdrive" />
+        </label>
+        <label>
+          원격 경로
+          <input type="text" bind:value={cloudForm.remotePath} placeholder="backups/file.iso" />
+        </label>
+        <label>
+          파일명 (선택)
+          <input type="text" bind:value={cloudForm.fileName} placeholder="file.iso" />
+        </label>
+      </div>
+      <div class="form-note">
+        브라우저 파일 업로드가 아니라 서버가 로컬 경로를 읽어 원격으로 전송하는 작업입니다. 덮어쓰기가 필요하면 백엔드 승인 절차가 먼저 필요합니다.
+      </div>
+      {#if cloudOverwriteReview}
+        <div class="approval-review">
+          <AlertTriangle size={14} />
+          <div>
+            <strong>Overwrite approval required</strong>
+            <span>Target: {displayJobTarget({
+              type: 'cloud-transfer',
+              remote: cloudForm.remote,
+              remotePath: cloudForm.remotePath
+            })}</span>
+            <code>{cloudOverwriteReview.expectedConfirmation}</code>
+          </div>
+          <button class="approve-btn" onclick={approveCloudOverwrite} disabled={creating}>
+            {creating ? '승인 중...' : '확인값으로 덮어쓰기 승인'}
+          </button>
+          <button class="ghost-btn" onclick={() => (cloudOverwriteReview = null)} disabled={creating}>취소</button>
+        </div>
+      {/if}
     {/if}
 
     <div class="submit-row">
@@ -404,8 +555,11 @@
                   <span class="job-type">{typeLabel(job.type)}</span>
                   <span class="status {statusClass(job.status)}">{statusLabel(job.status)}</span>
                 </div>
-                <div class="job-path">{job.sourcePath || job.url || '-'}</div>
-                <div class="job-path">대상: {job.destinationDir || '-'}</div>
+                <div class="job-path">{displayJobSource(job)}</div>
+                <div class="job-path">대상: {displayJobTarget(job)}</div>
+                {#if job.nextRetryAt}
+                  <div class="job-path">다음 재시도: {formatDateTime(job.nextRetryAt)}</div>
+                {/if}
                 {#if job.fileName}
                   <div class="job-path">파일명: {job.fileName}</div>
                 {/if}
@@ -427,7 +581,7 @@
                     {/if}
                   </button>
                 {/if}
-                {#if job.status === 'failed' || job.status === 'canceled'}
+                {#if canRetryJob(job)}
                   <button
                     class="retry-btn"
                     onclick={() => handleRetryJob(job)}
@@ -456,7 +610,7 @@
             {#if job.error}
               <div class="job-error">
                 <AlertTriangle size={12} />
-                <span>{job.error}</span>
+                <span>{displayJobError(job)}</span>
               </div>
             {/if}
 
@@ -588,6 +742,53 @@
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
+  }
+
+  .cloud-transfer-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .form-note {
+    margin-top: 8px;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .approval-review {
+    margin-top: 8px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.1);
+    color: #fde68a;
+    border-radius: 8px;
+    padding: 8px;
+    font-size: 11px;
+  }
+
+  .approval-review div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .approval-review span,
+  .approval-review code {
+    overflow-wrap: anywhere;
+  }
+
+  .approve-btn {
+    border: none;
+    border-radius: 8px;
+    background: #d97706;
+    color: white;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
   }
 
   label {

@@ -3,6 +3,7 @@
   import { ArrowDownToLine, CircleX, Copy, Download, RefreshCw, RotateCcw, Search, Trash2 } from 'lucide-svelte';
   import { addToast } from '../../../core/stores/toastStore.js';
   import { notifications } from '../../../core/stores/notificationStore.js';
+  import { redactSensitiveText } from '../../../utils/api.js';
   import {
     cancelTransferJob,
     clearTransferJobs,
@@ -87,7 +88,33 @@
   }
 
   function classifyFailure(job) {
+    const status = normalizeOpsStatus(job?.status);
+    if (status === 'paused_by_quota') {
+      return {
+        cause: 'provider-quota',
+        recovery: 'Provider quota is paused. Wait for quota recovery or retry after the provider window resets.'
+      };
+    }
+    if (status === 'backoff') {
+      return {
+        cause: 'provider-backoff',
+        recovery: 'Provider asked the transfer to retry later. Wait for the next retry window or retry manually.'
+      };
+    }
+    if (status === 'retryable_failed') {
+      return {
+        cause: 'retryable-failure',
+        recovery: 'The transfer can be retried after checking provider/path availability.'
+      };
+    }
+
     const code = String(job?.errorCode || '').trim().toUpperCase();
+    if (code === 'CLOUD_RCLONE_NOT_FOUND' || code === 'CLOUD_PROVIDER_NOT_CONFIGURED' || code === 'CLOUD_REMOTE_NOT_FOUND') {
+      return {
+        cause: 'provider-setup',
+        recovery: 'Check rclone installation and cloud provider/remote setup, then retry.'
+      };
+    }
     if (code === 'TRANSFER_PATH_NOT_ALLOWED' || code === 'TRANSFER_ACCESS_DENIED' || code === 'TRANSFER_PROTECTED_PATH') {
       return {
         cause: 'permission/path-policy',
@@ -135,7 +162,9 @@
       const normalized = normalizeOpsStatus(job?.status);
       const matchesFilter = activeFilter === 'all'
         ? true
-        : (activeFilter === 'running' ? isRunningStatus(normalized) : normalized === activeFilter);
+        : (activeFilter === 'running'
+          ? isRunningStatus(normalized)
+          : (activeFilter === 'failed' ? isAttentionStatus(normalized) : normalized === activeFilter));
       if (!matchesFilter) return false;
       const category = inferJobCategory(job);
       if (activeCategory !== 'all' && category !== activeCategory) return false;
@@ -173,7 +202,16 @@
   });
 
   const recentJobs = $derived(filteredJobs.slice(0, 20));
-  const failedJobs = $derived(filteredJobs.filter((job) => normalizeOpsStatus(job?.status) === 'failed'));
+  function isAttentionStatus(status) {
+    const normalized = normalizeOpsStatus(status);
+    return normalized === 'failed'
+      || normalized === 'retryable_failed'
+      || normalized === 'interrupted'
+      || normalized === 'backoff'
+      || normalized === 'paused_by_quota';
+  }
+
+  const failedJobs = $derived(filteredJobs.filter((job) => isAttentionStatus(job?.status)));
   const failedCauseGroups = $derived(() => {
     const map = new Map();
     for (const job of failedJobs) {
@@ -196,15 +234,36 @@
 
   function statusClass(status) {
     const normalized = normalizeOpsStatus(status);
-    if (normalized === 'failed') return 'failed';
+    if (isAttentionStatus(normalized)) return 'failed';
     if (normalized === 'completed') return 'completed';
     if (normalized === 'canceled') return 'canceled';
     if (isRunningStatus(normalized)) return 'running';
     return 'unknown';
   }
 
+  function statusLabel(status) {
+    const normalized = normalizeOpsStatus(status);
+    if (normalized === 'queued') return 'Queued';
+    if (normalized === 'running') return 'Running';
+    if (normalized === 'backoff') return 'Retry Backoff';
+    if (normalized === 'paused_by_quota') return 'Quota Paused';
+    if (normalized === 'retryable_failed') return 'Retryable Failure';
+    if (normalized === 'interrupted') return 'Interrupted';
+    if (normalized === 'completed') return 'Completed';
+    if (normalized === 'failed') return 'Failed';
+    if (normalized === 'canceled') return 'Canceled';
+    return 'Unknown';
+  }
+
+  function canRetryJob(job) {
+    const normalized = normalizeOpsStatus(job?.status);
+    if (normalized === 'retryable_failed' || normalized === 'interrupted' || normalized === 'canceled') return true;
+    if (normalized !== 'failed') return false;
+    return job?.raw?.retryable === true || job?.raw?.error?.details?.retryable === true;
+  }
+
   function setError(message, code = 'DOWNLOAD_STATION_ERROR') {
-    const text = String(message || '').trim() || 'Operation failed.';
+    const text = redactSensitiveText(String(message || '').trim() || 'Operation failed.');
     error = text;
     addToast(text, 'error');
     notifications.add({
@@ -272,6 +331,14 @@
       done.delete(job.id);
       retryingIds = done;
     }
+  }
+
+  function displayJobError(job) {
+    return redactSensitiveText(job?.error || '');
+  }
+
+  function displayJobErrorLine(job) {
+    return redactSensitiveText(`${job?.errorCode || 'TRANSFER_JOB_FAILED'} · ${job?.error || 'Unknown error'}`);
   }
 
   async function cancelJob(job) {
@@ -407,7 +474,7 @@
             <article class="job-card">
               <div class="job-head">
                 <strong>{job.fileName || job.id}</strong>
-                <span class="status {statusClass(job.status)}">{job.status}</span>
+                <span class="status {statusClass(job.status)}">{statusLabel(job.status)}</span>
               </div>
               <div class="meta">{job.type} · {inferJobCategory(job)} · {job.destinationDir || '-'}</div>
               <div class="meta">{formatDate(job.updatedAt || job.createdAt)}</div>
@@ -418,7 +485,7 @@
                     {cancelingIds.has(job.id) ? 'Canceling...' : 'Cancel'}
                   </button>
                 {/if}
-                {#if normalizeOpsStatus(job.status) === 'failed'}
+                {#if canRetryJob(job)}
                   <button class="btn tiny" disabled={retryingIds.has(job.id)} onclick={() => retryJob(job)}>
                     <RotateCcw size={12} />
                     {retryingIds.has(job.id) ? 'Retrying...' : 'Retry'}
@@ -426,7 +493,7 @@
                 {/if}
               </div>
               {#if job.error}
-                <div class="job-error">{job.error}</div>
+                <div class="job-error">{displayJobError(job)}</div>
                 <div class="meta">cause: {classifyFailure(job).cause}</div>
               {/if}
             </article>
@@ -452,12 +519,14 @@
                 <div class="failed-row">
                   <div class="meta">
                     <strong>{job.fileName || job.id}</strong>
-                    <span>{job.errorCode || 'TRANSFER_JOB_FAILED'} · {job.error || 'Unknown error'}</span>
+                    <span>{displayJobErrorLine(job)}</span>
                   </div>
-                  <button class="btn tiny" disabled={retryingIds.has(job.id)} onclick={() => retryJob(job)}>
-                    <RotateCcw size={12} />
-                    {retryingIds.has(job.id) ? 'Retrying...' : 'Retry'}
-                  </button>
+                  {#if canRetryJob(job)}
+                    <button class="btn tiny" disabled={retryingIds.has(job.id)} onclick={() => retryJob(job)}>
+                      <RotateCcw size={12} />
+                      {retryingIds.has(job.id) ? 'Retrying...' : 'Retry'}
+                    </button>
+                  {/if}
                 </div>
               {/each}
             </article>

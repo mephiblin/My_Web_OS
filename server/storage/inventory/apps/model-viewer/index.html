@@ -475,7 +475,14 @@
         const extension = extOf(path);
         fileName = file.name || path.split('/').pop() || 'model';
         titleEl.textContent = fileName;
-        rawUrl = window.WebOS.files.rawUrl({ path, grantId });
+        const rawTicket = await window.WebOS.files.rawTicket({
+          path,
+          grantId,
+          profile: 'media',
+          idleTimeoutMs: 45 * 60 * 1000,
+          absoluteTtlMs: 8 * 60 * 60 * 1000
+        });
+        rawUrl = window.WebOS.files.rawUrl(rawTicket);
         if (!rawUrl) throw new Error('파일 경로 또는 권한이 없습니다.');
         downloadEl.href = rawUrl;
         downloadEl.download = fileName;

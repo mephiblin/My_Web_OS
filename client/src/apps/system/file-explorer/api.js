@@ -67,7 +67,9 @@ function getFriendlyMessage(code, operation, originalMessage) {
 
 function normalizeApiError(operation, err) {
   const message = parseErrorMessage(err);
-  const code = inferCodeFromMessage(message);
+  const code = typeof err?.code === 'string' && err.code
+    ? err.code
+    : inferCodeFromMessage(message);
   const op = OPERATION_META[operation] || {};
   return {
     error: true,
@@ -76,6 +78,9 @@ function normalizeApiError(operation, err) {
     title: op.title || 'Request Failed',
     message: getFriendlyMessage(code, operation, message),
     rawMessage: message,
+    status: err?.status,
+    details: err?.details || err?.payload?.details || null,
+    preflight: err?.payload?.preflight || null,
     isBoundaryError: code.startsWith('FS_')
   };
 }
@@ -221,6 +226,31 @@ export async function writeFileWithPolicy(path, content, options = {}) {
   }));
 }
 
+export async function preflightOverwrite(path) {
+  return withNormalizedError('write', () => apiFetch('/api/fs/write/preflight', {
+    method: 'POST',
+    body: JSON.stringify({ path })
+  }));
+}
+
+export async function approveOverwrite(path, preflight, typedConfirmation = '') {
+  return withNormalizedError('write', () => apiFetch('/api/fs/write/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      operationId: preflight?.operationId,
+      typedConfirmation
+    })
+  }));
+}
+
+export async function executeOverwrite(path, content, approval) {
+  return writeFileWithPolicy(path, content, {
+    overwrite: true,
+    approval
+  });
+}
+
 export async function createFileGrant(path, mode = 'read', appId = '', source = 'file-station') {
   return withNormalizedError('read', () => apiFetch('/api/fs/grant', {
     method: 'POST',
@@ -271,6 +301,31 @@ export async function deleteItem(path) {
   }));
 }
 
+export async function preflightDelete(path) {
+  return withNormalizedError('delete', () => apiFetch('/api/fs/delete/preflight', {
+    method: 'POST',
+    body: JSON.stringify({ path })
+  }));
+}
+
+export async function approveDelete(path, preflight, typedConfirmation = '') {
+  return withNormalizedError('delete', () => apiFetch('/api/fs/delete/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      operationId: preflight?.operationId,
+      typedConfirmation
+    })
+  }));
+}
+
+export async function executeDelete(path, approval) {
+  return withNormalizedError('delete', () => apiFetch('/api/fs/delete', {
+    method: 'DELETE',
+    body: JSON.stringify({ path, approval })
+  }));
+}
+
 export async function renameItem(oldPath, newName) {
   return withNormalizedError('rename', () => apiFetch('/api/fs/rename', {
     method: 'PUT',
@@ -293,9 +348,58 @@ export async function restoreItem(id) {
   }));
 }
 
+export async function preflightRestore(id) {
+  return withNormalizedError('restore', () => apiFetch('/api/fs/restore/preflight', {
+    method: 'POST',
+    body: JSON.stringify({ id })
+  }));
+}
+
+export async function approveRestore(id, preflight, typedConfirmation = '') {
+  return withNormalizedError('restore', () => apiFetch('/api/fs/restore/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      id,
+      operationId: preflight?.operationId,
+      typedConfirmation
+    })
+  }));
+}
+
+export async function executeRestore(id, approval) {
+  return withNormalizedError('restore', () => apiFetch('/api/fs/restore', {
+    method: 'POST',
+    body: JSON.stringify({ id, approval })
+  }));
+}
+
 export async function emptyTrash() {
   return withNormalizedError('emptyTrash', () => apiFetch('/api/fs/empty-trash', {
     method: 'DELETE'
+  }));
+}
+
+export async function preflightEmptyTrash() {
+  return withNormalizedError('emptyTrash', () => apiFetch('/api/fs/empty-trash/preflight', {
+    method: 'POST',
+    body: JSON.stringify({})
+  }));
+}
+
+export async function approveEmptyTrash(preflight, typedConfirmation = '') {
+  return withNormalizedError('emptyTrash', () => apiFetch('/api/fs/empty-trash/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      operationId: preflight?.operationId,
+      typedConfirmation
+    })
+  }));
+}
+
+export async function executeEmptyTrash(approval) {
+  return withNormalizedError('emptyTrash', () => apiFetch('/api/fs/empty-trash', {
+    method: 'DELETE',
+    body: JSON.stringify({ approval })
   }));
 }
 
@@ -307,6 +411,32 @@ export async function extractArchive(path, destPath = '') {
   return withNormalizedError('extract', () => apiFetch('/api/fs/extract', {
     method: 'POST',
     body: JSON.stringify({ path, destPath })
+  }));
+}
+
+export async function preflightExtract(path, destPath = '') {
+  return withNormalizedError('extract', () => apiFetch('/api/fs/extract/preflight', {
+    method: 'POST',
+    body: JSON.stringify({ path, destPath })
+  }));
+}
+
+export async function approveExtract(path, destPath, preflight, typedConfirmation = '') {
+  return withNormalizedError('extract', () => apiFetch('/api/fs/extract/approve', {
+    method: 'POST',
+    body: JSON.stringify({
+      path,
+      destPath,
+      operationId: preflight?.operationId,
+      typedConfirmation
+    })
+  }));
+}
+
+export async function executeExtract(path, destPath, approval) {
+  return withNormalizedError('extract', () => apiFetch('/api/fs/extract', {
+    method: 'POST',
+    body: JSON.stringify({ path, destPath, approval })
   }));
 }
 

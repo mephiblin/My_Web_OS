@@ -64,6 +64,11 @@ The following are local/generated runtime state and should not be committed:
 
 - `server/storage/index.json`
 - `server/storage/media-library/`
+- `server/storage/cloud-transfer-jobs.json`
+- `server/storage/transfer-jobs.json`
+- `server/storage/shares.json`
+- `server/storage/audit.log`
+- `server/storage/.trash_info.json`
 - `storage/rehearsal-backups/`
 - `.playwright-mcp/`
 

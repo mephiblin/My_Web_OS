@@ -88,9 +88,27 @@ npm run build
 It proves Vite/Svelte compilation, but it does not prove core user workflows.
 Use the UI smoke plan below for workflow coverage.
 
-## UI Smoke Plan
+Dependency-free local shell smoke:
 
-The first browser smoke should cover:
+```bash
+npm run verify:ui-smoke
+```
+
+This command expects the backend and frontend dev servers to already be running.
+It checks deterministic workflow source guards, backend health, and the frontend
+app shell boot contract. The source guards currently fail if targeted system
+apps reintroduce native `confirm()` / `prompt()` or if the expected approval and
+recoverable-state markers disappear from Login, File Station, Package Center,
+Transfer UI, or Sandbox frame code.
+
+This is stronger than a reachability-only smoke and is the current dependency-free
+release smoke gate. It is still not a browser click-through automation gate.
+Adding Playwright-style workflow automation remains a future hardening
+enhancement.
+
+## Future Browser Automation Plan
+
+If a browser runner is added, the first click-through smoke should cover:
 
 1. Desktop loads after authentication and does not render a blank shell.
 2. Package Center opens from the desktop/start surface and shows an installed,

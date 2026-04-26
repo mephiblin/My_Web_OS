@@ -2,10 +2,10 @@
 
 Operational guide for coding agents working on My Web OS.
 
-This file is the canonical execution contract for agents. It is rebuilt from the
-active planning/reference/operations documents and should stay short enough to
-guide daily work. Completed backlog narratives belong in
-`doc/operations/completed-backlog-log.md`, not here.
+This guide is rebuilt from `doc/operations/home-server-readiness-review-2026-04-26.md`
+and is intended for active development. The current priority is not new core
+feature expansion. The priority is closing the home-server readiness gates that
+block a credible addon-only/core-freeze phase.
 
 Execution shape:
 
@@ -16,8 +16,8 @@ scope -> MVP -> analysis -> document re-reference -> contract/API
 
 ## 1) Product Scope
 
-My Web OS is a browser-based operations layer for a personally owned
-PC/home server/homelab.
+My Web OS is a browser-based operations layer for a personally owned PC, home
+server, or homelab.
 
 It is not:
 
@@ -35,131 +35,86 @@ Web OS = permissions, approval, audit, lifecycle, recovery
 Package Center = install/create/run/update/backup/rollback
 ```
 
-Current product direction:
+Current development decision:
 
-- finish real-use hardening before new core feature expansion
-- keep core desktop orchestration minimal and non-hardcoded
-- make Package Center an operations/workshop surface, not only a storefront
-- keep Git registry and ZIP import as first-class package onboarding paths
-- prefer package/sandbox ownership for ordinary addons when install/update/remove
-  behavior matters
-- make long-running file, media, share, and backup workflows feel transparent to
-  users while Web OS owns continuity, recovery, approval, audit, and failure state
+- VPN/internal owner-only beta use is acceptable with explicit known risks.
+- Addon development may continue, but it must not bypass Host/file/package
+  contracts.
+- Addon-only/core-freeze is conditionally ready now that the HSR gates in
+  section 8 are done.
+- Direct public internet exposure is not recommended until hardened deployment
+  and frontend real-use smoke coverage are verified.
 
-## 2) Required Document Citations
+## 2) Operating Decisions From The Readiness Review
 
-Agents must use these operating quotes as constraints when selecting or
-implementing work.
+Use these as constraints when selecting and implementing work.
 
-From `doc/planning/product-brief-home-server-remote-computer.md`:
+1. Host operations are real operations.
+   - Files, Terminal, Docker, services, cloud transfer, and backup affect the
+     actual machine.
+   - Do not treat these as mock UI flows.
 
-> My Web OS는 개인이 소유한 PC, 홈서버, 홈랩 장비를 브라우저에서 원격으로 운영하기 위한 개인 단위 Home Server & Remote Computer 플랫폼이다.
+2. Approval is a backend contract, not a browser confirm.
+   - Risky operations require backend preflight, target evidence/hash, scoped
+     nonce, TTL, consume-once semantics, execution revalidation, and audit.
+   - UI modals explain intent; the backend enforces safety.
 
-> 파일 시스템, 터미널, Docker, 서비스 제어는 실제 장비에 영향을 준다.
+3. Hide complexity, not risk.
+   - Users should not need to understand tickets, leases, Range, retry, quota,
+     partial files, or rclone flags.
+   - Quota pause, overwrite conflict, permission failure, unrecoverable state,
+     and backend restart interruption must be explicit.
 
-Implication:
+4. Terminal stays privileged, but not silent.
+   - Interactive Terminal is a raw admin shell after backend session approval.
+   - Agent, quick action, saved command, package script, and other Web OS
+     command injection paths require per-command approval.
 
-- Host operations are not mock UI work. Treat them as real operations on the
-  user's machine.
+5. Trash-first delete still changes Host state.
+   - File delete, recursive delete, multi-select delete, permanent delete, and
+     empty trash require approval levels appropriate to impact.
 
-From `doc/planning/project-identity-boundaries.md`:
+6. Package install/update/rollback are high-impact lifecycle actions.
+   - They can change executable code, manifest permissions, runtime behavior,
+     file associations, and data boundaries.
+   - They need the same approval family as package delete.
 
-> `Desktop.svelte`는 오케스트레이션만, 앱 로직은 앱/스토어/서비스로 분리
-
-Implication:
-
-- Do not put feature business logic into `client/src/core/Desktop.svelte` or
-  `client/src/core/Window.svelte`.
-
-From `doc/planning/app-install-file-workflow-direction.md`:
-
-> File Station owns local file selection and path intent.
-> Apps own focused workflows.
-> Web OS owns permissions, approval, audit, lifecycle, and recovery.
-> Package Center owns install/update/remove/runtime health.
-
-> Risky writes, overwrite, delete, rollback, and command execution require approval.
-
-Implication:
-
-- File/app/package flows must preserve ownership boundaries.
-- Risky actions require explicit approval/audit/recoverability.
-
-From `doc/reference/package-ecosystem-guide.md`:
-
-> Both paths should converge on the same package lifecycle model: manifest validation, install/update audit, backup before overwrite, rollback evidence, and Package Center visibility.
-
-Implication:
-
-- Registry install and ZIP import must not drift in lifecycle policy.
-
-From `doc/planning/real-use-remediation-plan.md`:
-
-> 외부 노출 또는 실제 홈서버 운영 전에는 아래 5개 축을 먼저 닫아야 한다.
-
-The five axes are:
-
-1. security boundary stabilization
-2. risky operation approval contract
-3. API error and UI state standardization
-4. Spotlight launcher contract unification
-5. verification gate and frontend regression coverage
-
-From `doc/planning/implementation-priority-plan.md`:
-
-> 코어(Web OS 시스템)는 `bugfix/security/perf`만 허용하는 feature-freeze 상태로 관리한다.
-
-Implication:
-
-- New user value should normally land in packages/addons.
-- Core work should be remediation, security, reliability, performance, or
-  platform contract work.
-
-From `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`:
-
-> This is the "transparent wings" standard: continuity should feel natural to the user, but the system must still keep security, audit, approval, and recovery visible where they matter.
-
-> Do not make cloud/backup depend on a browser tab, media lease, or file ticket.
-
-Implication:
-
-- Users should not need to understand tickets, leases, Range, retries, rclone,
-  quota, partial files, or backend restarts.
-- Agents must keep preview ticket, media lease, share download, and durable
-  cloud/backup job models separate.
-- Automatic recovery should stay quiet when it succeeds, but quota pauses,
-  risky writes, permission failures, and unrecoverable states must be explicit.
+7. Share state is runtime state.
+   - `server/storage/shares.json` contains live share tokens/policy/counts.
+   - It should not be treated as a committed fixture unless explicitly converted
+     to a redacted fixture/schema.
 
 ## 3) Canonical Sources And Precedence
 
 Use this order when docs and code conflict:
 
-1. Code-verified behavior for the currently running implementation.
+1. Code-verified behavior for the current implementation.
 2. `AGENTS.md`.
-3. Product and roadmap:
+3. Active readiness review:
+   - `doc/operations/home-server-readiness-review-2026-04-26.md`
+4. Product and roadmap:
    - `doc/planning/product-brief-home-server-remote-computer.md`
    - `doc/planning/project-identity-boundaries.md`
    - `doc/planning/roadmap-home-server-remote-computer.md`
    - `doc/planning/implementation-priority-plan.md`
-4. Active remediation and workflow plans:
+5. Active remediation and workflow plans:
    - `doc/planning/real-use-remediation-plan.md`
-   - `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
    - `doc/planning/app-install-file-workflow-direction.md`
+   - `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
    - `doc/planning/feature-scope-priorities.md`
    - `doc/planning/feature-inventory-home-server-remote-computer.md`
-5. Package/reference contracts:
+6. Package/reference contracts:
+   - `doc/reference/architecture-api-reference.md`
    - `doc/reference/app-development-model.md`
    - `doc/reference/app-ownership-matrix.md`
    - `doc/reference/package-ecosystem-guide.md`
    - `doc/reference/community-registry-and-presets.md`
-   - `doc/reference/architecture-api-reference.md`
-6. Presets and code-backed package fixtures:
-   - `doc/presets/webos-store.preset.json`
-   - `doc/presets/package-manifest.preset.json`
-   - `doc/presets/ecosystem-template-catalog.preset.json`
-   - `server/presets/ecosystem-template-catalog.json`
+7. Presets and code-backed fixtures:
+   - `doc/presets/`
+   - `server/presets/`
    - `server/storage/inventory/system/apps.json`
-7. Operations evidence:
+   - `server/storage/inventory/apps/`
+8. Operations evidence:
    - `README.md`
    - `USER_README.md`
    - `doc/README.md`
@@ -167,9 +122,10 @@ Use this order when docs and code conflict:
    - `doc/operations/remote-access-hardening-guide.md`
    - `doc/operations/runtime-stability-notes-2026-04-26.md`
    - `doc/operations/completed-backlog-log.md`
+   - `doc/operations/verification-gate-guide.md`
 
-If docs and code conflict, implement to code-verified behavior first, then align
-the relevant doc in the same work packet when practical.
+If docs and code conflict, implement to code-verified behavior first, then sync
+the relevant docs in the same work packet when practical.
 
 ## 4) Technology Stack And Sources
 
@@ -177,51 +133,26 @@ The source of truth for versions is local project metadata, not memory.
 
 Backend/runtime:
 
-- Node.js 20 on Debian bookworm slim.
+- Node.js runtime target is Docker-backed Node 20.
   - Source: `docker/Dockerfile.backend`
   - Source: `docker/Dockerfile.frontend`
-- Express `^5.2.1`.
-  - Source: `package.json`
-- Socket.io `^4.8.3`.
-  - Source: `package.json`
-- JWT authentication with `jsonwebtoken ^9.0.3`, password hashing with
-  `bcryptjs ^3.0.3`.
-  - Source: `package.json`
-- Security/config middleware: `helmet ^8.1.0`, `cors ^2.8.6`,
-  `express-rate-limit ^8.3.2`, `dotenv ^17.4.2`.
-  - Source: `package.json`
-- File/upload/archive services: `fs-extra ^11.3.4`, `multer ^2.1.1`,
-  `adm-zip ^0.5.17`, `chokidar ^5.0.0`.
-  - Source: `package.json`
-- Host/system operations: `systeminformation ^5.31.5`,
-  `node-pty ^1.1.0`, `fluent-ffmpeg ^2.1.3`.
-  - Source: `package.json`
-- Service composition and health checks through Docker Compose.
-  - Source: `docker-compose.yml`
-  - Source: `docker-compose.hardened.yml`
-  - Source: `docker-compose.hardened-acme.yml`
+- Express, Socket.io, JWT, bcrypt, security middleware, upload/archive, host
+  operations, and media dependencies are sourced from `package.json`.
+- Host/system operations are implemented under `server/routes/`,
+  `server/services/`, `server/middleware/`, and `server/utils/`.
 
 Frontend:
 
-- Svelte `^5.55.1` with `@sveltejs/vite-plugin-svelte ^7.0.0`.
-  - Source: `client/package.json`
-- Vite `^8.0.4`.
-  - Source: `client/package.json`
-  - Source: `client/vite.config.js`
-- UI and visualization: `lucide-svelte ^1.0.1`, `chart.js ^4.5.1`,
-  `svelte-chartjs ^4.0.1`, `canvas-confetti ^1.9.4`.
-  - Source: `client/package.json`
-- Editor/viewer/runtime libraries: `monaco-editor ^0.55.1`,
-  `three ^0.184.0`, `xterm ^5.3.0`, `xterm-addon-fit ^0.8.0`.
-  - Source: `client/package.json`
-- Client API boundary:
+- Svelte 5 and Vite 8 are sourced from `client/package.json`.
+- Frontend API boundary:
   - `client/src/utils/api.js`
   - `client/src/utils/constants.js`
+- Core desktop orchestration:
+  - `client/src/core/`
 
 Package/runtime model:
 
-- Package Center UI:
-  - `client/src/apps/system/package-center/`
+- Package Center UI: `client/src/apps/system/package-center/`
 - Package routes/services:
   - `server/routes/packages.js`
   - `server/routes/runtime.js`
@@ -240,154 +171,158 @@ Package/runtime model:
 
 Verification/tooling:
 
-- Server tests use Node's built-in test runner with serial execution.
-  - Source: `package.json` script `test:server`
-- Frontend build uses Vite.
-  - Source: `client/package.json` script `build`
-- Package validation uses `package:doctor`.
-  - Source: `package.json`
-  - Source: `tools/package-doctor.js`
-- Backup/restore and station rehearsal tools:
-  - `tools/rehearse-storage-backup-restore.sh`
-  - `tools/station-real-use-snapshot.js`
-- Future UI smoke benchmark:
-  - `doc/planning/real-use-remediation-plan.md`
-  - Playwright is a recommended benchmark there, but is not a current dependency
-    until added to `client/package.json` or the root package.
-
-External benchmark sources are listed in
-`doc/planning/real-use-remediation-plan.md` and
-`doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`.
-They include OWASP, RFC 9457, Express, Node.js fs docs, VS Code UX guidance,
-GitHub Actions, Playwright, Testing Library, Synology File Station, CasaOS,
-rclone, Google Drive, and MDN Range requests.
+- Server tests: `npm test` or `npm run test:server`
+- Syntax verification: `npm run verify:syntax`
+- Full local verification: `npm run verify`
+- Docker config verification: `npm run verify:docker-config`
+- Frontend build: `npm --prefix client run build`
+- CI workflow: `.github/workflows/verify.yml`
 
 ## 5) Layer Map
 
-Classify every task into one or more layers before implementation:
-
-- `Host`
-- `Web Desktop`
-- `Addon Runtime/UI`
-- `App Install / File Workflow`
-- `Sandbox / Package`
-- `Home Server Operations`
-- `Remote Computer UX`
-- `Agent / Automation`
-- `Docs / Verification`
+Classify every task into one or more layers before implementation.
 
 Host:
 
-- `server/routes/fs.js`
-- `server/routes/system.js`
-- `server/routes/settings.js`
-- `server/routes/docker.js`
-- `server/routes/logs.js`
-- `server/routes/cloud.js`
-- `server/routes/transfer.js`
-- `server/routes/media.js`
-- `server/services/*`
-- `server/middleware/*`
-- `server/utils/*`
+- Routes:
+  - `server/routes/fs.js`
+  - `server/routes/system.js`
+  - `server/routes/settings.js`
+  - `server/routes/docker.js`
+  - `server/routes/logs.js`
+  - `server/routes/cloud.js`
+  - `server/routes/transfer.js`
+  - `server/routes/media.js`
+  - `server/routes/share.js`
+  - `server/routes/auth.js`
+- Services:
+  - `server/services/terminal.js`
+  - `server/services/dockerService.js`
+  - `server/services/cloudService.js`
+  - `server/services/cloudTransferJobService.js`
+  - `server/services/transferJobService.js`
+  - `server/services/fileTicketService.js`
+  - `server/services/fileGrantService.js`
+  - `server/services/shareService.js`
+  - `server/services/operationApprovalService.js`
+  - `server/services/auditService.js`
+  - `server/services/trashService.js`
+  - `server/services/storageService.js`
+  - `server/services/mediaService.js`
+- Boundary utilities:
+  - `server/middleware/auth.js`
+  - `server/middleware/pathGuard.js`
+  - `server/utils/pathPolicy.js`
+  - `server/utils/urlRedaction.js`
+  - `server/utils/appPaths.js`
+  - `server/utils/inventoryPaths.js`
 
 Web Desktop:
 
 - `client/src/core/Desktop.svelte`
 - `client/src/core/Window.svelte`
 - `client/src/core/Spotlight.svelte`
+- `client/src/core/Login.svelte`
 - `client/src/core/appLaunchRegistry.js`
 - `client/src/core/appOwnershipContract.js`
-- `client/src/core/components/*`
-- `client/src/core/stores/*`
+- `client/src/core/components/`
+- `client/src/core/stores/`
+
+System Apps:
+
+- File Station: `client/src/apps/system/file-explorer/`
+- Package Center: `client/src/apps/system/package-center/`
+- Transfer UI: `client/src/apps/system/transfer/`
+- Download Station: `client/src/apps/system/download-station/`
+- Docker Manager: `client/src/apps/system/docker-manager/`
+- Terminal: `client/src/apps/system/terminal/`
+- Settings/Cloud/Backup: `client/src/apps/system/settings/`
+- Station apps: `client/src/apps/system/*-station/`
+- Resource/Log/Control: `client/src/apps/system/resource-monitor/`,
+  `client/src/apps/system/log-viewer/`, `client/src/apps/system/control-panel/`
 
 Addon Runtime/UI:
 
-- `client/src/apps/addons/code-editor/*`
-- `client/src/apps/addons/document-viewer/*`
-- `client/src/apps/addons/media-player/*`
-- `client/src/apps/addons/model-viewer/*`
-- `client/src/apps/addons/widget-store/*`
-
-App Install / File Workflow:
-
-- `client/src/apps/system/file-explorer/*`
-- `client/src/apps/system/station/*`
-- `client/src/apps/system/transfer/*`
-- `server/services/fileGrantService.js`
-- `server/services/fileTicketService.js`
-- `server/services/cloudService.js`
+- Code Editor: `client/src/apps/addons/code-editor/`
+- Document Viewer: `client/src/apps/addons/document-viewer/`
+- Media Player: `client/src/apps/addons/media-player/`
+- Model Viewer: `client/src/apps/addons/model-viewer/`
+- Widget Store: `client/src/apps/addons/widget-store/`
 
 Sandbox / Package:
 
-- `client/src/apps/system/package-center/*`
-- `server/routes/packages.js`
-- `server/routes/runtime.js`
-- `server/routes/sandbox.js`
-- `server/services/packageRegistryService.js`
-- `server/services/packageLifecycleService.js`
-- `server/services/runtimeManager.js`
-- `server/services/templateCatalogService.js`
-- `server/storage/inventory/`
-- `server/presets/`
-- `tools/package-doctor.js`
-- `tools/migrate-apps-registry.js`
+- Routes:
+  - `server/routes/packages.js`
+  - `server/routes/runtime.js`
+  - `server/routes/sandbox.js`
+- Services:
+  - `server/services/runtimeManager.js`
+  - `server/services/runtimeProfiles.js`
+  - `server/services/processSupervisor.js`
+  - `server/services/packageLifecycleService.js`
+  - `server/services/packageRegistryService.js`
+  - `server/services/templateCatalogService.js`
+  - `server/services/templateQualityGate.js`
+  - `server/services/capabilityCatalog.js`
+  - `server/services/appApiPolicy.js`
+- Runtime/static:
+  - `server/static/webos-sandbox-sdk.js`
+  - `server/storage/inventory/`
 
 Docs / Verification:
 
-- `AGENTS.md`
-- `README.md`
-- `USER_README.md`
-- `doc/**`
-- `tools/**`
-- `package.json`
-- `client/package.json`
-- `.github/workflows/**` when introduced
+- Active review: `doc/operations/home-server-readiness-review-2026-04-26.md`
+- Planning docs: `doc/planning/`
+- Reference docs: `doc/reference/`
+- Operations docs: `doc/operations/`
+- Tests: `server/tests/`
+- Tools: `tools/`
+- Package metadata: `package.json`, `client/package.json`
+- Deployment: `docker-compose.yml`, `docker-compose.hardened.yml`,
+  `docker-compose.hardened-acme.yml`, `docker/`
 
 ## 6) Operating Contract
 
-1. Classify the task by layer.
-2. Select the smallest useful MVP slice.
-3. Inspect existing routes/services/stores/components/helpers before adding new files.
-4. Re-read the relevant canonical docs immediately before implementation.
-5. Implement in this order:
+1. Run `git status --short` first and identify unrelated dirty/untracked files.
+   Do not revert them.
+2. Classify the task by layer.
+3. Select the smallest useful MVP slice.
+4. Inspect existing route/service/store/UI/test files before editing.
+5. Re-open the relevant docs from sections 3 and 7.3.
+6. Implement in this order:
    - contract/API
    - service/helper/store
+   - backend validation and structured errors
+   - audit/approval/recovery evidence
    - minimal UI
+   - focused tests
    - verification
    - docs/reporting
-6. Boundary-first policy:
-   - explicit error response with `code` and `message`
-   - backend validation for path/appId/manifest/runtime/grant scope
-   - approval/audit/recoverability for risky operations
-   - log redaction for secrets/tokens/grants
-   - realpath/lstat-aware path policy where host files are involved
-7. Keep `Desktop.svelte` and `Window.svelte` orchestration-only.
-8. Treat Package Center as operations/workshop.
+7. Keep `client/src/core/Desktop.svelte` and `client/src/core/Window.svelte`
+   orchestration-only.
+8. Treat Package Center as an operations/workshop surface, not just a storefront.
 9. Never silently execute risky actions:
-   - delete
-   - overwrite
+   - file delete, recursive delete, permanent delete, empty trash
+   - overwrite or restore
    - rollback
-   - install/update/remove
-   - command execution
-   - Docker restart/stop/remove
-   - empty trash
-10. Run the smallest useful verification set and report what was skipped.
-11. Never revert unrelated dirty changes.
-12. Continue through integration, verification, and documentation when feasible.
-13. Stop early only for explicit user pause/stop, unsafe ambiguity, blocked
-    external dependency, or required human testing.
+   - package install/update/remove
+   - command execution or terminal session start
+   - Docker stop/restart/remove
+   - cloud/backup overwrite
+10. Use structured server errors with `code`, `message`, and useful `details`.
+11. Redact `token`, `grantId`, `ticket`, `code`, `secret`, `password`, and
+    `authorization` in logs, job summaries, and UI messages.
+12. Use realpath/lstat-aware path policy for Host file work.
+13. Run the smallest useful verification set and report skipped checks.
+14. Sync docs when code-verified behavior changes.
 
-## 7) MVP -> Analysis -> Doc Re-Reference -> Development Pipeline
+## 7) MVP -> Analysis -> Document Re-Reference -> Development Pipeline
 
 Use this pipeline for every non-trivial change.
 
 ### 7.1 MVP
 
-Goal:
-
-- Define the smallest end-to-end slice that proves the contract.
-
-Required output before coding:
+Print or keep this block before coding:
 
 ```text
 Selected item:
@@ -405,9 +340,9 @@ Rollback/safety notes:
 Rules:
 
 - MVP must include at least one verification path.
-- MVP must not hide incomplete risky behavior behind UI polish.
 - MVP must preserve existing code-verified behavior unless the task explicitly
   changes it.
+- MVP must not hide incomplete risky behavior behind UI polish.
 
 ### 7.2 Analysis
 
@@ -416,16 +351,17 @@ Inspect before editing:
 - current route/API contract
 - current service/helper/store ownership
 - current UI caller
-- tests covering the behavior
+- current tests covering behavior
 - generated/runtime files that must not be committed
 - security boundary and approval/audit implications
 
 Analysis checklist:
 
-- Does the change touch Host files, Docker, terminal, package install/update,
-  rollback, or destructive operations?
-- Does the change need structured `code/message/details` errors?
-- Does it affect sandbox grants or file associations?
+- Does this touch Host files, Docker, terminal, package lifecycle, rollback, or
+  destructive operations?
+- Does it need backend preflight/approval/consume-once evidence?
+- Does it need structured `code/message/details` errors?
+- Does it affect sandbox grants, raw URLs, file tickets, media leases, or shares?
 - Does it belong in a shared helper/store instead of Desktop/Window?
 - Can existing tests be extended instead of adding a broad new harness?
 
@@ -433,32 +369,39 @@ Analysis checklist:
 
 Before editing code, re-open the relevant docs:
 
-- security/real-use work:
-  - `doc/planning/real-use-remediation-plan.md`
-  - `doc/planning/project-identity-boundaries.md`
-  - `doc/operations/remote-access-hardening-guide.md`
-- package/install work:
-  - `doc/planning/app-install-file-workflow-direction.md`
-  - `doc/reference/package-ecosystem-guide.md`
-  - `doc/reference/app-development-model.md`
-- desktop/launcher work:
-  - `doc/planning/project-identity-boundaries.md`
-  - `doc/planning/real-use-remediation-plan.md`
-  - `doc/reference/app-ownership-matrix.md`
-- verification/tooling work:
-  - `doc/planning/real-use-remediation-plan.md`
-  - `doc/operations/runtime-stability-notes-2026-04-26.md`
-  - `doc/operations/local-run-guide.md`
-- large-file/media/share/cloud continuity work:
-  - `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
-  - `doc/planning/app-install-file-workflow-direction.md`
-  - `doc/planning/real-use-remediation-plan.md`
+Security/real-use:
 
-If docs are stale:
+- `doc/operations/home-server-readiness-review-2026-04-26.md`
+- `doc/planning/real-use-remediation-plan.md`
+- `doc/planning/project-identity-boundaries.md`
+- `doc/operations/remote-access-hardening-guide.md`
 
-- implement to code-verified behavior first
-- update the relevant doc in the same work packet when practical
-- report any skipped doc sync explicitly
+Package/install:
+
+- `doc/planning/app-install-file-workflow-direction.md`
+- `doc/reference/package-ecosystem-guide.md`
+- `doc/reference/app-development-model.md`
+- `doc/reference/architecture-api-reference.md`
+
+Desktop/launcher:
+
+- `doc/planning/project-identity-boundaries.md`
+- `doc/reference/app-ownership-matrix.md`
+
+Large-file/media/share/cloud/backup:
+
+- `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
+- `doc/planning/app-install-file-workflow-direction.md`
+- `doc/planning/real-use-remediation-plan.md`
+
+Verification/tooling:
+
+- `doc/operations/verification-gate-guide.md`
+- `doc/operations/runtime-stability-notes-2026-04-26.md`
+- `doc/operations/local-run-guide.md`
+
+If docs are stale, implement to code-verified behavior first, then update the
+relevant doc in the same work packet when practical.
 
 ### 7.4 Development
 
@@ -466,211 +409,735 @@ Implementation sequence:
 
 1. Define or adjust API/contract shape.
 2. Implement service/helper/store logic.
-3. Add or update backend validation and structured errors.
-4. Add minimal UI only after boundary behavior is explicit.
-5. Add or update focused tests.
-6. Run targeted verification.
-7. Run broader verification if blast radius is high.
-8. Update docs and report.
+3. Add backend validation and structured errors.
+4. Add approval/audit/recoverability where risk is high.
+5. Add minimal UI only after backend boundary behavior is explicit.
+6. Add or update focused tests.
+7. Run targeted verification.
+8. Run broader verification if blast radius is high.
+9. Update docs and report.
 
 Do not:
 
-- add broad abstractions before the MVP proves the repeated need
-- add route-level hardcoding for package/addon-specific behavior
-- add UI-only confirmation for operations that require server-side approval
-- treat a build pass as UX verification when the change affects user workflows
+- add broad abstractions before the MVP proves repeated need
+- put feature business logic in Desktop/Window
+- add UI-only confirmation for backend-risky operations
+- conflate preview ticket, media lease, share download, and durable jobs
+- treat a build pass as UX verification when behavior changed
 
-### 7.5 LFC Execution Playbook
+## 8) Active Backlog
 
-Use this playbook for `LFC-*` work. It is intentionally detailed so an agent can
-start from `AGENTS.md` alone, then re-open cited source files before editing.
+Active queue source:
 
-#### LFC source pack
+- `doc/operations/home-server-readiness-review-2026-04-26.md`
 
-Re-open these files before selecting or implementing an `LFC-*` item:
+Current completion posture:
 
-- `AGENTS.md`
-- `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
-- `doc/planning/product-brief-home-server-remote-computer.md`
-- `doc/planning/app-install-file-workflow-direction.md`
-- `doc/planning/real-use-remediation-plan.md`
-- `doc/planning/implementation-priority-plan.md`
-- `doc/reference/architecture-api-reference.md`
-- `doc/operations/runtime-stability-notes-2026-04-26.md`
+- The HSR execution queue from the 2026-04-26 readiness review is closed for
+  the current codebase.
+- `HSR-C1` package lifecycle approval, `HSR-C2` terminal session approval,
+  `HSR-C3` native prompt cleanup, `HSR-C4` dependency-free UI smoke gate, and
+  `HSR-C5` final verification/docs sync are complete unless focused tests
+  regress.
+- `npm run verify:ui-smoke` is the current release smoke gate. It verifies
+  deterministic workflow source contracts, backend health, and frontend shell
+  boot. Full Playwright-style click-through automation is a future hardening
+  enhancement, not an active HSR blocker.
 
-Non-negotiable LFC constraints:
+Completion rule:
 
-- `preview ticket`, `media lease`, `share download`, and `durable cloud/backup
-  job` are separate models.
-- Do not stretch preview tickets into streaming or backup continuity.
-- Do not make cloud/backup depend on browser tabs, media leases, or file
-  tickets.
-- Normal auth is `Authorization: Bearer <token>`, not query JWT.
-- Browser file URLs may use only opaque, scoped, purpose-bound ticket/lease
-  tokens.
-- Redact `token`, `grantId`, `ticket`, `code`, `secret`, `password`, and
-  `authorization` in logs.
-- Verify Range behavior with `206 Partial Content` and `Content-Range`.
-- Risky overwrite/delete/rollback/command/install/update/remove still requires
-  approval, audit, and recoverability.
+- Do not reopen completed HSR slices unless verification fails or code review
+  finds a concrete regression.
+- New core work should be limited to bugfix, security, reliability,
+  performance, verification, or platform contract maintenance.
+- New user-facing expansion should normally land in packages/addons.
 
-#### LFC project structure map
+Closed completion item order:
 
-Ticket/lease backend:
+1. `HSR-C1` Package Lifecycle Approval Completion
+2. `HSR-C2` Terminal Approval Completion
+3. `HSR-C3` Native Prompt Cleanup And Approval UI Completion
+4. `HSR-C4` Dependency-free UI Smoke Gate
+5. `HSR-C5` Final Addon-only Gate Verification And Docs Sync
 
-- `server/services/fileTicketService.js`
-- `server/routes/fs.js`
-- `server/routes/media.js`
-- `server/tests/ticket-url-contract.test.js`
+Completion status:
 
-Media/document recovery frontend:
+| Gate | Status | Next action |
+| --- | --- | --- |
+| File delete / empty trash / overwrite approval | Done | Keep tests green. |
+| Docker backend approval and UI | Done | Keep tests/build green. |
+| Sandbox raw URL cleanup | Done | Keep SDK and ticket tests green. |
+| File Station and addon overwrite trust cleanup | Done | Keep backend approval callers green. |
+| Transfer/runtime state cleanup | Done | Keep cloud/transfer/share tests green. |
+| Package install/update/rollback approval | Done | Keep lifecycle approval tests green. |
+| Terminal session approval | Done | Keep terminal approval tests green. |
+| Frontend UI smoke | Done | Run `npm run verify:ui-smoke` with local servers before release. |
 
-- `client/src/utils/api.js`
-- `client/src/apps/addons/media-player/MediaPlayer.svelte`
-- `client/src/apps/addons/media-player/api.js`
-- `client/src/apps/addons/document-viewer/components/DocumentViewerApp.svelte`
-- `client/src/apps/addons/document-viewer/services/documentApi.js`
-- `client/src/core/components/FilePicker.svelte`
+Historical source item order:
 
-Share download:
+1. `HSR-1` Risky Operation Approval Unification
+2. `HSR-2` Sandbox Raw URL Cleanup
+3. `HSR-3` File Station Trust Cleanup
+4. `HSR-4` Transfer And Backup Durability Close-out
+5. `HSR-5` Runtime State Policy Cleanup
+6. `HSR-6` Frontend Real-use Smoke Gate
 
-- `server/routes/share.js`
-- `server/services/shareService.js`
-- `server/services/auditService.js`
-- `client/src/apps/system/file-explorer/FileExplorer.svelte`
+The historical HSR sections below preserve source context. For execution, use
+`HSR-C1` through `HSR-C5` unless the user explicitly asks to reopen a completed
+source item.
 
-Transfer jobs:
+### HSR-C1 Package Lifecycle Approval Completion
 
-- `server/routes/transfer.js`
-- `server/services/transferJobService.js`
-- `server/tests/transfer-jobs.integration.test.js`
-- `client/src/apps/system/transfer/api.js`
-- `client/src/apps/system/transfer/normalization.js`
-- `client/src/apps/system/transfer/TransferUI.svelte`
-- `client/src/apps/system/download-station/DownloadStation.svelte`
+Layer(s):
 
-Cloud/rclone:
+- Host
+- Sandbox / Package
+- Remote Computer UX
+- Docs / Verification
 
-- `server/routes/cloud.js`
-- `server/services/cloudService.js`
-- `server/tests/cloud-upload-validation.test.js`
-- `client/src/apps/system/settings/CloudManager.svelte`
-- `client/src/apps/system/settings/api.js`
-- `client/src/apps/system/transfer/TransferUI.svelte`
+Problem:
 
-#### LFC execution flow
+- Package delete already uses `operationApprovalService`.
+- Registry install, ZIP import/update, rollback, and manifest/runtime scope
+  changes can still execute without the same consume-once backend approval
+  nonce family.
+- Package lifecycle actions can change executable code, permissions, runtime
+  behavior, file associations, backups, and rollback targets.
 
-```text
-git status
--> choose first unfinished LFC item
--> declare layers
--> fill MVP template
--> read LFC source pack
--> inspect Files to inspect first
--> map current API/service/UI/test behavior
--> define contract/API
--> implement service/helper/store
--> add route validation, structured errors, audit/redaction
--> implement minimal UI only after backend contract is explicit
--> extend focused tests before broad harnesses
--> run LFC-focused verification
--> run broader verification if blast radius is high
--> sync docs when code-verified behavior changes
--> completion report
+Files to inspect first:
+
+- Backend:
+  - `server/services/operationApprovalService.js`
+  - `server/services/auditService.js`
+  - `server/routes/packages.js`
+  - `server/services/packageLifecycleService.js`
+- Frontend:
+  - `client/src/apps/system/package-center/PackageCenter.svelte`
+  - `client/src/apps/system/package-center/api.js`
+- Tests:
+  - `server/tests/package-delete-approval-contract.test.js`
+  - add `server/tests/package-lifecycle-approval-contract.test.js`
+
+Contract/API target:
+
+- Preserve existing package preflight routes and add missing approval fields to
+  their responses instead of inventing a separate lifecycle model.
+- Registry install and update:
+  - preflight action: `package.install` or `package.update`
+  - execute endpoint: `POST /api/packages/registry/install`
+  - target evidence: source id, package id, package URL or registry metadata,
+    incoming manifest hash, existing app id, version, requested overwrite, and
+    lifecycle safeguard blockers
+- ZIP import and update:
+  - preflight action: `package.import` or `package.update`
+  - execute endpoint: `POST /api/packages/import`
+  - target evidence: uploaded archive hash, manifest id, manifest hash,
+    existing app id, requested overwrite, local workspace bridge, and lifecycle
+    safeguard blockers
+- Rollback:
+  - preflight action: `package.rollback`
+  - execute endpoint: `POST /api/packages/:id/rollback`
+  - target evidence: app id, selected backup id, backup manifest hash or backup
+    metadata hash, runtime status, and rollback safeguard blockers
+- Manifest/runtime scope changes:
+  - action names must be explicit, for example `package.manifest.update`
+  - approval target must include changed permission, runtime, and file
+    association evidence
+- Execute endpoints must reject legacy `approval.approved === true` and any
+  approval object without `operationId`, `nonce`, and current `targetHash`.
+
+Implementation order:
+
+1. Build shared package lifecycle target evidence helpers in
+   `server/routes/packages.js` or a small package-local helper.
+2. Add approval creation to install/import/rollback preflight responses.
+3. Add approve endpoints when a route does not already have one, using the same
+   `operationApprovalService.approveOperation()` contract as package delete.
+4. In execute routes, recompute target evidence, compare target hash, consume
+   approval once, then run the lifecycle action.
+5. Add audit records for preflight, approval, rejection, execution success, and
+   execution failure.
+6. Update Package Center API helpers and UI to pass approval evidence through
+   install/import/rollback actions.
+7. Add focused lifecycle approval tests before running full verification.
+
+Minimum DoD:
+
+- Registry install/update, ZIP import/update, rollback, and manifest/runtime
+  scope changes reject execution without valid backend approval evidence.
+- Preflight responses include action, target, impact, recoverability,
+  lifecycle safeguards, typed confirmation when needed, `operationId`,
+  `targetHash`, and `expiresAt`.
+- Execute routes re-read the current package/runtime state, recompute
+  `targetHash`, and reject stale approval with a structured error and fresh
+  preflight evidence where practical.
+- Approval nonce is consumed once and cannot be replayed.
+- Package Center no longer depends on native browser confirmation for package
+  install/update/rollback/delete approval.
+
+Focused verification:
+
+```bash
+node --check server/services/operationApprovalService.js
+node --check server/services/auditService.js
+node --check server/routes/packages.js
+node --test --test-concurrency=1 server/tests/package-delete-approval-contract.test.js
+node --test --test-concurrency=1 server/tests/package-lifecycle-approval-contract.test.js
+npm --prefix client run build
 ```
 
-Detailed execution rules:
+### HSR-C2 Terminal Approval Completion
 
-1. Run `git status --short` and identify unrelated dirty/untracked files. Do
-   not revert them.
-2. Select the first unfinished item from `LFC-1` to `LFC-5` unless the user
-   assigns a different item.
-3. Print the MVP block from section `7.1` before coding.
-4. Inspect the item's source files before editing. Prefer `rg`, `sed`, and
-   focused reads over broad file dumps.
-5. Re-open the LFC source pack. Do not rely on memory for TTL, state, or
-   deferred-decision values.
-6. Define API/contract shape first:
-   - request fields
-   - response fields
-   - structured `code/message/details`
-   - status transitions
-   - audit evidence
-   - retry/recovery behavior
-7. Implement server-side boundary behavior before client polish.
-8. Add or extend tests close to the touched contract.
-9. Only then add frontend helper/UI recovery.
-10. Keep automatic recovery quiet when it succeeds.
-11. Show explicit UI state when user/operator action is required:
-    - risky write/overwrite/delete/rollback
-    - quota/backoff pause
-    - missing rclone/provider setup
-    - permission or authentication failure
-    - unrecoverable file mutation
-    - destination conflict
-12. Run focused verification first.
-13. Run `npm test`, `cd client && npm run build`, package doctor, or Docker
-    validation when the blast radius reaches shared contracts, frontend
-    workflows, packages, or deployment.
-14. If docs and code diverge, update docs in the same work packet when
-    practical.
-15. Report changed files, behavior, security/UX contract, verification, skipped
-    checks, remaining gaps/risks, and next recommended `LFC-*` item.
+Layer(s):
 
-#### LFC implementation defaults
+- Host
+- Remote Computer UX
+- Docs / Verification
 
-- Preview ticket:
-  - `profile=preview`
-  - TTL 5 minutes default, 10 minutes max
-  - memory-only
-  - reacquirable
-- Media lease:
-  - `profile=media`
-  - idle timeout 45 minutes
-  - absolute max TTL 8 hours
-  - memory-only in first implementation
-  - `createdAt`, `lastAccess`, `absoluteExpiresAt`, `size`, `mtime`
-  - `size + mtime` target mutation check
-  - frontend reacquire after expiry/restart
-- Share download:
-  - never reuse media lease
-  - expiry checked at request start
-  - already-started response may finish in first implementation
-  - new request after expiry is rejected
-  - directory share rejected until deliberate archive policy exists
-- Durable job:
-  - persistent JSON job store first
-  - sqlite may replace JSON later
-  - `running -> interrupted` after backend restart unless explicitly reconciled
-    with a live child process
-  - cancel terminates child process/process group
-  - finished jobs require intentional prune policy
-- rclone/provider policy:
-  - Google Drive `403/429/quota` maps to `backoff` or `paused_by_quota`
-  - WebDAV timeout/rate-like errors map to retryable/backoff where practical
-  - job record keeps provider, configured flags, exit code, stderr summary, and
-    next retry time where available
+Problem:
 
-#### Deferred LFC decisions
+- `server/services/terminal.js` currently starts a PTY session after normal
+  socket auth only.
+- `terminal:input` writes directly to the PTY once the session exists.
+- `terminal:approval` records frontend risky-command decisions in audit, but the
+  backend does not enforce an approval nonce before session start or Web OS
+  command injection.
 
-Do not block `LFC-1` or `LFC-2` on these:
+Files to inspect first:
 
-- 24-hour trusted LAN media lease.
-- Persistent media leases across backend restart.
-- inode/hash mutation check beyond `size + mtime`.
-- Full public-share password/count/rate UI policy.
-- Backend proxy versus local-only semantics for `rclone serve webdav`.
-- Unified database for package backup, cloud backup, and transfer jobs.
-- sqlite replacing JSON for durable job storage.
-- Full rclone VFS cache lifecycle for mount-like workflows.
+- Backend:
+  - `server/services/terminal.js`
+  - `server/services/operationApprovalService.js`
+  - `server/services/auditService.js`
+- Frontend:
+  - `client/src/apps/system/terminal/Terminal.svelte`
+  - `client/src/core/components/Agent.svelte`
+- Tests:
+  - add `server/tests/terminal-approval-contract.test.js` if the service can be
+    tested without a live PTY
 
-#### LFC runtime/generated file caution
+Contract/API target:
 
-Do not rely on generated runtime files for completion claims. Treat these as
-runtime/local unless explicitly promoted:
+- Interactive Terminal is an approved raw admin shell.
+- Backend must require a `terminal.session` approval before spawning a PTY.
+- Prefer a socket-native contract because Terminal is socket-owned:
+  - `terminal:session-preflight` creates operation `terminal.session`
+  - `terminal:session-approve` approves the operation and returns a nonce
+  - `terminal:init` requires `{ approval: { operationId, nonce, targetHash } }`
+    and consumes it before `pty.spawn()`
+  - `terminal:input` must reject input unless the socket has a consumed approved
+    session context
+- HTTP wrappers are allowed only if they reduce test complexity; they must still
+  use `operationApprovalService`.
+- Do not rely on parsing arbitrary shell lines as a hard safety boundary.
+- Web OS-owned command injection paths, including Agent quick actions, saved
+  commands, package scripts, and any future non-interactive terminal execution,
+  require per-command approval with action `terminal.command`.
+- Remove or downgrade the current frontend `terminal:approval` risky-command
+  audit flow because it is not an enforcement contract.
+
+Minimum DoD:
+
+- PTY session start is blocked without a valid backend approval nonce.
+- Session approval is scoped to user, socket/session target, working directory,
+  shell, client evidence, and a target hash.
+- Approval is consumed once before PTY spawn.
+- `terminal:input` cannot write before approved session initialization.
+- Audit records session preflight, approval, start, input rejection, end, and
+  disconnect kill.
+- Web OS command injection paths do not run shell commands without
+  `terminal.command` approval.
+
+Focused verification:
+
+```bash
+node --check server/services/terminal.js
+node --check server/services/operationApprovalService.js
+node --test --test-concurrency=1 server/tests/terminal-approval-contract.test.js
+npm --prefix client run build
+```
+
+### HSR-C3 Native Prompt Cleanup And Approval UI Completion
+
+Layer(s):
+
+- Remote Computer UX
+- Home Server Operations
+- Sandbox / Package
+- Docs / Verification
+
+Problem:
+
+- Native `confirm()` / `prompt()` remains in system workflows after the first
+  HSR pass.
+- Browser-native prompts are not enough for risky operations and are awkward for
+  repeated operational use.
+
+Known remaining callers from the latest scan:
+
+- `client/src/apps/system/docker-manager/DockerManager.svelte`
+- `client/src/apps/system/package-center/PackageCenter.svelte`
+- `client/src/apps/system/terminal/Terminal.svelte`
+- `client/src/apps/system/settings/BackupJobManager.svelte`
+
+Implementation order:
+
+1. Use or extract a small in-app approval dialog pattern from File Station for
+   operation summaries, typed confirmation, and submit/cancel state.
+2. Wire Docker Manager remove/stop/restart UI to existing Docker backend
+   preflight/approve/execute approval routes.
+3. Wire Package Center install/update/import/rollback/delete UI to `HSR-C1`
+   lifecycle approval helpers.
+4. Replace package clone `prompt()` calls with an in-app form dialog. This is
+   not necessarily a backend approval action, but it must not use native prompt.
+5. Replace Terminal risky-command `confirm()` with the `HSR-C2` session approval
+   UI and remove audit-only approval messaging.
+6. Replace backup job delete `confirm()` with an in-app dialog; add backend
+   approval only if the delete endpoint removes host data or backup evidence.
+7. Run a final native prompt scan and document intentional exceptions, if any.
+
+Minimum DoD:
+
+- Targeted system apps have no user-facing native `confirm()` / `prompt()`.
+- Risky operations use backend preflight/approve/execute and consume-once
+  approval evidence.
+- Non-risky text input flows use in-app forms.
+- Dialogs show impact, target, recoverability, typed confirmation when required,
+  and structured server errors.
+- File Station's completed in-app dialog and Secure Folder disabled behavior
+  remain intact.
+
+Focused verification:
+
+```bash
+rg -n "globalThis\\.(confirm|prompt)|\\bconfirm\\(|\\bprompt\\(" client/src/apps/system
+node --test --test-concurrency=1 server/tests/docker-service.test.js
+node --test --test-concurrency=1 server/tests/package-delete-approval-contract.test.js
+npm --prefix client run build
+```
+
+### HSR-C4 Dependency-free UI Smoke Gate
+
+Layer(s):
+
+- Web Desktop
+- Remote Computer UX
+- Docs / Verification
+
+Problem:
+
+- `npm run verify`, focused server tests, and frontend build are necessary but
+  not enough for DSM-like readiness.
+- `npm run verify:ui-smoke` must prove more than reachability without adding a
+  browser-runner dependency.
+- Readiness requires deterministic coverage for the frontend contracts most
+  likely to regress: native prompt cleanup, approval state markers, recoverable
+  login errors, transfer durable state, and sandbox timeout/ticket state.
+
+Files to inspect first:
+
+- `package.json`
+- `client/package.json`
+- `tools/ui-smoke-gate.js`
+- `doc/operations/verification-gate-guide.md`
+- `doc/operations/local-run-guide.md`
+- `.github/workflows/verify.yml`
+- Frontend workflows:
+  - `client/src/core/Login.svelte`
+  - `client/src/apps/system/file-explorer/FileExplorer.svelte`
+  - `client/src/apps/system/package-center/PackageCenter.svelte`
+  - `client/src/apps/system/transfer/TransferUI.svelte`
+  - `client/src/core/components/SandboxAppFrame.svelte`
+
+Implementation result:
+
+- `tools/ui-smoke-gate.js` is dependency-free.
+- It checks targeted native prompt cleanup, workflow source-contract markers,
+  backend health, and frontend shell boot.
+- Browser click-through automation remains a future hardening enhancement.
+- Do not execute destructive actions against real user files during smoke. Use
+  temporary allowed-root fixtures or assert preflight/approval blocking without
+  execution.
+
+Required smoke scenarios:
+
+- Login succeeds and expired/invalid session shows a recoverable auth state.
+- File Station opens and destructive file action reaches backend preflight
+  without native prompt.
+- Package Center opens and package lifecycle action reaches approval state
+  without native prompt.
+- Transfer UI shows durable cloud/local job state and an overwrite-required
+  approval state without depending on tab lifetime.
+- Sandbox app frame timeout/error state is visible and does not leak raw grant
+  query URLs.
+
+Minimum DoD:
+
+- `npm run verify:ui-smoke` passes with local backend/frontend dev servers.
+- `npm run verify` remains the deterministic code/build/test gate, and
+  `verify:ui-smoke` is documented as a separate release smoke command because
+  it requires running servers.
+- CI/local docs explain prerequisites, ports, credentials, skipped checks, and
+  cleanup.
+- No smoke artifacts are written by the current dependency-free gate.
+
+Focused verification:
+
+```bash
+npm run verify:ui-smoke
+npm run verify
+npm run verify:docker-config
+```
+
+### HSR-C5 Final Addon-only Gate Verification And Docs Sync
+
+Layer(s):
+
+- Docs / Verification
+- Agent / Automation
+
+Problem:
+
+- After `HSR-C1` through `HSR-C4`, the repo needs one final integration pass
+  before declaring addon-only/core-freeze readiness.
+- Dirty runtime state and stale operations docs can make the completion claim
+  unreliable.
+
+Files to inspect first:
+
+- `AGENTS.md`
+- `doc/operations/home-server-readiness-review-2026-04-26.md`
+- `doc/operations/runtime-stability-notes-2026-04-26.md`
+- `doc/operations/verification-gate-guide.md`
+- `doc/operations/local-run-guide.md`
+- `README.md`
+- `USER_README.md`
+- `.gitignore`
+
+Implementation order:
+
+1. Run `git status --short` and classify dirty files as code, docs, tests,
+   runtime state, or unrelated user changes.
+2. Run the full verification set.
+3. Scan for remaining native prompts and legacy approval shortcuts.
+4. Confirm runtime/local files are ignored or intentionally tracked fixtures.
+5. Update operations docs with code-verified behavior and remaining known
+   risks, if any.
+6. Update this `AGENTS.md` queue so completed items move out of active
+   execution.
+7. Report whether addon-only/core-freeze can be declared.
+
+Minimum DoD:
+
+- Full verification passes.
+- Approval, sandbox, package lifecycle, terminal, transfer, share, and UI smoke
+  tests pass.
+- `rg` finds no active legacy approval shortcuts or native prompt blockers in
+  targeted production paths.
+- Operations docs match code-verified behavior.
+- Remaining risks are either disabled states, documented owner-only beta limits,
+  or new active backlog items.
+
+Focused verification:
+
+```bash
+git status --short
+rg -n "approval\\.approved|globalThis\\.(confirm|prompt)|\\bconfirm\\(|\\bprompt\\(|terminal:approval" server client/src
+npm run verify
+npm run verify:docker-config
+npm run verify:ui-smoke
+git diff --check
+```
+
+### Historical HSR Source Details
+
+The sections below are not the active execution queue. They preserve the
+original readiness-review scope for context only. Current status and execution
+order are defined by `HSR-C1` through `HSR-C5` above.
+
+### HSR-1 Risky Operation Approval Unification
+
+Layer(s):
+
+- Host
+- Home Server Operations
+- App Install / File Workflow
+- Sandbox / Package
+- Remote Computer UX
+
+Problem:
+
+- Some destructive/high-impact operations still run with normal auth only or
+  frontend-only confirmation.
+- Package delete and cloud overwrite are good examples, but file delete, empty
+  trash, Docker actions, package install/update/rollback, and terminal actions
+  need the same backend approval family.
+
+Scope:
+
+- Backend:
+  - `server/services/operationApprovalService.js`
+  - `server/services/auditService.js`
+  - `server/routes/fs.js`
+  - `server/services/trashService.js`
+  - `server/routes/docker.js`
+  - `server/services/dockerService.js`
+  - `server/routes/packages.js`
+  - `server/services/packageLifecycleService.js`
+  - `server/services/terminal.js`
+- Frontend:
+  - `client/src/apps/system/file-explorer/FileExplorer.svelte`
+  - `client/src/apps/system/file-explorer/api.js`
+  - `client/src/apps/system/docker-manager/DockerManager.svelte`
+  - `client/src/apps/system/docker-manager/api.js`
+  - `client/src/apps/system/package-center/PackageCenter.svelte`
+  - `client/src/apps/system/package-center/api.js`
+  - `client/src/apps/system/terminal/Terminal.svelte`
+  - `client/src/core/components/Agent.svelte`
+- Tests:
+  - `server/tests/package-delete-approval-contract.test.js`
+  - `server/tests/docker-service.test.js`
+  - add focused fs/package/terminal approval tests as needed
+
+Recommended sub-slice order:
+
+1. `HSR-1a` File delete, empty trash, and overwrite approval.
+2. `HSR-1b` Docker stop/restart/remove approval.
+3. `HSR-1c` Package install/update/rollback approval.
+4. `HSR-1d` Terminal session approval and per-command approval for Web OS
+   command injection paths.
+
+Minimum DoD:
+
+- Destructive/high-impact execute endpoints reject missing or invalid approval
+  nonce.
+- Preflight response includes target, impact, recoverability,
+  typedConfirmation when needed, expiresAt, and operationId.
+- Execute revalidates target hash/state and consumes approval once.
+- Audit records preflight, approval, rejection, execution success, and execution
+  failure.
+- UI no longer relies on native `confirm()` / `prompt()` for these actions.
+
+Focused verification:
+
+```bash
+node --check server/services/operationApprovalService.js
+node --check server/services/auditService.js
+node --check server/routes/fs.js
+node --check server/routes/docker.js
+node --check server/routes/packages.js
+node --check server/services/terminal.js
+node --test --test-concurrency=1 server/tests/package-delete-approval-contract.test.js
+node --test --test-concurrency=1 server/tests/docker-service.test.js
+npm --prefix client run build
+```
+
+### HSR-2 Sandbox Raw URL Cleanup
+
+Layer(s):
+
+- Host
+- Sandbox / Package
+- App Install / File Workflow
+
+Problem:
+
+- Sandbox raw file URLs include `grantId` query strings.
+- Request logging redacts known keys, but copied URLs can act like scoped bearer
+  links during grant lifetime.
+
+Scope:
+
+- Backend:
+  - `server/routes/sandbox.js`
+  - `server/static/webos-sandbox-sdk.js`
+  - `server/services/fileGrantService.js`
+  - `server/services/fileTicketService.js`
+  - `server/utils/urlRedaction.js`
+- Frontend/callers:
+  - `client/src/core/components/SandboxAppFrame.svelte`
+  - sandbox package callers under `server/storage/inventory/apps/`
+  - addon file API callers if they use sandbox raw grants
+- Tests:
+  - `server/tests/file-grant-revoke.test.js`
+  - `server/tests/sandbox-sdk-contract.test.js`
+  - `server/tests/ticket-url-contract.test.js`
+
+Minimum DoD:
+
+- Raw file access no longer depends on long-lived `grantId` query URLs.
+- If a URL is unavoidable, it is a short-lived authenticated raw ticket with
+  purpose/scope binding.
+- Grant scope and app ownership checks remain enforced.
+- Sensitive URL material is redacted in request logs, job summaries, and UI
+  errors.
+
+Focused verification:
+
+```bash
+node --check server/routes/sandbox.js
+node --check server/static/webos-sandbox-sdk.js
+node --check server/services/fileGrantService.js
+node --check server/services/fileTicketService.js
+node --test --test-concurrency=1 server/tests/file-grant-revoke.test.js
+node --test --test-concurrency=1 server/tests/sandbox-sdk-contract.test.js
+node --test --test-concurrency=1 server/tests/ticket-url-contract.test.js
+```
+
+### HSR-3 File Station Trust Cleanup
+
+Layer(s):
+
+- App Install / File Workflow
+- Remote Computer UX
+- Addon Runtime/UI
+
+Problem:
+
+- File Station still has high-impact flows that rely on native browser prompts
+  or mock security behavior.
+- Addon save/overwrite paths must move toward backend approval, audit, and
+  recoverability.
+
+Scope:
+
+- File Station:
+  - `client/src/apps/system/file-explorer/FileExplorer.svelte`
+  - `client/src/apps/system/file-explorer/api.js`
+  - `client/src/apps/system/file-explorer/services/fileAssociations.js`
+- Addon file callers:
+  - `client/src/apps/addons/code-editor/services/fileApi.js`
+  - `client/src/apps/addons/document-viewer/services/documentApi.js`
+  - `client/src/apps/addons/media-player/api.js`
+  - `client/src/apps/addons/model-viewer/services/modelFile.js`
+- Backend:
+  - `server/routes/fs.js`
+  - `server/services/trashService.js`
+  - `server/utils/pathPolicy.js`
+- Tests:
+  - `server/tests/security-boundary-contract.test.js`
+  - add focused fs approval/overwrite tests as needed
+
+Minimum DoD:
+
+- High-impact File Station flows use application UI plus backend preflight and
+  approval evidence.
+- Mock Secure Folder password behavior is removed or clearly disabled as not
+  implemented.
+- Delete, overwrite, extract overwrite, and restore show impact and recovery
+  evidence before execution.
+
+Focused verification:
+
+```bash
+node --check server/routes/fs.js
+node --check server/services/trashService.js
+node --check server/utils/pathPolicy.js
+node --test --test-concurrency=1 server/tests/security-boundary-contract.test.js
+npm --prefix client run build
+```
+
+### HSR-4 Transfer And Backup Durability Close-out
+
+Layer(s):
+
+- Host
+- Home Server Operations
+- Remote Computer UX
+- Docs / Verification
+
+Problem:
+
+- A-owned cloud transfer is strong, but Transfer UI overwrite approval and local
+  transfer/backup hardening still need closure.
+- Local transfer persistence should use atomic tmp-then-rename writes.
+- Backup source/destination path validation must match current realpath-aware
+  file and transfer policy.
+
+Scope:
+
+- Backend:
+  - `server/services/cloudTransferJobService.js`
+  - `server/services/cloudService.js`
+  - `server/services/transferJobService.js`
+  - `server/routes/cloud.js`
+  - `server/routes/transfer.js`
+  - `server/routes/system.js`
+  - `server/utils/pathPolicy.js`
+- Frontend:
+  - `client/src/apps/system/transfer/TransferUI.svelte`
+  - `client/src/apps/system/transfer/api.js`
+  - `client/src/apps/system/transfer/normalization.js`
+  - `client/src/apps/system/settings/BackupJobManager.svelte`
+  - `client/src/apps/system/settings/CloudManager.svelte`
+  - `client/src/apps/system/file-explorer/FileExplorer.svelte`
+- Tests:
+  - `server/tests/transfer-jobs.integration.test.js`
+  - `server/tests/cloud-upload-validation.test.js`
+  - `server/tests/client-transfer-sandbox-normalization.test.js`
+
+Minimum DoD:
+
+- Transfer UI can complete cloud overwrite-required flow through backend
+  approval.
+- Local transfer job store writes atomically through a sibling temp file and
+  rename.
+- Backup job source/destination path uses realpath/lstat-aware policy.
+- Retry/cancel/prune remain explicit API operations.
+- Browser tab close, route change, socket disconnect, or polling stop does not
+  cancel server-owned jobs.
+
+Focused verification:
+
+```bash
+node --check server/services/cloudTransferJobService.js
+node --check server/services/cloudService.js
+node --check server/services/transferJobService.js
+node --check server/routes/cloud.js
+node --check server/routes/transfer.js
+node --check server/routes/system.js
+node --test --test-concurrency=1 server/tests/cloud-upload-validation.test.js
+node --test --test-concurrency=1 server/tests/transfer-jobs.integration.test.js
+node --test --test-concurrency=1 server/tests/client-transfer-sandbox-normalization.test.js
+npm --prefix client run build
+```
+
+### HSR-5 Runtime State Policy Cleanup
+
+Layer(s):
+
+- Docs / Verification
+- Home Server Operations
+
+Problem:
+
+- `server/storage/shares.json` is runtime state but may still be trackable.
+- Runtime/local state policy must be consistent across `.gitignore`, docs, and
+  completion reports.
+
+Scope:
+
+- `.gitignore`
+- `server/storage/shares.json`
+- `server/services/shareService.js`
+- `server/routes/share.js`
+- `doc/operations/runtime-stability-notes-2026-04-26.md`
+- `doc/operations/home-server-readiness-review-2026-04-26.md`
+- `doc/README.md`
+
+Minimum DoD:
+
+- Concrete share runtime state is not committed.
+- `server/storage/shares.json` is ignored or replaced with an explicit redacted
+  fixture/schema/test fixture.
+- Runtime/local file lists in AGENTS and operations docs match.
+
+Runtime/local state caution:
 
 - `server/storage/index.json`
 - `server/storage/media-library/`
+- `server/storage/cloud-transfer-jobs.json`
+- `server/storage/transfer-jobs.json`
 - `server/storage/shares.json`
 - `server/storage/audit.log`
 - `server/storage/.trash_info.json`
@@ -679,420 +1146,114 @@ runtime/local unless explicitly promoted:
 - `storage/cloud_mock/`
 - `config/rclone.conf`
 
-If an `LFC-*` durable job store creates new runtime files, document the path and
-decide whether it is runtime state or a trackable fixture before reporting
-completion.
-
-## 8) Active Backlog
-
-Status:
-
-- Completed backlog details belong in `doc/operations/completed-backlog-log.md`.
-- The active work queue is now the large-file continuity and cloud transfer
-  plan from `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`.
-- Product target: transparent wings. Users should open, stream, share, and back
-  up files naturally while Web OS handles leases, retries, resume, checkpoints,
-  quota/backoff, approval, audit, and recovery.
-
-Active remediation item order:
-
-- `LFC-1` Raw Ticket And Media Lease Contract
-- `LFC-2` Frontend Media Lease Recovery
-- `LFC-3` Share Download Policy
-- `LFC-4` Durable Transfer Job Store
-- `LFC-5` rclone Provider Policy
-
-### LFC-1 Raw Ticket And Media Lease Contract
-
-Source:
-
-- `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
-
-Layer(s):
-
-- `Host`
-- `Remote Computer UX`
-- `App Install / File Workflow`
-
-Problem:
-
-- short preview tickets are being asked to cover large/long media behavior
-- media playback and large document/object viewing need Range-compatible lease
-  continuity without turning raw file URLs into broad user sessions
-- backend restart and lease expiry must recover transparently where possible
-
-Files to inspect first:
-
-- `server/services/fileTicketService.js`
-- `server/routes/fs.js`
-- `server/tests/ticket-url-contract.test.js`
-- `client/src/apps/addons/media-player/MediaPlayer.svelte`
-- `client/src/apps/addons/document-viewer/components/DocumentViewerApp.svelte`
-
-Minimum DoD:
-
-- `profile=preview|media` or equivalent purpose exists
-- preview ticket keeps 5 minute default / 10 minute max short TTL semantics
-- media lease supports idle 45 minutes and absolute 8 hours by default
-- media lease stores `createdAt`, `lastAccess`, `absoluteExpiresAt`, `size`,
-  and `mtime`
-- successful Range/full request updates `lastAccess`
-- changed `size + mtime` invalidates the lease with a clear structured error
-- tests cover Range, expiry, idle timeout, target mutation, scope mismatch, and
-  log redaction
-
-Implementation sequence:
-
-1. Inspect current `/api/fs/raw-ticket` and `/api/fs/raw?ticket=...` behavior.
-2. Extend `fileTicketService` from short-ticket-only records to purpose-aware
-   records while keeping preview defaults unchanged.
-3. Add media lease fields and validation:
-   - `profile`
-   - `createdAt`
-   - `lastAccess`
-   - `absoluteExpiresAt`
-   - `size`
-   - `mtime`
-4. Make raw file redemption update `lastAccess` for media leases only.
-5. Keep preview tickets short and memory-only.
-6. Add structured media lease errors before frontend work:
-   - `FS_MEDIA_LEASE_INVALID`
-   - `FS_MEDIA_LEASE_EXPIRED`
-   - `FS_MEDIA_LEASE_IDLE_TIMEOUT`
-   - `FS_MEDIA_LEASE_TARGET_CHANGED`
-7. Extend `ticket-url-contract` tests for Range, expiry, idle timeout, target
-   mutation, scope/app mismatch, and redaction.
-
 Focused verification:
 
 ```bash
-node --check server/services/fileTicketService.js
-node --check server/routes/fs.js
-npm test -- server/tests/ticket-url-contract.test.js
-```
-
-### LFC-2 Frontend Media Lease Recovery
-
-Source:
-
-- `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
-
-Layer(s):
-
-- `Web Desktop`
-- `Addon Runtime/UI`
-- `Remote Computer UX`
-
-Problem:
-
-- users should not see or manage lease expiry, backend restart, or raw media URL
-  refresh
-- automatic recovery should be quiet when it succeeds and explicit only when
-  action is required
-
-Files to inspect first:
-
-- `client/src/utils/api.js`
-- `client/src/apps/addons/media-player/MediaPlayer.svelte`
-- `client/src/apps/addons/document-viewer/components/DocumentViewerApp.svelte`
-- `client/src/core/components/FilePicker.svelte`
-- `server/routes/fs.js`
-
-Minimum DoD:
-
-- media element error can request a fresh lease
-- video/audio restores `currentTime` when possible
-- PDF/image preview retries once with a fresh lease
-- expired lease is distinguishable from path-not-found and target-changed
-- UI stays quiet on successful automatic recovery
-- unrecoverable states show structured, user-actionable errors
-
-Implementation sequence:
-
-1. Inspect current `fetchRawFileTicketUrl` and media/document open flows.
-2. Add a helper path for requesting media leases without breaking preview ticket
-   callers.
-3. In Media Player, reacquire once on media element error caused by expired or
-   restarted lease.
-4. Preserve and restore `currentTime` for video/audio when possible.
-5. Add one quiet retry for image/PDF/object preview where browser events allow
-   it.
-6. Do not show a toast or error when automatic recovery succeeds.
-7. Show explicit UI only for target-changed, path-not-found, permission, or
-   unrecoverable recovery failure.
-
-Focused verification:
-
-```bash
-cd client
-npm run build
-```
-
-### LFC-3 Share Download Policy
-
-Source:
-
-- `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
-
-Layer(s):
-
-- `Home Server Operations`
-- `Remote Computer UX`
-- `Docs / Verification`
-
-Problem:
-
-- public/guest share download must support large-file resume without reusing
-  media leases or broad Host authority
-- share expiry, audit, path revalidation, directory behavior, and optional
-  password/count/rate policy must be explicit
-
-Files to inspect first:
-
-- `server/routes/fs.js`
-- `server/routes/share.js`
-- `server/services/shareService.js`
-- `server/services/auditService.js`
-- `client/src/apps/system/file-explorer/FileExplorer.svelte`
-
-Minimum DoD:
-
-- share download supports Range/resume
-- share expiry is checked at request start
-- already-started response may finish after expiry in the first implementation
-- new request after expiry is rejected clearly
-- share download does not reuse media lease
-- directory share is rejected until deliberate archive/package policy exists
-- audit records share id, path, ip/user-agent, and result
-- password/count/rate policy fields are represented or explicitly blocked before
-  external exposure
-
-Implementation sequence:
-
-1. Inspect current public `GET /api/share/download/:id` behavior.
-2. Keep share download independent from media lease.
-3. Define request-start expiry semantics in route code and tests.
-4. Replace or wrap `res.download()` only as needed to guarantee Range/resume and
-   structured errors.
-5. Revalidate target path at request start.
-6. Reject directory shares until archive/package behavior is deliberately
-   implemented.
-7. Write audit evidence for success and failure:
-   - share id
-   - path
-   - ip
-   - user-agent
-   - result
-8. Represent or explicitly block password/count/rate policy before any external
-   exposure.
-
-Focused verification:
-
-```bash
-node --check server/routes/share.js
+git status --short
 node --check server/services/shareService.js
-npm test
+node --check server/routes/share.js
+node --test --test-concurrency=1 server/tests/share-download-policy.test.js
 ```
 
-### LFC-4 Durable Transfer Job Store
-
-Source:
-
-- `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
+### HSR-6 Frontend Real-use Smoke Gate
 
 Layer(s):
 
-- `Home Server Operations`
-- `Docs / Verification`
+- Web Desktop
+- Remote Computer UX
+- Docs / Verification
 
 Problem:
 
-- cloud/backup/transfer work must not depend on a browser tab, media lease, or
-  file ticket
-- memory-only transfer/cloud jobs disappear across backend restart
-- partial destination and retry behavior must be recoverable and explicit
+- Server tests and frontend build are good, but DSM-like readiness needs
+  frontend real-use smoke coverage for core workflows.
+- Playwright is recommended in planning, but it is not a current dependency
+  unless added intentionally.
 
-Files to inspect first:
+Scope:
 
-- `server/routes/transfer.js`
-- `server/services/transferJobService.js`
-- `server/routes/cloud.js`
-- `server/services/cloudService.js`
-- `server/tests/transfer-jobs.integration.test.js`
-- `server/tests/cloud-upload-validation.test.js`
-- `client/src/apps/system/transfer/TransferUI.svelte`
-- `client/src/apps/system/download-station/DownloadStation.svelte`
+- `package.json`
+- `client/package.json`
+- `tools/`
+- `.github/workflows/verify.yml`
+- `doc/operations/verification-gate-guide.md`
+- `doc/operations/local-run-guide.md`
+- Frontend workflows:
+  - `client/src/core/Login.svelte`
+  - `client/src/apps/system/file-explorer/FileExplorer.svelte`
+  - `client/src/apps/system/package-center/PackageCenter.svelte`
+  - `client/src/apps/system/transfer/TransferUI.svelte`
+  - `client/src/core/components/SandboxAppFrame.svelte`
 
 Minimum DoD:
 
-- job state survives backend restart
-- `running` jobs recover as `interrupted` unless explicitly reconciled with a
-  live child process
-- interrupted jobs are visible and retryable
-- browser tab closure does not cancel server-side work
-- cancel terminates running child process/process group
-- partial destination policy is explicit
-- finished jobs can be pruned intentionally
-
-Implementation sequence:
-
-1. Inspect current transfer and cloud job `Map` state.
-2. Define persistent job record shape before writing storage logic.
-3. Start with a JSON job store unless a concrete code reason requires another
-   store.
-4. On backend startup, load jobs and convert stale `running` jobs to
-   `interrupted` unless reconciled with a live child process.
-5. Keep browser tab closure separate from server-side cancellation.
-6. Make retry of `interrupted` and retryable failure explicit.
-7. Make partial destination policy explicit before retry behavior:
-   - temp/partial destination
-   - cleanup or resume behavior
-   - finalization rules
-8. Add intentional prune behavior for finished jobs.
+- Smoke coverage verifies source-contract markers for login recoverability, File
+  Station destructive preflight, Package Center approval, Transfer durable job
+  state, and sandbox app timeout/ticket state.
+- Smoke gate is reproducible through `npm run verify` or a documented
+  `npm run verify:ui-smoke`.
+- CI/local docs explain prerequisites and skipped-check rules.
 
 Focused verification:
 
 ```bash
-node --check server/services/transferJobService.js
-node --check server/routes/transfer.js
-npm test -- server/tests/transfer-jobs.integration.test.js
+npm run verify
+npm run verify:docker-config
 ```
 
-### LFC-5 rclone Provider Policy
+## 9) Ready-State Criteria Before Addon-only/Core-freeze
 
-Source:
+Addon-only/core-freeze is allowed when all checks are true:
 
-- `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
+- [x] `npm run verify` passes.
+- [x] `npm run verify:docker-config` passes.
+- [x] `npm run verify:ui-smoke` passes as the current dependency-free release
+      smoke gate.
+- [x] package doctor reports `fails=0`, `warns=0`, unless an exception is
+      explicitly documented.
+- [x] Frontend build passes.
+- [x] Approval-focused server tests pass.
+- [x] File delete, empty trash, overwrite, package install/update/rollback,
+      Docker stop/restart/remove, terminal session/command injection all use
+      backend approval contracts.
+- [x] Sandbox raw file URLs no longer depend on long-lived `grantId` query
+      strings.
+- [x] File Station, Docker Manager, Package Center, Terminal, and backup job
+      high-impact flows no longer rely on native browser prompts.
+- [x] Transfer/backup durability hardening is complete.
+- [x] Runtime state policy is reflected in git ignore rules and operations docs.
+- [x] Operations docs match code-verified behavior.
 
-Layer(s):
+Current operating mode:
 
-- `Home Server Operations`
-- `Remote Computer UX`
-- `Docs / Verification`
-
-Problem:
-
-- Google Drive/WebDAV/S3/rclone failures should not collapse into generic
-  failure strings
-- provider quota/backoff must become visible operational state without exposing
-  rclone internals to ordinary users
-
-Files to inspect first:
-
-- `server/services/cloudService.js`
-- `server/routes/cloud.js`
-- `server/services/transferJobService.js`
-- `client/src/apps/system/settings/CloudManager.svelte`
-- `client/src/apps/system/transfer/TransferUI.svelte`
-- `server/tests/cloud-upload-validation.test.js`
-
-Minimum DoD:
-
-- Google Drive 403/429/quota-like errors map to `backoff` or `paused_by_quota`
-- WebDAV timeout/rate-like errors map to retryable/backoff state where practical
-- rclone retry and low-level retry settings are explicit
-- job records include provider, configured flags, exit code, stderr summary, and
-  next retry time where available
-- VFS cache directory/max-size/max-age are configurable before exposing
-  mount-like remote UX
-- UI explains paused/backoff/quota states without requiring users to understand
-  rclone internals
-
-Implementation sequence:
-
-1. Inspect current rclone command spawning, error mapping, and upload job status.
-2. Define provider-aware error mapping before UI changes.
-3. Preserve rclone evidence in job records:
-   - provider
-   - configured flags
-   - exit code
-   - stderr summary
-   - next retry time
-4. Map Google Drive quota/rate-like failures to `backoff` or
-   `paused_by_quota`.
-5. Map WebDAV timeout/rate-like failures to retryable/backoff where practical.
-6. Keep missing rclone/provider setup as a clear setup error.
-7. Do not expose `rclone serve webdav` `127.0.0.1` URLs as remote browser UX
-   without backend proxy or explicit local-only semantics.
-8. Add UI wording for quota/backoff states without requiring users to understand
-   rclone internals.
-
-Focused verification:
-
-```bash
-node --check server/services/cloudService.js
-node --check server/routes/cloud.js
-npm test -- server/tests/cloud-upload-validation.test.js
-```
-
-## 9) Ready-State Criteria Before Real Use
-
-1. `npm test` passes.
-2. `cd client && npm run build` passes.
-3. Backend syntax checks pass for touched files.
-4. `npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json`
-   has `fails=0` and `warns=0` unless an exception is explicitly documented.
-5. Docker compose profile validates and has documented smoke evidence.
-6. Core flows are verified:
-   - file
-   - terminal
-   - Docker
-   - package
-   - backup
-   - cloud
-   - transfer
-   - sandbox
-   - launch
-7. Security boundary remediation is complete:
-   - no broad unauthenticated inventory static route
-   - no normal query token auth
-   - sensitive query logging redacted
-   - symlink-aware path policy
-8. Risky operations are approval/audit/recovery-aware.
-9. `apiFetch` and core UI states preserve structured errors.
-10. Spotlight uses the same app/file association contracts as the rest of the desktop.
-11. Package Center exposes install/update/remove/backup/rollback and data-boundary state.
-12. Addon install path supports:
-   - Git registry (`webos-store.json` + `zipUrl`)
-   - ZIP import (`/api/packages/import`)
-13. README + AGENTS + planning + reference docs are aligned.
-14. Generated runtime/storage churn is intentionally handled.
-15. Large-file continuity follows the transparent wings model:
-   - preview ticket and media lease are separate
-   - large open/stream paths are Range-compatible
-   - media recovery reacquires leases automatically where practical
-   - share download is separate from media lease
-   - cloud/backup jobs survive browser tab closure and recover after backend
-     restart as visible interrupted/retryable/quota/backoff states
-
-Runtime state policy:
-
-- `server/storage/index.json` is generated runtime state and must stay out of
-  commits unless explicitly promoted.
-- `server/storage/media-library/` is local generated runtime state.
-- Inventory fixtures required for bootstrap/tests remain trackable under
-  `server/storage/inventory/`.
+- VPN/internal owner-only beta.
+- No direct public internet exposure.
+- Admin performs Docker/Terminal/File delete/Package lifecycle operations
+  intentionally.
+- Durable A-owned cloud/backup job paths are trusted over browser-lifecycle
+  upload paths for long-running work.
+- Runtime state files are local operations state and should not be committed.
 
 ## 10) Verification Commands
 
-Backend syntax:
+Fast orientation:
 
 ```bash
-node --check server/routes/packages.js
+git status --short
+```
+
+Backend syntax examples:
+
+```bash
 node --check server/routes/fs.js
-node --check server/routes/share.js
-node --check server/routes/runtime.js
-node --check server/routes/sandbox.js
 node --check server/routes/docker.js
+node --check server/routes/packages.js
+node --check server/routes/sandbox.js
 node --check server/routes/cloud.js
 node --check server/routes/transfer.js
-node --check server/services/packageLifecycleService.js
-node --check server/services/packageRegistryService.js
-node --check server/services/templateCatalogService.js
-node --check server/services/fileGrantService.js
-node --check server/services/fileTicketService.js
-node --check server/services/shareService.js
-node --check server/services/cloudService.js
+node --check server/routes/share.js
+node --check server/services/operationApprovalService.js
+node --check server/services/cloudTransferJobService.js
 node --check server/services/transferJobService.js
 ```
 
@@ -1100,98 +1261,74 @@ Server tests:
 
 ```bash
 npm test
+node --test --test-concurrency=1 server/tests/package-delete-approval-contract.test.js
+node --test --test-concurrency=1 server/tests/ticket-url-contract.test.js
+node --test --test-concurrency=1 server/tests/transfer-jobs.integration.test.js
+node --test --test-concurrency=1 server/tests/cloud-upload-validation.test.js
+node --test --test-concurrency=1 server/tests/share-download-policy.test.js
 ```
 
 Frontend build:
 
 ```bash
-cd client
-npm run build
+npm --prefix client run build
 ```
 
-Registry/package checks:
+Package checks:
 
 ```bash
-npm run apps:registry:migrate
+npm run apps:registry:migrate -- --dry-run --fail-on-removal
 npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json
 ```
 
-Large-file continuity checks:
+Full verification:
 
 ```bash
-npm test -- server/tests/ticket-url-contract.test.js
-npm test -- server/tests/transfer-jobs.integration.test.js
-npm test -- server/tests/cloud-upload-validation.test.js
+npm run verify
+npm run verify:docker-config
+npm run verify:ui-smoke
 ```
 
-Manual/HTTP continuity checks when a local server and suitable fixture are
-available:
-
-```bash
-curl -H "Range: bytes=0-99" "<media-lease-url>" -i
-curl -H "Range: bytes=0-99" "http://127.0.0.1:3000/api/share/download/<id>" -i
-```
-
-Expected:
-
-- `206 Partial Content`
-- `Content-Range`
-- structured error responses for expired/invalid/target-changed states
-- audit evidence for share download attempts
-- no leaked `ticket`, `grantId`, bearer token, password, secret, or
-  authorization value in logs
-
-Docker validation:
+Docker/hardened validation:
 
 ```bash
 docker compose config
-docker compose up -d --build
-docker compose ps
-docker compose logs --tail=80 backend
-docker compose logs --tail=80 frontend
-docker compose down
+docker compose --env-file .env.hardened -f docker-compose.hardened.yml config
+docker compose --env-file .env.hardened -f docker-compose.hardened.yml -f docker-compose.hardened-acme.yml config
 ```
 
-HTTP smoke:
+HTTP smoke when local servers are running:
 
 ```bash
-node -e "fetch('http://127.0.0.1:3000/health').then(r=>{console.log('backend',r.status);process.exit(r.status===200?0:1)}).catch(()=>process.exit(1))"
+node -e "fetch('http://127.0.0.1:3000/health').then(r=>{console.log('backend',r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
 node -e "fetch('http://127.0.0.1:5173').then(r=>{console.log('frontend',r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
 ```
 
 Verification choice:
 
-- Use focused syntax/build/test checks for narrow changes.
-- Use the full relevant set for security boundary, package lifecycle, file
-  grant, sandbox, Docker, or release-gate changes.
+- Run focused syntax/tests for narrow route/service/UI changes.
+- Run `npm run verify` for shared contracts, package lifecycle, sandbox, file
+  grants, transfer/cloud, approval, or release-gate changes.
+- Run Docker config checks when deployment, env, compose, hardening, or proxy
+  files change.
 - Report skipped checks with a reason.
 
 ## 11) Worker Split Guidance
 
+Use workers only when the user explicitly asks for parallel agents or
+delegation.
+
 If workers are used, split by disjoint ownership:
 
 - Worker 1: server route/service/backend contract only.
-- Worker 2: client UI/store/api helper only.
-- Worker 3: tools/tests/CI/migration scripts only.
+- Worker 2: client UI/store/API helper only.
+- Worker 3: tests/tools/CI/migration scripts only.
 - Worker 4: docs/ops evidence only.
-- Main agent: item selection, file ownership split, integration, conflict
-  review, verification, final reporting.
+- Main agent: item selection, MVP, analysis, integration, conflict review,
+  verification, final reporting.
 
-Workers must not edit the same files in parallel.
-
-Preferred split for active remediation:
-
-- `LFC-1`: Worker 1 for backend ticket/lease route/service contract; Worker 3
-  for Range/expiry/target-mutation tests.
-- `LFC-2`: Worker 2 for media/document viewer recovery UI and API helper
-  handling; Worker 1 only if route error contracts need adjustment.
-- `LFC-3`: Worker 1 for share route/service/audit contract; Worker 3 for
-  share Range/expiry tests.
-- `LFC-4`: Worker 1 for durable job store/service process handling; Worker 2
-  for transfer/cloud UI state only after backend contract is explicit; Worker 3
-  for restart/cancel/partial-destination tests.
-- `LFC-5`: Worker 1 for rclone/provider error mapping; Worker 2 for
-  quota/backoff UI states; Worker 4 for operations evidence if docs need sync.
+Workers must not edit the same files in parallel. Workers must not revert
+unrelated dirty changes.
 
 ## 12) Git Rules
 
@@ -1200,7 +1337,7 @@ Preferred split for active remediation:
 - Do not rely on untracked runtime files for completion claims.
 - Before commit/push, check:
   - `git status --short`
-  - required runtime files/imports are present
+  - runtime files are not accidentally included
   - generated storage churn is intentional
 - `AGENTS.md` is the canonical agent guide for this repository.
 
@@ -1217,48 +1354,45 @@ Completion report must include:
 - remaining gaps/risks
 - next recommended item
 
-For code review requests, findings come first and must include file/line
-references.
+For code review requests:
 
-## 14) Invocation Profile: Autonomous Continuity Remediation Loop
+- Findings come first.
+- Include file/line references.
+- Summaries are secondary.
 
-Use this profile when the user invokes `AGENTS.md` for autonomous work.
+## 14) Invocation Profile
+
+Use this profile when the user invokes `AGENTS.md` for autonomous readiness
+work.
 
 Trigger phrases:
 
 - "AGENTS.md 기준으로 실행"
 - "현재 백로그 첫 항목부터 진행"
-- "large-file continuity 진행"
-- "투명날개 작업 진행"
-- "LFC 진행"
+- "home-server readiness 진행"
+- "HSR 진행"
+- "addon-only gate 닫기"
 - "worker 병렬 사용"
-- equivalent Korean/English phrasing with the same intent
 
 Command object:
 
 ```yaml
 command_profile:
-  id: autonomous_large_file_continuity_loop_v1
+  id: autonomous_home_server_readiness_completion_loop_v2
   backlog_selection:
     default_start_priority:
-      - LFC-1-raw-ticket-and-media-lease-contract
-      - LFC-2-frontend-media-lease-recovery
-      - LFC-3-share-download-policy
-      - LFC-4-durable-transfer-job-store
-      - LFC-5-rclone-provider-policy
+      - HSR-C1-package-lifecycle-approval-completion
+      - HSR-C2-terminal-approval-completion
+      - HSR-C3-native-prompt-cleanup-and-approval-ui-completion
+      - HSR-C4-browser-workflow-smoke-gate
+      - HSR-C5-final-addon-only-gate-verification-and-docs-sync
     strategy: first_unfinished_in_order
     if_backlog_empty: ask_user_for_reassignment
   execution_scope:
-    mode: user_selected
-    default_mode: one_item_at_a_time
-    supported_modes:
-      - one_item_at_a_time
-      - continuous_until_user_stop
-    auto_start_next_item:
-      one_item_at_a_time: false
-      continuous_until_user_stop: true
+    mode: one_item_at_a_time
+    auto_start_next_item: false
   worker_policy:
-    ask_worker_count_before_start: true
+    use_workers_only_if_user_requested: true
     default_parallel_workers: 2
     optional_parallel_workers: 4
     file_ownership_overlap_allowed: false
@@ -1267,7 +1401,7 @@ command_profile:
     - define_mvp
     - run_analysis
     - re_reference_docs
-    - split_file_ownership
+    - split_file_ownership_if_workers_requested
     - integrate_changes
     - review_conflicts
     - run_verification
@@ -1280,16 +1414,8 @@ command_profile:
       - stop
 ```
 
-Mandatory questions before autonomous execution:
+Default execution:
 
-1. "백로그 시작 기준을 `LFC-1 Raw Ticket And Media Lease Contract`부터 진행할까요?"
-2. "워커를 몇 명 사용할까요? (기본 2명, 필요 시 3~4명)"
-3. "실행 게이트를 어떻게 할까요? (`1개 완료 후 멈춤` 또는 `사용자가 중단할 때까지 연속 진행`)"
-
-Post-item policy:
-
-- In `one_item_at_a_time` mode, do not auto-chain. Summarize changed files,
-  behavior, verification, skipped checks, remaining risks, and ask for the next
-  user choice.
-- In `continuous_until_user_stop` mode, auto-chain to the next unfinished item
-  and still provide a per-item summary.
+- Start from `HSR-C1` unless the user names another item.
+- Complete one item or one clearly bounded sub-slice, then report.
+- Do not auto-chain without explicit user direction.

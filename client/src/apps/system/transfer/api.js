@@ -29,6 +29,8 @@ const CANCEL_PATHS = [
   (jobId) => `/api/fs/transfer-jobs/${encodeURIComponent(jobId)}/cancel`
 ];
 
+const CLOUD_TRANSFER_JOBS_PATH = '/api/cloud/transfer-jobs';
+
 function text(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -50,16 +52,27 @@ function toProgress(item, status) {
 function inferType(item) {
   const type = text(item?.type || item?.kind || item?.jobType).toLowerCase();
   if (type) return type;
+  if (text(item?.remote || item?.remoteName) || text(item?.remotePath || item?.targetPath)) return 'cloud-transfer';
   if (text(item?.url)) return 'url-download';
   if (text(item?.sourcePath)) return 'local-copy';
   return 'unknown';
 }
 
-function normalizeJob(item) {
+function normalizeJob(item, options = {}) {
   const status = normalizeTransferJobStatus(item?.status || item?.state || item?.phase || item?.lastStatus);
+  const type = options.type || inferType(item);
+  const destinationDir = text(
+    item?.destinationDir
+      || item?.destinationRoot
+      || item?.destinationPath
+      || item?.remotePath
+      || item?.targetPath
+  );
+  const remote = text(item?.remote || item?.remoteName || item?.provider);
   return {
     id: text(item?.id || item?.jobId),
-    type: inferType(item),
+    scope: options.scope || text(item?.scope) || (type === 'cloud-transfer' ? 'cloud-transfer' : 'transfer'),
+    type,
     status,
     progress: toProgress(item, status),
     createdAt: item?.createdAt || item?.created || null,
@@ -67,7 +80,11 @@ function normalizeJob(item) {
     fileName: text(item?.fileName || item?.name || item?.targetName || item?.destinationPath?.split?.('/').pop?.()),
     url: text(item?.url),
     sourcePath: text(item?.sourcePath || item?.source),
-    destinationDir: text(item?.destinationDir || item?.destinationRoot || item?.destinationPath),
+    destinationDir,
+    remote,
+    remotePath: text(item?.remotePath || item?.targetPath || item?.path),
+    provider: text(item?.provider || item?.remoteType || item?.backend),
+    nextRetryAt: item?.nextRetryAt || item?.retryAfter || item?.retry?.nextAt || null,
     errorCode: text(item?.error?.code || item?.errorCode || item?.lastErrorCode),
     error: text(item?.error?.message || item?.error || item?.errorMessage || item?.lastError),
     errorDetails: item?.error?.details || null,
@@ -85,8 +102,12 @@ function normalizeSummary(payload) {
     total: read('total'),
     queued: read('queued'),
     running: read('running'),
+    backoff: read('backoff'),
+    paused_by_quota: read('paused_by_quota'),
     completed: read('completed'),
     failed: read('failed'),
+    retryable_failed: read('retryable_failed'),
+    interrupted: read('interrupted'),
     canceled: read('canceled')
   };
 }
@@ -126,16 +147,129 @@ async function firstSuccess(paths, options) {
   throw lastError || new Error('Transfer API request failed.');
 }
 
+function isMissingEndpoint(err) {
+  return err?.status === 404 || err?.code === 'HTTP_404';
+}
+
+async function listCloudTransferJobsOptional() {
+  try {
+    const payload = await apiFetch(CLOUD_TRANSFER_JOBS_PATH, { method: 'GET' });
+    return {
+      jobs: normalizeJobListResponse(payload)
+        .map((item) => normalizeJob(item, { scope: 'cloud-transfer', type: 'cloud-transfer' }))
+        .filter((item) => item.id),
+      summary: normalizeSummary(payload),
+      payload
+    };
+  } catch (err) {
+    if (isMissingEndpoint(err)) {
+      return { jobs: [], summary: normalizeSummary({}), payload: null, unavailable: true };
+    }
+    throw err;
+  }
+}
+
 export async function listTransferJobs() {
   try {
     const result = await firstSuccess(LIST_PATHS, { method: 'GET' });
-    const jobs = normalizeJobListResponse(result.payload).map(normalizeJob).filter((item) => item.id);
-    return { jobs, summary: normalizeSummary(result.payload), path: result.path };
+    const localJobs = normalizeJobListResponse(result.payload).map(normalizeJob).filter((item) => item.id);
+    const localSummary = normalizeSummary(result.payload);
+    const cloudResult = await listCloudTransferJobsOptional();
+    const jobs = [...cloudResult.jobs, ...localJobs];
+    return {
+      jobs,
+      summary: {
+        ...localSummary,
+        total: jobs.length,
+        queued: localSummary.queued + cloudResult.summary.queued,
+        running: localSummary.running + cloudResult.summary.running,
+        backoff: localSummary.backoff + cloudResult.summary.backoff,
+        paused_by_quota: localSummary.paused_by_quota + cloudResult.summary.paused_by_quota,
+        completed: localSummary.completed + cloudResult.summary.completed,
+        failed: localSummary.failed + cloudResult.summary.failed,
+        retryable_failed: localSummary.retryable_failed + cloudResult.summary.retryable_failed,
+        interrupted: localSummary.interrupted + cloudResult.summary.interrupted,
+        canceled: localSummary.canceled + cloudResult.summary.canceled
+      },
+      path: result.path,
+      cloudTransferAvailable: cloudResult.unavailable !== true
+    };
   } catch (err) {
     throw toApiError(
       err,
       'TRANSFER_LIST_FAILED',
       '전송 작업 목록을 불러오지 못했습니다. 전송 백엔드 API를 확인하세요.'
+    );
+  }
+}
+
+export async function createCloudTransferJob(payload) {
+  const typedConfirmation = text(payload?.typedConfirmation);
+  const body = {
+    sourcePath: text(payload?.sourcePath),
+    remote: text(payload?.remote),
+    remotePath: text(payload?.remotePath),
+    fileName: text(payload?.fileName) || undefined,
+    overwrite: false
+  };
+
+  try {
+    const result = await tryRequest('/api/cloud/transfer/preflight', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    if (!result.ok && !isMissingEndpoint(result.error)) throw result.error;
+    if (result.ok) {
+      const preflight = result.payload?.data || result.payload || {};
+      const conflict = preflight?.conflict || preflight?.target?.conflict;
+      const requiresApproval = preflight?.requiresApproval === true || preflight?.approvalRequired === true;
+      if (conflict || requiresApproval) {
+        const operationId = text(preflight?.approval?.operationId);
+        const expectedConfirmation = text(preflight?.approval?.typedConfirmation)
+          || text(preflight?.source?.fileName)
+          || text(body.fileName)
+          || body.sourcePath.split('/').pop();
+        if (!operationId || typedConfirmation !== expectedConfirmation) {
+          return {
+            approvalRequired: true,
+            preflight,
+            expectedConfirmation,
+            message: `대상에 같은 파일이 있습니다. 덮어쓰려면 "${expectedConfirmation}" 확인값을 입력하세요.`
+          };
+        }
+        const approved = await apiFetch('/api/cloud/transfer/approve', {
+          method: 'POST',
+          body: JSON.stringify({
+            operationId,
+            typedConfirmation
+          })
+        });
+        const approval = approved?.approval || approved?.data?.approval;
+        if (!approval?.nonce) {
+          throw {
+            code: 'CLOUD_TRANSFER_APPROVAL_INVALID',
+            message: '클라우드 전송 승인 응답에 실행 nonce가 없습니다.'
+          };
+        }
+        body.overwrite = true;
+        body.approval = approval;
+      }
+    }
+
+    const createPayload = await apiFetch('/api/cloud/transfer', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    const rawJob = createPayload?.job || createPayload?.data?.job || createPayload;
+    return {
+      job: rawJob ? normalizeJob(rawJob, { scope: 'cloud-transfer', type: 'cloud-transfer' }) : null,
+      payload: createPayload
+    };
+  } catch (err) {
+    throw toApiError(
+      err,
+      'CLOUD_TRANSFER_CREATE_FAILED',
+      '서버 소유 클라우드 전송 작업 생성에 실패했습니다. 원본 경로, 원격 대상, 백엔드 API를 확인하세요.'
     );
   }
 }
@@ -166,7 +300,33 @@ export async function retryTransferJob(jobId) {
   }
 }
 
-export async function clearTransferJobs(statuses = ['completed', 'failed', 'canceled']) {
+export async function retryCloudTransferJob(jobId) {
+  const id = text(jobId);
+  if (!id) {
+    throw {
+      code: 'CLOUD_TRANSFER_RETRY_INVALID_ID',
+      message: '클라우드 전송 작업 ID가 필요합니다.'
+    };
+  }
+
+  try {
+    const payload = await apiFetch(`${CLOUD_TRANSFER_JOBS_PATH}/${encodeURIComponent(id)}/retry`, {
+      method: 'POST'
+    });
+    return {
+      job: payload?.job ? normalizeJob(payload.job, { scope: 'cloud-transfer', type: 'cloud-transfer' }) : null,
+      payload
+    };
+  } catch (err) {
+    throw toApiError(
+      err,
+      'CLOUD_TRANSFER_RETRY_FAILED',
+      '클라우드 전송 작업 재시도에 실패했습니다.'
+    );
+  }
+}
+
+export async function clearTransferJobs(statuses = ['completed', 'failed', 'retryable_failed', 'interrupted', 'canceled']) {
   const list = Array.isArray(statuses)
     ? statuses.map((item) => text(item).toLowerCase()).filter(Boolean)
     : [];
@@ -175,9 +335,16 @@ export async function clearTransferJobs(statuses = ['completed', 'failed', 'canc
     : '';
 
   try {
-    return await apiFetch(`/api/transfer/jobs${query}`, {
+    const result = await apiFetch(`/api/transfer/jobs${query}`, {
       method: 'DELETE'
     });
+    const cloudResult = await tryRequest(`${CLOUD_TRANSFER_JOBS_PATH}${query}`, { method: 'DELETE' });
+    if (!cloudResult.ok && !isMissingEndpoint(cloudResult.error)) throw cloudResult.error;
+    return {
+      ...result,
+      removed: Number(result?.removed || 0) + (cloudResult.ok ? Number(cloudResult.payload?.removed || 0) : 0),
+      cloudTransferPruneSkipped: cloudResult.ok ? false : isMissingEndpoint(cloudResult.error)
+    };
   } catch (err) {
     throw toApiError(
       err,
@@ -267,9 +434,32 @@ export async function cancelTransferJob(jobId) {
   );
 }
 
+export async function cancelCloudTransferJob(jobId) {
+  const id = text(jobId);
+  if (!id) {
+    throw {
+      code: 'CLOUD_TRANSFER_CANCEL_INVALID_ID',
+      message: '클라우드 전송 작업 ID가 필요합니다.'
+    };
+  }
+
+  try {
+    const payload = await apiFetch(`${CLOUD_TRANSFER_JOBS_PATH}/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST'
+    });
+    return { payload, path: `${CLOUD_TRANSFER_JOBS_PATH}/${encodeURIComponent(id)}/cancel` };
+  } catch (err) {
+    throw toApiError(
+      err,
+      'CLOUD_TRANSFER_CANCEL_FAILED',
+      '클라우드 전송 작업 취소에 실패했습니다. 이 작업은 백엔드에서 취소를 지원하지 않을 수 있습니다.'
+    );
+  }
+}
+
 export function isRunningStatus(status) {
   const value = normalizeTransferJobStatus(status);
-  return value === 'running' || value === 'queued' || value === 'pending';
+  return value === 'running' || value === 'queued' || value === 'backoff' || value === 'paused_by_quota';
 }
 
 export { normalizeTransferJobStatus } from './normalization.js';

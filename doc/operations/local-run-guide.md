@@ -156,7 +156,15 @@ HTTP 기준 스모크:
 ```bash
 node -e "fetch('http://127.0.0.1:3000/health').then(r=>{console.log('backend',r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
 node -e "fetch('http://127.0.0.1:5173').then(r=>{console.log('frontend',r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
+npm run verify:ui-smoke
 ```
+
+`npm run verify:ui-smoke`는 실행 중인 dev 서버를 대상으로 backend health,
+frontend shell boot, 그리고 주요 workflow source guard를 함께 확인한다.
+브라우저 자동 클릭 테스트는 아니지만 현재 dependency-free 릴리스 smoke gate로
+사용한다. Playwright 같은 브라우저 runner를 도입하면 Package Center approval,
+File Station destructive preflight, Transfer overwrite state, Sandbox timeout/error
+state를 클릭 자동화로 확장한다.
 
 ## Stop
 - 포그라운드: `Ctrl + C`

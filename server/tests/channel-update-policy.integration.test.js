@@ -14,6 +14,7 @@ const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
 const serverConfig = require('../config/serverConfig');
 const packageLifecycleService = require('../services/packageLifecycleService');
+const operationApprovalService = require('../services/operationApprovalService');
 
 function signToken(username) {
   return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -136,8 +137,27 @@ async function cleanupRegistrySource(sourceId) {
   await fs.writeJson(filePath, next, { spaces: 2 });
 }
 
+async function approveLifecycle(baseUrl, token, preflight) {
+  const approve = await requestJson(baseUrl, '/api/packages/lifecycle/approve', token, {
+    method: 'POST',
+    body: {
+      operationId: preflight.operationId,
+      action: preflight.action,
+      targetId: preflight.target?.id,
+      typedConfirmation: preflight.approval?.typedConfirmation
+    }
+  });
+  assert.equal(approve.status, 200, JSON.stringify(approve.json));
+  assert.ok(approve.json?.approval?.nonce, JSON.stringify(approve.json));
+  return {
+    ...approve.json.approval,
+    targetHash: preflight.targetHash
+  };
+}
+
 test('channel-based policy blocks and allows registry overwrite updates', async () => {
   assert.equal(typeof fetch, 'function', 'Global fetch must be available for integration tests.');
+  operationApprovalService._resetForTests();
 
   const pkgServer = await createPackageServer(packagesRouter);
   const adminUsername = await serverConfig.get('auth.adminUsername').catch(() => process.env.ADMIN_USERNAME || 'admin');
@@ -231,12 +251,24 @@ test('channel-based policy blocks and allows registry overwrite updates', async 
     assert.equal(allowedItem.hasUpdate, true, JSON.stringify(updatesAllowed.json));
     assert.equal(String(allowedItem?.selected?.version || ''), '2.0.0', JSON.stringify(updatesAllowed.json));
 
-    const installAllowed = await requestJson(pkgServer.baseUrl, '/api/packages/registry/install', token, {
+    const installPreflight = await requestJson(pkgServer.baseUrl, '/api/packages/registry/preflight', token, {
       method: 'POST',
       body: {
         sourceId,
         packageId: appId,
         overwrite: true
+      }
+    });
+    assert.equal(installPreflight.status, 200, JSON.stringify(installPreflight.json));
+    const lifecycleApproval = await approveLifecycle(pkgServer.baseUrl, token, installPreflight.json.preflight);
+
+    const installAllowed = await requestJson(pkgServer.baseUrl, '/api/packages/registry/install', token, {
+      method: 'POST',
+      body: {
+        sourceId,
+        packageId: appId,
+        overwrite: true,
+        approval: lifecycleApproval
       }
     });
     assert.equal(installAllowed.status, 201, JSON.stringify(installAllowed.json));

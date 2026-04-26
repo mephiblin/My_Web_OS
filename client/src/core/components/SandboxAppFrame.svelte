@@ -55,6 +55,9 @@
     'app.data.read': 'app.data.read',
     'app.data.write': 'app.data.write',
     'host.file.read': 'host.file.read',
+    'host.file.rawTicket': 'host.file.read',
+    'host.file.writePreflight': 'host.file.write',
+    'host.file.writeApprove': 'host.file.write',
     'host.file.write': 'host.file.write'
   };
 
@@ -203,6 +206,21 @@
       case 'host.file.read': {
         const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/read`, params);
         return result.result;
+      }
+
+      case 'host.file.rawTicket': {
+        const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/raw-ticket`, params);
+        return result.result;
+      }
+
+      case 'host.file.writePreflight': {
+        const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write/preflight`, params);
+        return result.preflight;
+      }
+
+      case 'host.file.writeApprove': {
+        const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/file/write/approve`, params);
+        return result.approval;
       }
 
       case 'host.file.write': {

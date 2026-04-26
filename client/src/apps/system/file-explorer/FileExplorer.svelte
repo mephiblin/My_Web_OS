@@ -12,6 +12,7 @@
   import { addShortcut } from '../../../core/stores/shortcutStore.js';
   import { contextMenuSettings } from '../../../core/stores/contextMenuStore.js';
   import SandboxAppFrame from '../../../core/components/SandboxAppFrame.svelte';
+  import { redactSensitiveText } from '../../../utils/api.js';
   import * as fsApi from './api.js';
   import {
     findAssociationMatches,
@@ -58,6 +59,7 @@
   let cloudUploadStatusAvailable = $state(true);
   let cancelingUploadIds = $state(new Set());
   let fileActionError = $state(null);
+  let activeDialog = $state(null);
 
   // Preview State
   let previewContent = $state(null);
@@ -98,12 +100,12 @@
   }
 
   function addToast(message, type = 'info', title = 'File Station') {
-    notifications.add({ title, message, type });
+    notifications.add({ title, message: redactSensitiveText(message), type });
   }
 
   function formatApiError(err, fallbackMessage) {
     const code = String(err?.code || '').trim();
-    const message = String(err?.message || fallbackMessage || 'Request failed.').trim();
+    const message = redactSensitiveText(String(err?.message || fallbackMessage || 'Request failed.').trim());
     return code ? `${message} (${code})` : message;
   }
 
@@ -112,6 +114,111 @@
       action,
       message: formatApiError(err, fallbackMessage)
     };
+  }
+
+  function openDialog(config) {
+    return new Promise((resolve) => {
+      activeDialog = {
+        title: config.title || 'Confirm',
+        message: config.message || '',
+        confirmLabel: config.confirmLabel || 'Confirm',
+        cancelLabel: config.cancelLabel || 'Cancel',
+        danger: config.danger === true,
+        input: config.input || null,
+        value: config.input?.value || '',
+        resolve
+      };
+    });
+  }
+
+  function closeDialog(result) {
+    const dialog = activeDialog;
+    activeDialog = null;
+    dialog?.resolve?.(result);
+  }
+
+  async function requestConfirm(config) {
+    return await openDialog(config) === true;
+  }
+
+  async function requestText(config) {
+    const result = await openDialog({
+      ...config,
+      input: {
+        value: config.value || '',
+        placeholder: config.placeholder || ''
+      }
+    });
+    return typeof result === 'string' ? result.trim() : '';
+  }
+
+  function buildApprovalDialogMessage(preflight, fallbackMessage = 'Review this file operation before continuing.') {
+    const evidence = preflight?.evidence || {};
+    const target = preflight?.target || {};
+    const lines = [
+      fallbackMessage,
+      preflight?.impact ? `Impact: ${preflight.impact}` : '',
+      preflight?.recoverability ? `Recoverability: ${preflight.recoverability}` : '',
+      target.label || target.id ? `Target: ${target.label || target.id}` : '',
+      evidence.destPath ? `Destination: ${evidence.destPath}` : '',
+      evidence.originalPath ? `Original path: ${evidence.originalPath}` : '',
+      Array.isArray(evidence.conflicts) && evidence.conflicts.length > 0
+        ? `Conflicts: ${evidence.conflicts.length} existing item(s) will be overwritten.`
+        : '',
+      evidence.conflict ? `Conflict: ${evidence.conflict.path}` : '',
+      preflight?.expiresAt ? `Approval expires: ${new Date(preflight.expiresAt).toLocaleString()}` : ''
+    ].filter(Boolean);
+    return lines.join('\n');
+  }
+
+  async function runBackendApprovalFlow({
+    title,
+    confirmLabel,
+    preflight,
+    approve,
+    execute,
+    errorTitle
+  }) {
+    const approvalRequest = preflight?.preflight || preflight;
+    const typedConfirmation = String(approvalRequest?.approval?.typedConfirmation || '').trim();
+    const typedInput = typedConfirmation
+      ? await requestText({
+          title,
+          message: `${buildApprovalDialogMessage(approvalRequest)}\n\nType "${typedConfirmation}" to continue.`,
+          value: '',
+          placeholder: typedConfirmation,
+          confirmLabel,
+          danger: true
+        })
+      : (await requestConfirm({
+          title,
+          message: buildApprovalDialogMessage(approvalRequest),
+          confirmLabel,
+          danger: true
+        }) ? '' : null);
+
+    if (typedInput === null || typedInput === false || (typedConfirmation && typedInput !== typedConfirmation)) {
+      if (typedConfirmation && typedInput) {
+        addToast('Typed confirmation did not match the server approval target.', 'warning', title);
+      }
+      return null;
+    }
+
+    const approved = await approve(approvalRequest, typedInput || '');
+    const approval = approved?.approval || approved;
+    try {
+      return await execute({
+        operationId: approvalRequest.operationId,
+        targetHash: approvalRequest.targetHash,
+        nonce: approval?.nonce
+      });
+    } catch (err) {
+      if (err?.preflight) {
+        setFileActionError(err, 'The approval target changed. Review the refreshed operation details and try again.', title);
+      }
+      notifyApiError(err, errorTitle || title);
+      throw err;
+    }
   }
 
   function normalizeLaunchPath(value) {
@@ -147,7 +254,20 @@
   const completedUploadCount = $derived(uploadQueue.filter((item) => canonicalUploadStatus(item) === 'completed').length);
 
   function isTerminalUploadStatus(status) {
-    return ['completed', 'failed', 'canceled'].includes(String(status || '').toLowerCase());
+    return ['completed', 'failed', 'retryable_failed', 'canceled'].includes(String(status || '').toLowerCase());
+  }
+
+  function isWatchedCloudUploadStatus(status) {
+    return ['queued', 'running', 'backoff', 'paused_by_quota'].includes(String(status || '').toLowerCase());
+  }
+
+  function isUploadRetryable(item) {
+    const status = canonicalUploadStatus(item);
+    if (!['failed', 'retryable_failed', 'canceled'].includes(status)) return false;
+    if (!isCloudUpload(item)) return true;
+    if (isCloudUpload(item) && !item?.file) return false;
+    if (status === 'failed') return item?.retryable === true;
+    return true;
   }
 
   function isCloudUpload(item) {
@@ -163,7 +283,10 @@
     const labels = {
       queued: 'Queued',
       running: 'Running',
+      backoff: 'Retry Backoff',
+      paused_by_quota: 'Quota Paused',
       completed: 'Completed',
+      retryable_failed: 'Retryable Failure',
       failed: 'Failed',
       canceled: 'Canceled'
     };
@@ -173,7 +296,7 @@
   function uploadStatusClass(item) {
     const status = canonicalUploadStatus(item);
     if (status === 'completed') return 'success';
-    if (status === 'failed') return 'err';
+    if (['failed', 'retryable_failed', 'backoff', 'paused_by_quota'].includes(status)) return 'err';
     if (status === 'canceled') return 'canceled';
     if (status === 'running') return 'running';
     return 'pending';
@@ -201,7 +324,8 @@
       existing.cloudJobId = job.id;
       existing.status = nextStatus;
       existing.progress = job.progress;
-      existing.errorMessage = job.error || '';
+      existing.errorMessage = redactSensitiveText(job.error || '');
+      existing.retryable = job.raw?.retryable === true || job.raw?.error?.details?.retryable === true || job.status === 'retryable_failed';
       existing.cancelUnavailable = job.cancelable === false;
       existing.fileName = job.fileName || existing.fileName || uploadFileName(existing);
     } else {
@@ -213,7 +337,8 @@
         path: job.remote ? `cloud://${job.remote}/${job.path || ''}` : '',
         progress: job.progress,
         status: nextStatus,
-        errorMessage: job.error || '',
+        errorMessage: redactSensitiveText(job.error || ''),
+        retryable: job.raw?.retryable === true || job.raw?.error?.details?.retryable === true || job.status === 'retryable_failed',
         cancelUnavailable: job.cancelable === false
       });
     }
@@ -226,7 +351,7 @@
         addToast(`Uploaded ${uploadFileName(current)}`, 'success');
         agentStore.notifyUploadComplete();
         if (current.path === currentPath) fetchItems(currentPath);
-      } else if (currentStatus === 'failed') {
+      } else if (currentStatus === 'failed' || currentStatus === 'retryable_failed') {
         agentStore.notifyError(`Upload failed: ${uploadFileName(current)}`);
       }
     }
@@ -239,7 +364,7 @@
       const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
       for (const job of jobs) applyCloudUploadJob(job);
       uploadQueue = [...uploadQueue];
-      const hasActiveCloudUpload = uploadQueue.some((item) => isCloudUpload(item) && ['queued', 'running'].includes(canonicalUploadStatus(item)));
+      const hasActiveCloudUpload = uploadQueue.some((item) => isCloudUpload(item) && isWatchedCloudUploadStatus(canonicalUploadStatus(item)));
       if (!hasActiveCloudUpload && cloudUploadPolling) {
         clearInterval(cloudUploadPolling);
         cloudUploadPolling = null;
@@ -278,19 +403,24 @@
     };
   }
 
+  function isCloudPath(value) {
+    return String(value || '').trim().startsWith('cloud://');
+  }
+
   function buildFileContext(item, grant, mode = 'read') {
     const extension = getFileExtension(item?.name || '');
+    const cloudFile = isCloudPath(item?.path);
     return {
-      source: 'file-station',
+      source: cloudFile ? 'file-station-cloud' : 'file-station',
       file: {
         path: item.path,
         name: item.name,
         extension,
-        mode
+        mode: cloudFile ? 'read' : mode
       },
       permissionContext: {
         grantId: grant?.id || '',
-        scope: grant?.scope || 'single-file',
+        scope: grant?.scope || (cloudFile ? 'cloud-file' : 'single-file'),
         expiresOnWindowClose: true
       }
     };
@@ -320,26 +450,31 @@
   }
 
   async function openFileWithApp(item, appId, action) {
-    const mode = action === 'edit' ? 'readwrite' : 'read';
-    let grantResponse;
-    try {
-      grantResponse = await fsApi.createFileGrant(item.path, mode, appId, FILE_STATION_GRANT_SOURCE);
-    } catch (err) {
-      const appMeta = resolveAppMeta(appId);
-      const message = `Could not authorize ${appMeta?.title || appId} to open ${item?.name || 'this file'}.`;
-      setFileActionError(err, message, 'Open with app');
-      notifyApiError(err, 'File Grant Failed');
-      return;
+    const cloudFile = isCloudPath(item?.path);
+    const mode = cloudFile ? 'read' : (action === 'edit' ? 'readwrite' : 'read');
+    let grant = null;
+
+    if (!cloudFile) {
+      let grantResponse;
+      try {
+        grantResponse = await fsApi.createFileGrant(item.path, mode, appId, FILE_STATION_GRANT_SOURCE);
+      } catch (err) {
+        const appMeta = resolveAppMeta(appId);
+        const message = `Could not authorize ${appMeta?.title || appId} to open ${item?.name || 'this file'}.`;
+        setFileActionError(err, message, 'Open with app');
+        notifyApiError(err, 'File Grant Failed');
+        return;
+      }
+      grant = grantResponse?.grant || null;
+      if (!grant?.id) {
+        const err = new Error('File grant response did not include a grant id.');
+        err.code = 'FILE_GRANT_MISSING';
+        setFileActionError(err, 'Could not authorize app access to this file.', 'Open with app');
+        notifyApiError(err, 'File Grant Failed');
+        return;
+      }
+      loadActiveFileGrants().catch(() => {});
     }
-    const grant = grantResponse?.grant || null;
-    if (!grant?.id) {
-      const err = new Error('File grant response did not include a grant id.');
-      err.code = 'FILE_GRANT_MISSING';
-      setFileActionError(err, 'Could not authorize app access to this file.', 'Open with app');
-      notifyApiError(err, 'File Grant Failed');
-      return;
-    }
-    loadActiveFileGrants().catch(() => {});
     fileActionError = null;
     const fileContext = buildFileContext(item, grant, mode);
 
@@ -487,7 +622,7 @@
       previewProviderFrameApp = frameApp;
     } catch (err) {
       if (requestId !== previewRequestId) return;
-      previewContent = err?.message || 'Cannot load provider preview.';
+      previewContent = redactSensitiveText(err?.message || 'Cannot load provider preview.');
       notifyApiError(err, 'Preview Failed');
     } finally {
       if (requestId === previewRequestId) {
@@ -524,12 +659,20 @@
       addToast('File name cannot contain path separators.', 'error');
       return null;
     }
-    if (itemNameExists(fileName) && !confirm(`${fileName} already exists. Overwrite it?`)) {
-      return null;
-    }
-
     const path = buildChildPath(fileName);
-    await fsApi.writeFile(path, content);
+    if (itemNameExists(fileName)) {
+      const res = await runBackendApprovalFlow({
+        title: 'Overwrite file',
+        confirmLabel: 'Overwrite',
+        preflight: await fsApi.preflightOverwrite(path),
+        approve: (preflight, typedInput) => fsApi.approveOverwrite(path, preflight, typedInput),
+        execute: (approval) => fsApi.executeOverwrite(path, content, approval),
+        errorTitle: 'Save Failed'
+      });
+      if (!res) return null;
+    } else {
+      await fsApi.writeFile(path, content);
+    }
     await fetchItems(currentPath);
     return {
       name: fileName,
@@ -540,7 +683,12 @@
 
   async function createFileFromTemplate(template) {
     const suggestedName = String(template?.name || '').trim();
-    const name = prompt(`Create ${template?.label || 'file'} as:`, suggestedName);
+    const name = await requestText({
+      title: `Create ${template?.label || 'file'}`,
+      message: 'Choose a file name for the new item.',
+      value: suggestedName,
+      confirmLabel: 'Create'
+    });
     if (!name) return;
     try {
       const item = await createFileWithContent(name, typeof template?.content === 'string' ? template.content : '');
@@ -578,7 +726,7 @@
         icon: Cloud,
         path: `cloud://${remote.name}/`,
         mountStatus: String(remote?.mountStatus || 'unmounted').toLowerCase(),
-        mountUrl: String(remote?.mountUrl || '')
+        mountUrl: redactSensitiveText(remote?.mountUrl || '')
       });
     });
 
@@ -615,7 +763,12 @@
 
   async function revokeAllGrantsFromPanel() {
     if (activeFileGrants.length === 0) return;
-    if (!confirm(`Revoke ${activeFileGrants.length} active file grant(s)? Open addon windows may lose file access.`)) return;
+    if (!(await requestConfirm({
+      title: 'Revoke file grants',
+      message: `Revoke ${activeFileGrants.length} active file grant(s)? Open addon windows may lose file access.`,
+      confirmLabel: 'Revoke',
+      danger: true
+    }))) return;
     try {
       await fsApi.revokeFileGrants('');
       previewGrantId = '';
@@ -641,6 +794,7 @@
       ];
     } else if (item) {
       const isLocked = lockedFolders.includes(item.path);
+      const cloudItem = isCloudPath(item.path);
       const extension = item?.isDirectory ? '' : getFileExtension(item.name);
       const associationMatches = item?.isDirectory ? [] : findAssociationMatches(desktopApps, extension);
       const contributionMatches = item?.isDirectory ? [] : findFileContextContributions(desktopApps, extension);
@@ -694,16 +848,18 @@
         ...(!item.isDirectory && preferredApp
           ? [{ label: `Clear Default App for .${extension}`, icon: RotateCcw, action: () => clearDefaultOpenWith(extension) }]
           : []),
-        { label: 'Rename', icon: Pencil, action: () => handleRename(item) },
-        { label: 'Create Desktop Shortcut', icon: ExternalLink, action: () => addShortcut(item) },
-        ...(item.name.toLowerCase().endsWith('.zip') ? [{ label: 'Extract Here', icon: Package, action: () => handleExtract(item) }] : []),
-        { 
-          label: isLocked ? 'Unlock Folder' : 'Secure Folder', 
-          icon: isLocked ? Unlock : Lock, 
-          action: () => toggleLockFolder(item) 
-        },
-        ...(!item.isDirectory ? [{ label: 'Share Link', icon: Share2, action: () => openShareDialog(item) }] : []),
-        { label: 'Move to Trash', icon: Trash2, action: handleDelete, danger: true }
+        ...(!cloudItem ? [{ label: 'Rename', icon: Pencil, action: () => handleRename(item) }] : []),
+        ...(!cloudItem ? [{ label: 'Create Desktop Shortcut', icon: ExternalLink, action: () => addShortcut(item) }] : []),
+        ...(!cloudItem && item.name.toLowerCase().endsWith('.zip') ? [{ label: 'Extract Here', icon: Package, action: () => handleExtract(item) }] : []),
+        ...(!cloudItem
+          ? [{
+            label: isLocked ? 'Secure Folder Disabled' : 'Secure Folder Unavailable',
+            icon: isLocked ? Unlock : Lock,
+            action: () => toggleLockFolder(item)
+          }]
+          : []),
+        ...(!cloudItem && !item.isDirectory ? [{ label: 'Share Link', icon: Share2, action: () => openShareDialog(item) }] : []),
+        ...(!cloudItem ? [{ label: 'Move to Trash', icon: Trash2, action: handleDelete, danger: true }] : [])
       ];
     } else if (isTrashView) {
       itemsInfo = [
@@ -761,7 +917,7 @@
         const data = await fsApi.listCloudDir(remote, remotePath);
         items = data.map(item => ({
           ...item,
-          path: `cloud://${remote}/${item.path}` // Keep virtual path consistency
+          path: buildCloudItemPath(remote, remotePath, item)
         }));
         currentPath = path;
         return;
@@ -831,8 +987,15 @@
     if (!item.name.toLowerCase().endsWith('.zip')) return;
     try {
       loading = true;
-      notifications.add({ title: 'Extracting...', message: item.name, type: 'info' });
-      const res = await fsApi.extractArchive(item.path);
+      const res = await runBackendApprovalFlow({
+        title: 'Extract archive',
+        confirmLabel: 'Extract',
+        preflight: await fsApi.preflightExtract(item.path),
+        approve: (preflight, typedInput) => fsApi.approveExtract(item.path, '', preflight, typedInput),
+        execute: (approval) => fsApi.executeExtract(item.path, '', approval),
+        errorTitle: 'Extract Failed'
+      });
+      if (!res) return;
       if (res.success) {
         notifications.add({ title: 'Extracted', message: item.name, type: 'success' });
         agentStore.triggerEmotion('happy', `Extracted ${item.name}!`, 3000);
@@ -870,7 +1033,15 @@
 
   async function handleRestore(item) {
     try {
-      await fsApi.restoreItem(item.id);
+      const res = await runBackendApprovalFlow({
+        title: 'Restore from trash',
+        confirmLabel: 'Restore',
+        preflight: await fsApi.preflightRestore(item.id),
+        approve: (preflight, typedInput) => fsApi.approveRestore(item.id, preflight, typedInput),
+        execute: (approval) => fsApi.executeRestore(item.id, approval),
+        errorTitle: 'Restore Failed'
+      });
+      if (!res) return;
       notifications.add({ title: 'Trash', message: `Restored ${item.name}`, type: 'success' });
       fetchTrash();
     } catch (err) {
@@ -879,9 +1050,16 @@
   }
 
   async function handleEmptyTrash() {
-    if (!confirm('Are you sure you want to permanently delete all items in trash?')) return;
     try {
-      await fsApi.emptyTrash();
+      const res = await runBackendApprovalFlow({
+        title: 'Empty trash',
+        confirmLabel: 'Empty Trash',
+        preflight: await fsApi.preflightEmptyTrash(),
+        approve: (preflight, typedInput) => fsApi.approveEmptyTrash(preflight, typedInput),
+        execute: (approval) => fsApi.executeEmptyTrash(approval),
+        errorTitle: 'Empty Trash Failed'
+      });
+      if (!res) return;
       notifications.add({ title: 'Trash', message: 'Trash emptied.', type: 'success' });
       fetchTrash();
     } catch (err) {
@@ -892,33 +1070,25 @@
   async function handleDblClick(item) {
     if (isTrashView) return;
 
-    // Cloud support for dblclick
-    if (currentPath.startsWith('cloud://')) {
+    if (isCloudPath(item?.path)) {
       if (item.isDirectory) {
         fetchItems(item.path);
       } else {
-        notifications.add({ title: 'Cloud', message: 'Fetching cloud file...', type: 'info' });
-        const remote = currentPath.replace('cloud://', '').split('/')[0];
-        const remotePath = item.path.replace(`cloud://${remote}/`, '');
-        try {
-          const res = await fsApi.readCloudFile(remote, remotePath);
-          openWindow({ id: 'editor', title: `Cloud Edit - ${item.name}`, icon: FileText }, { content: res.content, readonly: true });
-        } catch (e) {
-          notifyApiError(e, 'Cloud Read Failed');
-        }
+        const extension = getFileExtension(item.name);
+        const preferredApp = resolvePreferredOpenWith(extension);
+        const plan = resolveOpenPlan(desktopApps, extension, preferredApp);
+        await openFileWithApp(item, plan.appId, 'open');
       }
       return;
     }
 
     if (item.isDirectory) {
       if (lockedFolders.includes(item.path)) {
-        const password = prompt(`'${item.name}' is a Secure Folder. Enter Password:`);
-        if (password === '1234') { // Mock password
-          notifications.add({ title: 'Security', message: `Authorized access to ${item.name}`, type: 'success' });
-          fetchItems(item.path);
-        } else {
-          notifications.add({ title: 'Security', message: `Unauthorized access attempt! Incorrect password.`, type: 'error' });
-        }
+        notifications.add({
+          title: 'Secure Folder Disabled',
+          message: 'Mock Secure Folder access is disabled until backend-backed folder protection exists.',
+          type: 'warning'
+        });
         return;
       }
       fetchItems(item.path);
@@ -955,9 +1125,8 @@
              // For cloud files we'd need readCloudFile but let's assume local local files for side preview first
              // or we can handle cloud file generic
              let res;
-             if (currentPath.startsWith('cloud://')) {
-                const remote = currentPath.replace('cloud://', '').split('/')[0];
-                const remotePath = item.path.replace(`cloud://${remote}/`, '');
+             if (isCloudPath(item.path)) {
+                const { remote, remotePath } = resolveCloudPathParts(item.path);
                 res = await fsApi.readCloudFile(remote, remotePath);
              } else {
                 res = await fsApi.readFile(item.path);
@@ -982,6 +1151,10 @@
   }
 
   function goBack() {
+    if (isCloudPath(currentPath)) {
+      fetchItems(getCloudParentPath(currentPath));
+      return;
+    }
     const parts = currentPath.split('/');
     parts.pop();
     const parentPath = parts.join('/') || '/';
@@ -1002,6 +1175,26 @@
     const remote = String(segments.shift() || '').trim();
     const remotePath = segments.join('/');
     return { remote, remotePath };
+  }
+
+  function buildCloudItemPath(remote, baseRemotePath, item) {
+    const remoteName = String(remote || '').trim();
+    const base = String(baseRemotePath || '').replace(/^\/+|\/+$/g, '');
+    const rawPath = String(item?.path || item?.Path || item?.name || '').replace(/^\/+/, '');
+    if (!remoteName) return rawPath;
+    if (!rawPath) return `cloud://${remoteName}/${base}`;
+    if (base && rawPath !== base && !rawPath.startsWith(`${base}/`)) {
+      return `cloud://${remoteName}/${base}/${rawPath}`;
+    }
+    return `cloud://${remoteName}/${rawPath}`;
+  }
+
+  function getCloudParentPath(path) {
+    const { remote, remotePath } = resolveCloudPathParts(path);
+    if (!remote || !remotePath) return '/';
+    const parts = remotePath.split('/').filter(Boolean);
+    parts.pop();
+    return parts.length ? `cloud://${remote}/${parts.join('/')}` : `cloud://${remote}/`;
   }
 
   function handleDragOver(e) {
@@ -1050,7 +1243,8 @@
           currentUpload.cloudJobId = job.id;
           currentUpload.status = job.status || 'running';
           currentUpload.progress = job.progress || 0;
-          currentUpload.errorMessage = job.error || '';
+          currentUpload.errorMessage = redactSensitiveText(job.error || '');
+          currentUpload.retryable = job.raw?.retryable === true || job.raw?.error?.details?.retryable === true || job.status === 'retryable_failed';
           currentUpload.cancelUnavailable = job.cancelable === false;
           uploadQueue = [...uploadQueue];
 
@@ -1101,7 +1295,7 @@
         currentUpload.errorMessage = '';
       } else {
         currentUpload.status = 'error';
-        currentUpload.errorMessage = e?.message || 'Upload failed.';
+        currentUpload.errorMessage = redactSensitiveText(e?.message || 'Upload failed.');
         notifyApiError(e, 'Upload Failed');
         agentStore.notifyError(`Upload failed: ${uploadFileName(currentUpload)}`);
       }
@@ -1133,7 +1327,7 @@
         addToast(`Cancel accepted for ${uploadFileName(target)}`, 'info');
       } catch (err) {
         target.cancelUnavailable = true;
-        target.errorMessage = err?.message || 'Cancel unavailable for this upload.';
+        target.errorMessage = redactSensitiveText(err?.message || 'Cancel unavailable for this upload.');
         notifyApiError(err, 'Cloud Upload Cancel Failed');
       } finally {
         const doneSet = new Set(cancelingUploadIds);
@@ -1163,8 +1357,7 @@
   function retryUpload(uploadId) {
     const target = uploadQueue.find((item) => item.id === uploadId);
     if (!target) return;
-    const status = canonicalUploadStatus(target);
-    if (status === 'failed' || status === 'canceled') {
+    if (isUploadRetryable(target)) {
       target.status = 'pending';
       target.progress = 0;
       target.errorMessage = '';
@@ -1177,7 +1370,11 @@
   }
 
   async function createFile() {
-    const name = prompt('Enter file name:');
+    const name = await requestText({
+      title: 'New file',
+      message: 'Enter a file name.',
+      confirmLabel: 'Create'
+    });
     if (!name) return;
     try {
       await createFileWithContent(name, '');
@@ -1192,7 +1389,11 @@
       return;
     }
 
-    const name = prompt('Enter folder name:');
+    const name = await requestText({
+      title: 'New folder',
+      message: 'Enter a folder name.',
+      confirmLabel: 'Create'
+    });
     if (!name) return;
     try {
       await fsApi.createDir(`${currentPath}/${name}`);
@@ -1204,12 +1405,19 @@
 
   async function handleDelete() {
     if (!selectedItem) return;
-    if (!confirm(`Delete ${selectedItem.name}?`)) return;
     try {
       if (previewItem?.path === selectedItem.path) {
         closePreview();
       }
-      await fsApi.deleteItem(selectedItem.path);
+      const res = await runBackendApprovalFlow({
+        title: 'Move to trash',
+        confirmLabel: 'Move to Trash',
+        preflight: await fsApi.preflightDelete(selectedItem.path),
+        approve: (preflight, typedInput) => fsApi.approveDelete(selectedItem.path, preflight, typedInput),
+        execute: (approval) => fsApi.executeDelete(selectedItem.path, approval),
+        errorTitle: 'Delete Failed'
+      });
+      if (!res) return;
       agentStore.triggerEmotion('alert', `Deleted ${selectedItem.name}`, 3000);
       selectedItem = null;
       fetchItems(currentPath);
@@ -1222,7 +1430,12 @@
   async function handleRename(item) {
     const target = item || selectedItem;
     if (!target) return;
-    const newName = prompt('Enter new name:', target.name);
+    const newName = await requestText({
+      title: 'Rename',
+      message: `Rename ${target.name}.`,
+      value: target.name,
+      confirmLabel: 'Rename'
+    });
     if (!newName || newName === target.name) return;
     try {
       if (previewItem?.path === target.path) {
@@ -1237,12 +1450,11 @@
   }
 
   function toggleLockFolder(item) {
-    if (lockedFolders.includes(item.path)) {
-      lockedFolders = lockedFolders.filter(p => p !== item.path);
-    } else {
-      lockedFolders = [...lockedFolders, item.path];
-    }
-    localStorage.setItem('web_os_locked_folders', JSON.stringify(lockedFolders));
+    notifications.add({
+      title: 'Secure Folder Disabled',
+      message: 'Frontend-only Secure Folder locking has been disabled. Use backend file permissions until folder protection is implemented.',
+      type: 'warning'
+    });
   }
 
   function handlePathKeydown(e) {
@@ -1629,7 +1841,7 @@
              >
                {cancelingUploadIds.has(u.id) ? 'Canceling' : 'Cancel'}
              </button>
-           {:else if canonicalUploadStatus(u) === 'failed' || canonicalUploadStatus(u) === 'canceled'}
+           {:else if isUploadRetryable(u)}
              <button class="u-action" onclick={() => retryUpload(u.id)} title="Retry upload">Retry</button>
            {/if}
          </div>
@@ -1639,6 +1851,37 @@
        {/each}
     </div>
   </div>
+  {/if}
+
+  {#if activeDialog}
+    <div class="share-dialog-overlay" onclick={() => closeDialog(false)} role="presentation">
+      <div class="share-dialog file-action-dialog glass-effect" onclick={(e) => e.stopPropagation()} role="presentation">
+        <div class="share-header">{activeDialog.title}</div>
+        <div class="share-body">
+          <p class="share-target">{activeDialog.message}</p>
+          {#if activeDialog.input}
+            <input
+              class="dialog-input"
+              bind:value={activeDialog.value}
+              placeholder={activeDialog.input.placeholder}
+              onkeydown={(event) => {
+                if (event.key === 'Enter') closeDialog(activeDialog.value);
+                if (event.key === 'Escape') closeDialog(false);
+              }}
+            />
+          {/if}
+        </div>
+        <div class="share-footer">
+          <button class="share-btn cancel" onclick={() => closeDialog(false)}>{activeDialog.cancelLabel}</button>
+          <button
+            class="share-btn primary {activeDialog.danger ? 'danger-confirm' : ''}"
+            onclick={() => closeDialog(activeDialog.input ? activeDialog.value : true)}
+          >
+            {activeDialog.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   {/if}
 
   {#if showShareDialog}
@@ -2036,10 +2279,12 @@
   /* Share Dialog */
   .share-dialog-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
   .share-dialog { width: 340px; border-radius: 8px; border: 1px solid var(--glass-border); display: flex; flex-direction: column; overflow: hidden; background: rgba(30, 35, 45, 0.95); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+  .file-action-dialog { width: min(380px, calc(100vw - 32px)); }
   .share-header { padding: 12px 16px; font-weight: 600; font-size: 14px; border-bottom: 1px solid var(--glass-border); background: rgba(255,255,255,0.05); }
   .share-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-  .share-target { font-size: 13px; margin: 0; color: var(--text-dim); }
+  .share-target { font-size: 13px; margin: 0; color: var(--text-dim); white-space: pre-wrap; }
   .share-target strong { color: white; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .dialog-input { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 4px; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: white; outline: none; }
   .share-label { font-size: 12px; color: var(--text-dim); }
   .share-select { padding: 8px; border-radius: 4px; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border); color: white; outline: none; }
   .link-box { display: flex; gap: 8px; align-items: center; }
@@ -2051,5 +2296,7 @@
   .share-btn { padding: 6px 16px; border-radius: 4px; border: none; font-size: 13px; font-weight: 500; cursor: pointer; background: transparent; color: var(--text-dim); transition: all 0.2s; }
   .share-btn:hover { color: white; background: rgba(255,255,255,0.1); }
   .share-btn.primary { background: var(--accent-blue); color: white; }
+  .share-btn.primary.danger-confirm { background: var(--accent-red); }
   .share-btn.primary:hover { filter: brightness(1.1); background: var(--accent-blue); }
+  .share-btn.primary.danger-confirm:hover { background: var(--accent-red); }
 </style>

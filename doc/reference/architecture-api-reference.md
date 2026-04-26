@@ -32,7 +32,17 @@ Svelte 기반 웹 데스크톱과 Express/Socket.io 백엔드를 통해 파일, 
 - Services: `/api/services/*`
 - Logs: `/api/logs/*`
 - Docker: `/api/docker/*`
-- Cloud: `/api/cloud/remotes`, `/api/cloud/upload`, `/api/cloud/upload-jobs/:id`, `/api/cloud/upload-jobs/:id/cancel`
+- Cloud: `/api/cloud/remotes`, `/api/cloud/list`, `/api/cloud/read`, `/api/cloud/raw-ticket`,
+  `/api/cloud/raw`, `/api/cloud/upload`, `/api/cloud/upload-jobs/:id`, `/api/cloud/upload-jobs/:id/cancel`
+  - File Station uses `cloud://<remote>/<path>` for mounted rclone/WebDAV remotes.
+  - Cloud raw tickets use scope `cloud.raw` and allow document/media/model viewers to stream remote files
+    without tying playback/preview to the File Station view lifetime.
+  - `/api/cloud/raw` supports authenticated direct reads and unauthenticated ticket redemption with byte ranges.
+  - Browser-origin direct upload remains `/api/cloud/upload`.
+  - A-owned durable transfer uses `/api/cloud/transfer/preflight`, `/api/cloud/transfer/approve`,
+    `/api/cloud/transfer`, `/api/cloud/transfer-jobs`,
+    `/api/cloud/transfer-jobs/:id/retry`, `/api/cloud/transfer-jobs/:id/cancel`,
+    `DELETE /api/cloud/transfer-jobs?statuses=...`.
 - Transfer: `/api/transfer/jobs`, `/api/transfer/jobs/download`, `/api/transfer/jobs/copy`,
   `/api/transfer/jobs/:id/retry`, `/api/transfer/jobs/:id/cancel`, `DELETE /api/transfer/jobs?statuses=...`
 - Package backup/lifecycle:

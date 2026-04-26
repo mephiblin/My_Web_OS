@@ -1,4 +1,4 @@
-const { exec, spawn } = require('child_process');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -15,6 +15,15 @@ if (!fs.existsSync(DATA_PATH)) fs.mkdirSync(DATA_PATH, { recursive: true });
 
 const MAX_WRITE_BYTES = 5 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
+const RCLONE_RETRY_FLAGS = [
+  '--retries', process.env.RCLONE_RETRIES || '3',
+  '--low-level-retries', process.env.RCLONE_LOW_LEVEL_RETRIES || '5',
+  '--retries-sleep', process.env.RCLONE_RETRIES_SLEEP || '10s'
+];
+const RCLONE_VFS_CACHE_DIR = process.env.RCLONE_VFS_CACHE_DIR || path.join(DATA_PATH, '.vfs-cache');
+const RCLONE_VFS_CACHE_MAX_SIZE = process.env.RCLONE_VFS_CACHE_MAX_SIZE || '2G';
+const RCLONE_VFS_CACHE_MAX_AGE = process.env.RCLONE_VFS_CACHE_MAX_AGE || '24h';
+const DEFAULT_PROVIDER_RETRY_MS = 15 * 60 * 1000;
 const mountSessions = new Map();
 const uploadJobs = new Map();
 
@@ -46,6 +55,9 @@ function cloneUploadJob(job) {
     remote: job.remote,
     path: job.path,
     fileName: job.fileName,
+    provider: job.provider || inferProviderFromRemote(job.remote),
+    rclone: job.rclone ? { ...job.rclone } : null,
+    nextRetryAt: job.nextRetryAt || null,
     createdAt: job.createdAt,
     startedAt: job.startedAt,
     endedAt: job.endedAt,
@@ -63,6 +75,12 @@ function createUploadJob({ remote, targetPath, fileName, totalBytes }) {
     remote,
     path: targetPath,
     fileName,
+    provider: inferProviderFromRemote(remote),
+    rclone: {
+      command: 'rcat',
+      flags: [...RCLONE_RETRY_FLAGS]
+    },
+    nextRetryAt: null,
     createdAt: nowIso(),
     startedAt: null,
     endedAt: null,
@@ -88,8 +106,82 @@ function updateUploadProgress(job, uploadedBytes) {
     : 100;
 }
 
-function mapRcloneUploadError(err) {
+function redactSensitiveOutput(value) {
+  return String(value || '')
+    .replace(/\b(authorization)\s*[:=]\s*(bearer\s+)?[^\s,;]+/gi, '$1=[REDACTED]')
+    .replace(/\b(token|grantId|ticket|code|secret|password|pass)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .replace(/--(password|pass|token|secret|authorization)(?:=|\s+)[^\s]+/gi, '--$1 [REDACTED]');
+}
+
+function summarizeOutput(value, maxLength = 500) {
+  return redactSensitiveOutput(value).replace(/\s+/g, ' ').trim().slice(0, maxLength) || null;
+}
+
+function inferProviderFromRemote(remote = '') {
+  const value = String(remote || '').toLowerCase();
+  if (value.includes('drive') || value.includes('gdrive') || value.includes('google')) return 'drive';
+  if (value.includes('webdav') || value.includes('dav')) return 'webdav';
+  if (value.includes('s3')) return 's3';
+  return value || 'unknown';
+}
+
+function inferProviderPolicy(err, provider) {
+  const details = err?.details && typeof err.details === 'object' ? err.details : {};
+  const haystack = [
+    err?.message,
+    details.stderr,
+    details.stderrSummary,
+    details.stdout,
+    details.stdoutSummary,
+    details.reason,
+    details.exitCode,
+    provider
+  ].map((item) => String(item || '').toLowerCase()).join(' ');
+
+  if (provider === 'drive' || haystack.includes('google') || haystack.includes('drive')) {
+    if (/\b403\b|\b429\b|quota|rate limit|ratelimit|user rate limit|daily limit|download quota|storage quota/.test(haystack)) {
+      const quotaLike = /quota|daily limit|storage quota|download quota/.test(haystack);
+      return {
+        status: quotaLike ? 'paused_by_quota' : 'backoff',
+        code: quotaLike ? 'CLOUD_PROVIDER_QUOTA' : 'CLOUD_PROVIDER_BACKOFF',
+        message: quotaLike
+          ? 'Google Drive quota paused this upload.'
+          : 'Google Drive rate limit requires retry backoff.',
+        retryable: true
+      };
+    }
+  }
+
+  if (provider === 'webdav' || haystack.includes('webdav') || haystack.includes('dav')) {
+    if (/timeout|timed out|429|503|rate limit|too many requests|temporarily unavailable|connection reset|econnreset|etimedout/.test(haystack)) {
+      return {
+        status: 'backoff',
+        code: 'CLOUD_PROVIDER_BACKOFF',
+        message: 'WebDAV provider asked the upload to retry later.',
+        retryable: true
+      };
+    }
+  }
+
+  return null;
+}
+
+function mapRcloneUploadError(err, job = null) {
   if (err?.code === 'CLOUD_UPLOAD_CANCELED') return err;
+  const provider = job?.provider || inferProviderFromRemote(job?.remote);
+  const providerPolicy = inferProviderPolicy(err, provider);
+  if (providerPolicy) {
+    const details = err?.details && typeof err.details === 'object' ? err.details : {};
+    return createServiceError(providerPolicy.code, providerPolicy.message, 429, {
+      provider,
+      retryable: providerPolicy.retryable,
+      suggestedStatus: providerPolicy.status,
+      exitCode: details.exitCode ?? null,
+      signal: details.signal ?? null,
+      stderrSummary: summarizeOutput(details.stderrSummary || details.stderr || err?.message),
+      stdoutSummary: summarizeOutput(details.stdoutSummary || details.stdout)
+    });
+  }
   if (err?.code) return err;
   return createServiceError(
     'CLOUD_UPLOAD_FAILED',
@@ -106,6 +198,33 @@ function sanitizeRemoteName(name) {
   if (!name || typeof name !== 'string') return null;
   if (!/^[a-zA-Z0-9_\-]+$/.test(name)) return null;
   return name;
+}
+
+function sanitizeProviderName(name) {
+  if (!name || typeof name !== 'string') return null;
+  const trimmed = name.trim().toLowerCase();
+  if (!/^[a-z0-9_\-]+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+function sanitizeWebDavUrl(value) {
+  if (!value || typeof value !== 'string' || value.length > 2048) return null;
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:', 'webdav:', 'webdavs:'].includes(parsed.protocol)) return null;
+    if (!parsed.hostname) return null;
+    return parsed.toString();
+  } catch (_err) {
+    return null;
+  }
+}
+
+function sanitizeCredentialValue(value, maxLength = 1024) {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string') return null;
+  if (value.length > maxLength) return null;
+  if (/[\0\r\n]/.test(value)) return null;
+  return value;
 }
 
 /**
@@ -125,6 +244,24 @@ function sanitizeFileName(name) {
   if (trimmed.includes('/') || trimmed.includes('\\')) return null;
   if (trimmed.includes('..')) return null;
   return sanitizePath(trimmed);
+}
+
+function normalizeLsJsonEntry(payload, remotePath = '') {
+  const entries = Array.isArray(payload) ? payload : [payload];
+  const item = entries.find((candidate) => candidate && typeof candidate === 'object') || null;
+  if (!item) return null;
+  const size = Number(item.Size);
+  const modTime = item.ModTime || item.Modtime || item.ModTimeString || null;
+  const mtimeMs = modTime ? Date.parse(modTime) : NaN;
+  return {
+    name: item.Name || path.posix.basename(remotePath) || '',
+    path: item.Path || remotePath,
+    isDirectory: item.IsDir === true,
+    size: Number.isFinite(size) && size >= 0 ? size : 0,
+    mtime: modTime,
+    mtimeMs: Number.isFinite(mtimeMs) ? mtimeMs : Date.now(),
+    mimeType: item.MimeType || null
+  };
 }
 
 function isPidAlive(pid) {
@@ -174,11 +311,15 @@ function runRcloneWithInput(args, input = '') {
       if (error && error.code === 'ENOENT') {
         return reject(createServiceError('CLOUD_RCLONE_NOT_FOUND', 'rclone binary not found. Please install rclone.', 500));
       }
-      return reject(createServiceError('CLOUD_RCLONE_EXEC_FAILED', 'Failed to execute rclone command', 500, { reason: error.message }));
+      return reject(createServiceError('CLOUD_RCLONE_EXEC_FAILED', 'Failed to execute rclone command', 500, { reason: summarizeOutput(error.message) }));
     });
     child.on('close', (code) => {
       if (code !== 0) {
-        return reject(createServiceError('CLOUD_RCLONE_COMMAND_FAILED', 'rclone command failed', 502, { stdout, stderr, exitCode: code }));
+        return reject(createServiceError('CLOUD_RCLONE_COMMAND_FAILED', 'rclone command failed', 502, {
+          stdoutSummary: summarizeOutput(stdout),
+          stderrSummary: summarizeOutput(stderr),
+          exitCode: code
+        }));
       }
       return resolve({ stdout, stderr });
     });
@@ -198,7 +339,7 @@ function runRcloneWithStream(args, stream, job = null) {
       }
       handler(value);
     };
-    const child = spawn('rclone', ['--config', CONFIG_PATH, ...args], {
+    const child = spawn('rclone', ['--config', CONFIG_PATH, ...RCLONE_RETRY_FLAGS, ...args], {
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -227,14 +368,20 @@ function runRcloneWithStream(args, stream, job = null) {
       if (error && error.code === 'ENOENT') {
         return finish(reject, createServiceError('CLOUD_RCLONE_NOT_FOUND', 'rclone binary not found. Please install rclone.', 500));
       }
-      return finish(reject, createServiceError('CLOUD_RCLONE_EXEC_FAILED', 'Failed to execute rclone command', 500, { reason: error.message }));
+      return finish(reject, createServiceError('CLOUD_RCLONE_EXEC_FAILED', 'Failed to execute rclone command', 500, { reason: summarizeOutput(error.message) }));
     });
     child.on('close', (code, signal) => {
       if (job?.cancelRequested) {
         return finish(reject, createServiceError('CLOUD_UPLOAD_CANCELED', 'Cloud upload was canceled.', 499, { signal }));
       }
       if (code !== 0) {
-        return finish(reject, createServiceError('CLOUD_RCLONE_COMMAND_FAILED', 'rclone command failed', 502, { stdout, stderr, exitCode: code, signal }));
+        return finish(reject, createServiceError('CLOUD_RCLONE_COMMAND_FAILED', 'rclone command failed', 502, {
+          stdoutSummary: summarizeOutput(stdout),
+          stderrSummary: summarizeOutput(stderr),
+          exitCode: code,
+          signal,
+          provider: job?.provider || inferProviderFromRemote(job?.remote)
+        }));
       }
       return finish(resolve, { stdout, stderr });
     });
@@ -341,19 +488,42 @@ function getSessionStatus(name, session = null) {
 }
 
 /**
- * Executes an rclone command and returns the output.
+ * Executes an rclone command without a shell and returns the output.
  */
-function runRclone(args) {
+function runRclone(args = []) {
   return new Promise((resolve, reject) => {
-    const command = `rclone --config ${CONFIG_PATH} ${args}`;
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        if (error.code === 127) {
-          return resolve({ success: false, error: 'rclone binary not found. Please install rclone.' });
-        }
-        return reject(stderr || stdout || error.message);
+    const childArgs = Array.isArray(args) ? args.map((arg) => String(arg)) : [String(args)];
+    const child = spawn('rclone', ['--config', CONFIG_PATH, ...childArgs], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', (error) => {
+      if (error && error.code === 'ENOENT') {
+        return resolve({ success: false, error: 'rclone binary not found. Please install rclone.' });
       }
-      resolve({ success: true, stdout, stderr });
+      return reject(createServiceError('CLOUD_RCLONE_EXEC_FAILED', 'Failed to execute rclone command', 500, {
+        reason: summarizeOutput(error.message)
+      }));
+    });
+    child.on('close', (code) => {
+      if (code !== 0) {
+        return resolve({
+          success: false,
+          stdout,
+          stderr,
+          error: summarizeOutput(stderr || stdout) || `rclone exited with code ${code}`,
+          exitCode: code
+        });
+      }
+      return resolve({ success: true, stdout, stderr });
     });
   });
 }
@@ -364,7 +534,7 @@ const cloudService = {
    */
   async listProviders() {
     try {
-      const result = await runRclone('backend features');
+      await runRclone(['backend', 'features']);
       // For now, return a static list if rclone fails or for quicker UX
       // In reality, we'd parse `rclone config providers`
       return [
@@ -383,7 +553,7 @@ const cloudService = {
    */
   async listRemotes() {
     try {
-      const result = await runRclone('listremotes');
+      const result = await runRclone(['listremotes']);
       if (!result.success) return [];
       
       const remotes = result.stdout.trim().split('\n').filter(Boolean).map(r => ({
@@ -406,8 +576,13 @@ const cloudService = {
     const safePath = sanitizePath(remotePath);
     if (safePath === null) throw new Error('Invalid path characters');
     try {
-      const result = await runRclone(`lsjson "${safeRemote}:${safePath}"`);
-      if (!result.success) throw new Error(result.stderr);
+      const result = await runRclone(['lsjson', `${safeRemote}:${safePath}`]);
+      if (!result.success) {
+        throw createServiceError('CLOUD_LIST_RCLONE_FAILED', 'Failed to list remote entries', 502, {
+          stderrSummary: summarizeOutput(result.stderr || result.error),
+          exitCode: result.exitCode ?? null
+        });
+      }
       
       const entries = JSON.parse(result.stdout);
       return entries.map(item => ({
@@ -419,9 +594,72 @@ const cloudService = {
         mimeType: item.MimeType
       }));
     } catch (err) {
-      console.error(`[CLOUD] List entries failed for ${safeRemote}:`, err);
+      console.error(`[CLOUD] List entries failed for ${safeRemote}: ${summarizeOutput(err?.message || err)}`);
       throw err;
     }
+  },
+
+  async getEntryMetadata(remote, remotePath = '') {
+    const safeRemote = sanitizeRemoteName(remote);
+    if (!safeRemote) {
+      throw createServiceError('CLOUD_INVALID_REMOTE', 'Invalid remote name', 400);
+    }
+    const safePath = sanitizePath(remotePath);
+    if (safePath === null || !safePath.trim()) {
+      throw createServiceError('CLOUD_INVALID_PATH', 'Invalid remote path', 400);
+    }
+
+    const result = await runRclone(['lsjson', `${safeRemote}:${safePath}`]);
+    if (!result.success) {
+      throw createServiceError('CLOUD_ENTRY_STAT_FAILED', 'Failed to inspect remote entry', 502, {
+        stderrSummary: summarizeOutput(result.stderr || result.error),
+        exitCode: result.exitCode ?? null
+      });
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch (_err) {
+      throw createServiceError('CLOUD_ENTRY_STAT_INVALID', 'Remote entry metadata was invalid', 502);
+    }
+
+    const entry = normalizeLsJsonEntry(parsed, safePath);
+    if (!entry) {
+      throw createServiceError('CLOUD_ENTRY_NOT_FOUND', 'Remote entry was not found', 404, {
+        remote: safeRemote,
+        path: safePath
+      });
+    }
+    return {
+      ...entry,
+      remote: safeRemote
+    };
+  },
+
+  createReadStream(remote, remotePath = '', options = {}) {
+    const safeRemote = sanitizeRemoteName(remote);
+    if (!safeRemote) {
+      throw createServiceError('CLOUD_INVALID_REMOTE', 'Invalid remote name', 400);
+    }
+    const safePath = sanitizePath(remotePath);
+    if (safePath === null || !safePath.trim()) {
+      throw createServiceError('CLOUD_INVALID_PATH', 'Invalid remote path', 400);
+    }
+
+    const args = ['cat', `${safeRemote}:${safePath}`];
+    const offset = Number(options.offset);
+    const count = Number(options.count);
+    if (Number.isFinite(offset) && offset >= 0) {
+      args.push('--offset', String(Math.trunc(offset)));
+    }
+    if (Number.isFinite(count) && count >= 0) {
+      args.push('--count', String(Math.trunc(count)));
+    }
+
+    return spawn('rclone', ['--config', CONFIG_PATH, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
   },
 
   /**
@@ -433,11 +671,16 @@ const cloudService = {
     const safePath = sanitizePath(remotePath);
     if (safePath === null) throw new Error('Invalid path characters');
     try {
-      const result = await runRclone(`cat "${safeRemote}:${safePath}"`);
-      if (!result.success) throw new Error(result.stderr);
+      const result = await runRclone(['cat', `${safeRemote}:${safePath}`]);
+      if (!result.success) {
+        throw createServiceError('CLOUD_READ_RCLONE_FAILED', 'Failed to read remote file', 502, {
+          stderrSummary: summarizeOutput(result.stderr || result.error),
+          exitCode: result.exitCode ?? null
+        });
+      }
       return result.stdout;
     } catch (err) {
-      console.error(`[CLOUD] Cat failed for ${safeRemote}:${safePath}:`, err);
+      console.error(`[CLOUD] Cat failed for ${safeRemote}: ${summarizeOutput(err?.message || err)}`);
       throw err;
     }
   },
@@ -488,7 +731,10 @@ const cloudService = {
       '--config', CONFIG_PATH,
       'serve', 'webdav', `${safeName}:`,
       '--addr', `127.0.0.1:${assignedPort}`,
-      '--vfs-cache-mode', 'full'
+      '--vfs-cache-mode', 'full',
+      '--cache-dir', RCLONE_VFS_CACHE_DIR,
+      '--vfs-cache-max-size', RCLONE_VFS_CACHE_MAX_SIZE,
+      '--vfs-cache-max-age', RCLONE_VFS_CACHE_MAX_AGE
     ];
 
     const child = spawn('rclone', args, {
@@ -514,14 +760,14 @@ const cloudService = {
           finish({ ok: false, code: 'CLOUD_RCLONE_NOT_FOUND', message: 'rclone binary not found. Please install rclone.' });
           return;
         }
-        finish({ ok: false, code: 'CLOUD_MOUNT_FAILED', message: `Failed to start mount: ${error.message}` });
+        finish({ ok: false, code: 'CLOUD_MOUNT_FAILED', message: `Failed to start mount: ${summarizeOutput(error.message)}` });
       });
       child.once('exit', (code) => {
         finish({
           ok: false,
           code: 'CLOUD_MOUNT_FAILED',
           message: `Mount process exited early (code ${code})`,
-          details: { stderr: startupError.trim() || null }
+          details: { stderrSummary: summarizeOutput(startupError) }
         });
       });
       setTimeout(() => finish({ ok: true }), 500);
@@ -550,6 +796,11 @@ const cloudService = {
       details: {
         pid: session.pid,
         port: session.port
+      },
+      vfsCache: {
+        dir: RCLONE_VFS_CACHE_DIR,
+        maxSize: RCLONE_VFS_CACHE_MAX_SIZE,
+        maxAge: RCLONE_VFS_CACHE_MAX_AGE
       }
     };
   },
@@ -680,9 +931,15 @@ const cloudService = {
         return cloneUploadJob(job);
       })
       .catch((err) => {
-        const mapped = mapRcloneUploadError(err);
-        job.status = mapped.code === 'CLOUD_UPLOAD_CANCELED' ? 'canceled' : 'failed';
+        const mapped = mapRcloneUploadError(err, job);
+        const suggestedStatus = mapped.details?.suggestedStatus;
+        job.status = mapped.code === 'CLOUD_UPLOAD_CANCELED'
+          ? 'canceled'
+          : (suggestedStatus || 'failed');
         job.endedAt = nowIso();
+        job.nextRetryAt = mapped.details?.retryable
+          ? new Date(Date.now() + DEFAULT_PROVIDER_RETRY_MS).toISOString()
+          : null;
         job.error = {
           code: mapped.code || 'CLOUD_UPLOAD_FAILED',
           message: mapped.message || 'Failed to upload remote file',
@@ -764,25 +1021,71 @@ const cloudService = {
     );
   },
 
+  async setupRemote(name, provider) {
+    const safeName = sanitizeRemoteName(name);
+    const safeProvider = sanitizeProviderName(provider);
+    if (!safeName) {
+      throw createServiceError('CLOUD_SETUP_INVALID_NAME', 'Invalid remote name', 400);
+    }
+    if (!safeProvider) {
+      throw createServiceError('CLOUD_SETUP_INVALID_PROVIDER', 'Invalid provider name', 400);
+    }
+
+    const result = await runRclone(['config', 'create', safeName, safeProvider]);
+    if (!result.success) {
+      throw createServiceError('CLOUD_SETUP_FAILED', 'Failed to create rclone remote', 502, {
+        stderrSummary: summarizeOutput(result.stderr || result.error),
+        stdoutSummary: summarizeOutput(result.stdout),
+        exitCode: result.exitCode ?? null
+      });
+    }
+
+    return {
+      success: true,
+      name: safeName,
+      provider: safeProvider
+    };
+  },
+
   /**
    * Add a new WebDAV remote using rclone config create
    */
   async addWebDAV(name, url, user, pass) {
     const safeName = sanitizeRemoteName(name);
-    if (!safeName) throw new Error('Invalid remote name');
+    const safeUrl = sanitizeWebDavUrl(url);
+    const safeUser = sanitizeCredentialValue(user || '');
+    const safePass = sanitizeCredentialValue(pass || '');
+    if (!safeName) throw createServiceError('CLOUD_ADD_WEBDAV_INVALID_NAME', 'Invalid remote name', 400);
+    if (!safeUrl) throw createServiceError('CLOUD_ADD_WEBDAV_INVALID_URL', 'Invalid WebDAV URL', 400);
+    if (safeUser === null || safePass === null) {
+      throw createServiceError('CLOUD_ADD_WEBDAV_INVALID_CREDENTIALS', 'Invalid WebDAV credentials', 400);
+    }
     
-    // Obscure password
-    let obscuredPass = pass;
-    if (pass) {
-      const obsResult = await runRclone(`obscure "${pass.replace(/"/g, '\\"')}"`);
+    let obscuredPass = safePass;
+    if (safePass) {
+      const obsResult = await runRclone(['obscure', safePass]);
       if (obsResult.success) {
         obscuredPass = obsResult.stdout.trim();
       }
     }
     
-    const args = `config create ${safeName} webdav url="${url.replace(/"/g, '\\"')}" vendor=other user="${(user||'').replace(/"/g, '\\"')}" pass="${obscuredPass}"`;
-    const result = await runRclone(args);
-    if (!result.success) throw new Error(result.stderr);
+    const result = await runRclone([
+      'config',
+      'create',
+      safeName,
+      'webdav',
+      `url=${safeUrl}`,
+      'vendor=other',
+      `user=${safeUser}`,
+      `pass=${String(obscuredPass || '')}`
+    ]);
+    if (!result.success) {
+      throw createServiceError('CLOUD_ADD_WEBDAV_RCLONE_FAILED', 'Failed to add WebDAV remote', 502, {
+        stderrSummary: summarizeOutput(result.stderr || result.error),
+        stdoutSummary: summarizeOutput(result.stdout),
+        exitCode: result.exitCode ?? null
+      });
+    }
     return { success: true };
   }
 };

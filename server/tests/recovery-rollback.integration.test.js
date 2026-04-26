@@ -13,6 +13,7 @@ const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
 const serverConfig = require('../config/serverConfig');
 const packageLifecycleService = require('../services/packageLifecycleService');
+const operationApprovalService = require('../services/operationApprovalService');
 
 function signToken(username) {
   return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -77,8 +78,27 @@ async function cleanupAppArtifacts(appId) {
   await packageLifecycleService.deleteLifecycle(appId).catch(() => {});
 }
 
+async function approveLifecycle(baseUrl, token, preflight) {
+  const approveRes = await requestJson(baseUrl, '/api/packages/lifecycle/approve', token, {
+    method: 'POST',
+    body: {
+      operationId: preflight.operationId,
+      action: preflight.action,
+      targetId: preflight.target?.id,
+      typedConfirmation: preflight.approval?.typedConfirmation
+    }
+  });
+  assert.equal(approveRes.status, 200, JSON.stringify(approveRes.json));
+  assert.ok(approveRes.json?.approval?.nonce, JSON.stringify(approveRes.json));
+  return {
+    ...approveRes.json.approval,
+    targetHash: preflight.targetHash
+  };
+}
+
 test('recovery rollback chain restores package files from backup', async () => {
   assert.equal(typeof fetch, 'function', 'Global fetch must be available for integration tests.');
+  operationApprovalService._resetForTests();
 
   const server = await createServer();
   const adminUsername = await serverConfig.get('auth.adminUsername').catch(() => process.env.ADMIN_USERNAME || 'admin');
@@ -120,9 +140,16 @@ test('recovery rollback chain restores package files from backup', async () => {
     await fs.writeJson(manifestPath, mutatedManifest, { spaces: 2 });
     await fs.writeFile(entryPath, brokenHtml, 'utf8');
 
-    const rollbackRes = await requestJson(server.baseUrl, `/api/packages/${appId}/rollback`, token, {
+    const rollbackPreflight = await requestJson(server.baseUrl, `/api/packages/${appId}/rollback/preflight`, token, {
       method: 'POST',
       body: { backupId }
+    });
+    assert.equal(rollbackPreflight.status, 200, JSON.stringify(rollbackPreflight.json));
+    const approval = await approveLifecycle(server.baseUrl, token, rollbackPreflight.json.preflight);
+
+    const rollbackRes = await requestJson(server.baseUrl, `/api/packages/${appId}/rollback`, token, {
+      method: 'POST',
+      body: { backupId, approval }
     });
     assert.equal(rollbackRes.status, 200, JSON.stringify(rollbackRes.json));
     assert.equal(rollbackRes.json?.success, true, JSON.stringify(rollbackRes.json));

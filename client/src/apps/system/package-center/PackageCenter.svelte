@@ -5,6 +5,7 @@
   import { apiFetch } from '../../../utils/api.js';
   import {
     approvePackageDelete,
+    approvePackageLifecycle,
     cancelPackageBackupJob,
     createPackageBackup,
     createPackageBackupJob,
@@ -115,10 +116,17 @@
   let zipImportReview = $state(null);
   let zipImportPreflighting = $state(false);
   let zipImporting = $state(false);
+  let installLifecycleTypedInput = $state('');
+  let zipImportLifecycleTypedInput = $state('');
   let wizardPhase = $state('draft');
   let wizardLoadingPreflight = $state(false);
   let wizardCreating = $state(false);
   let wizardReview = $state(null);
+  let cloneDialog = $state(null);
+  let packageDeleteReview = $state(null);
+  let packageDeleteTypedInput = $state('');
+  let rollbackReview = $state(null);
+  let rollbackLifecycleTypedInput = $state('');
   let installWorkspaceDraft = $state({
     enabled: false,
     path: '',
@@ -749,6 +757,7 @@
       approvals: {
         mediaScopesAccepted: false
       },
+      lifecycleTypedInput: '',
       saving: false
     };
     const next = typeof updater === 'function' ? updater(previous) : { ...previous, ...updater };
@@ -1169,6 +1178,7 @@
       onboarding: normalizeOnboardingReview(readPreflightField(raw, ['onboarding'], null)),
       lifecycleSafeguards: normalizeSafeguardReview(readPreflightField(raw, ['lifecycleSafeguards'], null)),
       localWorkspace,
+      rawPreflight: raw,
       source: payload ? 'preflight-endpoint' : 'fallback'
     };
   }
@@ -1214,8 +1224,44 @@
         ], blocked ? 'Manifest preflight is blocked.' : 'Manifest preflight completed.')
       ),
       mediaScopeReview: normalizeManifestMediaScopeReview(raw),
+      rawPreflight: raw,
       source: payload ? 'preflight-endpoint' : 'fallback'
     };
+  }
+
+  async function approveLifecyclePreflight(preflight, typedInput = '') {
+    const raw = preflight?.preflight || preflight?.rawPreflight || preflight || {};
+    const typedConfirmation = assertLifecycleTypedConfirmation(raw, typedInput);
+    const approvalResponse = await approvePackageLifecycle(raw, typedConfirmation);
+    const approval = approvalResponse?.approval;
+    if (!approval?.nonce) {
+      throw new Error('Lifecycle approval response did not include a nonce.');
+    }
+    return {
+      ...approval,
+      targetHash: raw.targetHash
+    };
+  }
+
+  function getLifecycleTypedConfirmation(preflight) {
+    const raw = preflight?.preflight || preflight?.rawPreflight || preflight || {};
+    return String(
+      raw?.approval?.typedConfirmation
+        || raw?.target?.id
+        || raw?.operation?.appId
+        || ''
+    ).trim();
+  }
+
+  function assertLifecycleTypedConfirmation(preflight, typedInput) {
+    const expected = getLifecycleTypedConfirmation(preflight);
+    const actual = String(typedInput || '').trim();
+    if (expected && actual !== expected) {
+      const err = new Error(`Type ${expected} to approve this package lifecycle operation.`);
+      err.code = 'PACKAGE_LIFECYCLE_TYPED_CONFIRMATION_REQUIRED';
+      throw err;
+    }
+    return actual;
   }
 
   function normalizeManifestMediaScopeReview(source) {
@@ -1307,6 +1353,7 @@
       error = err.message || 'Local workspace configuration is invalid.';
       return;
     }
+    installLifecycleTypedInput = '';
     installReview = {
       packageId: pkg.id,
       packageTitle: pkg.title || pkg.id,
@@ -1363,6 +1410,7 @@
 
   function closeInstallReview() {
     installReview = null;
+    installLifecycleTypedInput = '';
   }
 
   function canBypassInstallReviewPolicy(review) {
@@ -1420,19 +1468,15 @@
       }
 
       if (review.decision !== 'pass') {
-        const proceed = globalThis.confirm('Preflight returned warnings. Continue quick install?');
-        if (!proceed) {
-          installReview = review;
-          message = 'Advanced preflight review is ready.';
-          return false;
-        }
+        installReview = review;
+        message = 'Preflight returned warnings. Review details before continuing.';
+        return false;
       }
 
-      return installPackage(pkg, {
-        overwrite,
-        forcePolicyBypass: false,
-        localWorkspace
-      });
+      installLifecycleTypedInput = '';
+      installReview = review;
+      message = 'Preflight passed. Type the package id in the review panel to approve installation.';
+      return false;
     } catch (err) {
       installReview = normalizeInstallPreflight(
         null,
@@ -1475,7 +1519,9 @@
             path: installReview.localWorkspace.path,
             mode: installReview.localWorkspace.mode || 'readwrite'
           }
-        : null
+        : null,
+      review: installReview,
+      typedConfirmation: installLifecycleTypedInput
     });
     if (ok) {
       closeInstallReview();
@@ -1525,6 +1571,7 @@
 
   function resetZipImportReview() {
     zipImportReview = null;
+    zipImportLifecycleTypedInput = '';
   }
 
   function onZipImportFileChange(event) {
@@ -1660,7 +1707,8 @@
       const response = await withTimeout(
         importZipPackage(zipImportFile, {
           overwrite: zipImportOverwrite,
-          localWorkspace
+          localWorkspace,
+          approval: await approveLifecyclePreflight(zipImportReview, zipImportLifecycleTypedInput)
         }),
         30000,
         'ZIP package import timed out.'
@@ -1905,18 +1953,59 @@
     }
   }
 
-  async function cloneInstalledPackage(pkg) {
+  function openCloneDialog(pkg) {
     clearFeedback();
-    const targetId = prompt('Clone target id:', `${pkg.id}-copy`);
-    if (!targetId) return;
-    const title = prompt('Clone title (optional):', `${pkg.title} (Copy)`) || '';
+    cloneDialog = {
+      pkg,
+      targetId: `${pkg.id}-copy`,
+      title: `${pkg.title} (Copy)`,
+      error: '',
+      loading: false
+    };
+  }
 
+  function closeCloneDialog() {
+    if (cloneDialog?.loading) return;
+    cloneDialog = null;
+  }
+
+  function setCloneDialogField(field, value) {
+    if (!cloneDialog) return;
+    cloneDialog = {
+      ...cloneDialog,
+      [field]: value
+    };
+  }
+
+  async function submitCloneDialog() {
+    if (!cloneDialog?.pkg || cloneDialog.loading) return;
+    const pkg = cloneDialog.pkg;
+    const targetId = String(cloneDialog.targetId || '').trim();
+    const title = String(cloneDialog.title || '').trim();
+    if (!targetId) {
+      cloneDialog = {
+        ...cloneDialog,
+        error: 'Clone target id is required.'
+      };
+      return;
+    }
+
+    cloneDialog = {
+      ...cloneDialog,
+      loading: true,
+      error: ''
+    };
     try {
       await cloneInstalledPackageRequest(pkg.id, targetId, title);
       message = `Package "${pkg.title}" cloned to "${targetId}".`;
+      cloneDialog = null;
       await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
     } catch (err) {
-      error = err.message || 'Failed to clone package.';
+      cloneDialog = {
+        ...cloneDialog,
+        loading: false,
+        error: err.message || 'Failed to clone package.'
+      };
     }
   }
 
@@ -1935,7 +2024,8 @@
         zipUrl: pkg.zipUrl || '',
         overwrite,
         forcePolicyBypass,
-        localWorkspace
+        localWorkspace,
+        approval: await approveLifecyclePreflight(options.review, options.typedConfirmation)
       });
       message = overwrite
         ? `Package "${pkg.title}" updated successfully.`
@@ -2165,7 +2255,37 @@
     }
   }
 
-  async function rollbackToBackup(pkg) {
+  function closeRollbackReview() {
+    if (rollbackReview?.loading) return;
+    rollbackReview = null;
+    rollbackLifecycleTypedInput = '';
+  }
+
+  function normalizeRollbackReview(payload, pkg, backupId) {
+    const raw = payload?.preflight || payload?.data?.preflight || payload || {};
+    const blockers = Array.isArray(raw?.executionReadiness?.blockers)
+      ? raw.executionReadiness.blockers
+      : [];
+    const blocked = blockers.length > 0 || raw?.executionReadiness?.ready === false;
+    return {
+      pkg,
+      backupId,
+      preflight: raw,
+      blocked,
+      blockers,
+      typedConfirmation: getLifecycleTypedConfirmation(raw) || pkg.id,
+      summary: String(
+        raw?.lifecycleSafeguards?.summary
+          || raw?.rollbackPlan?.summary
+          || raw?.executionReadiness?.summary
+          || (blocked ? 'Rollback is blocked by lifecycle safeguards.' : 'Review rollback impact before continuing.')
+      ),
+      error: '',
+      loading: false
+    };
+  }
+
+  async function openRollbackReview(pkg) {
     const backupId = selectedBackupByApp[pkg.id] || '';
     if (!backupId) {
       error = 'Select a backup to rollback.';
@@ -2173,21 +2293,63 @@
     }
 
     lifecycleActioning = `${pkg.id}:rollback`;
+    rollbackLifecycleTypedInput = '';
+    rollbackReview = {
+      pkg,
+      backupId,
+      preflight: null,
+      blocked: false,
+      blockers: [],
+      typedConfirmation: pkg.id,
+      summary: 'Running rollback preflight checks...',
+      error: '',
+      loading: true
+    };
     clearFeedback();
     try {
       const preflight = await preflightPackageRollback(pkg.id, backupId);
-      const blockers = Array.isArray(preflight?.preflight?.executionReadiness?.blockers)
-        ? preflight.preflight.executionReadiness.blockers
-        : [];
-      if (blockers.length > 0 || preflight?.preflight?.executionReadiness?.ready === false) {
-        const blockerMessage = blockers.map((item) => item?.message).filter(Boolean).join(' / ');
-        throw new Error(blockerMessage || 'Rollback preflight is blocked by lifecycle safeguards.');
-      }
+      rollbackReview = normalizeRollbackReview(preflight, pkg, backupId);
+    } catch (err) {
+      rollbackReview = rollbackReview
+        ? {
+            ...rollbackReview,
+            loading: false,
+            blocked: true,
+            error: err.message || 'Rollback preflight failed.'
+          }
+        : null;
+      error = err.message || 'Rollback preflight failed.';
+    } finally {
+      lifecycleActioning = '';
+    }
+  }
 
-      await rollbackPackageBackup(pkg.id, backupId);
+  async function executeRollbackReview() {
+    if (!rollbackReview?.pkg || rollbackReview.loading || rollbackReview.blocked) return;
+    const { pkg, backupId, preflight } = rollbackReview;
+    lifecycleActioning = `${pkg.id}:rollback`;
+    rollbackReview = {
+      ...rollbackReview,
+      loading: true,
+      error: ''
+    };
+    clearFeedback();
+    try {
+      await rollbackPackageBackup(pkg.id, backupId, {
+        approval: await approveLifecyclePreflight(preflight, rollbackLifecycleTypedInput)
+      });
       await Promise.all([loadLifecycle(pkg.id), loadRuntimeStatuses()]);
       message = `"${pkg.title}" rollback completed.`;
+      rollbackReview = null;
+      rollbackLifecycleTypedInput = '';
     } catch (err) {
+      rollbackReview = rollbackReview
+        ? {
+            ...rollbackReview,
+            loading: false,
+            error: err.message || 'Rollback failed.'
+          }
+        : null;
       error = err.message || 'Rollback failed.';
     } finally {
       lifecycleActioning = '';
@@ -2221,6 +2383,7 @@
       approvals: {
         mediaScopesAccepted: false
       },
+      lifecycleTypedInput: '',
       saving: false
     });
 
@@ -2244,7 +2407,8 @@
         preflight: null,
         approvals: {
           mediaScopesAccepted: false
-        }
+        },
+        lifecycleTypedInput: ''
       });
     } catch (err) {
       updateManifestEditorState(pkg.id, {
@@ -2279,7 +2443,14 @@
       preflight: null,
       approvals: {
         mediaScopesAccepted: false
-      }
+      },
+      lifecycleTypedInput: ''
+    });
+  }
+
+  function setManifestLifecycleTypedInput(pkg, value) {
+    updateManifestEditorState(pkg.id, {
+      lifecycleTypedInput: String(value || '')
     });
   }
 
@@ -2431,7 +2602,8 @@
       );
       updateManifestEditorState(pkg.id, {
         preflightLoading: false,
-        preflight: normalizeManifestPreflight(response)
+        preflight: normalizeManifestPreflight(response),
+        lifecycleTypedInput: ''
       });
       message = `"${pkg.title}" manifest preflight completed.`;
     } catch (err) {
@@ -2471,7 +2643,10 @@
 
     try {
       await withTimeout(
-        updatePackageManifest(pkg.id, current.parsed, getManifestEditorApprovals(current)),
+        updatePackageManifest(pkg.id, current.parsed, {
+          ...getManifestEditorApprovals(current),
+          approval: await approveLifecyclePreflight(current.preflight, current.lifecycleTypedInput)
+        }),
         15000,
         'Manifest update timed out.'
       );
@@ -2614,7 +2789,7 @@
   }
 
   function isPackageDeleteBusy(appId) {
-    return removingPackageId === appId;
+    return removingPackageId === appId || packageDeleteReview?.appId === appId;
   }
 
   async function cleanupRemovedInstalledPackage(pkg) {
@@ -2656,26 +2831,66 @@
     await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
   }
 
-  async function removeInstalledPackage(pkg) {
+  function closePackageDeleteReview() {
+    if (removingPackageId) return;
+    packageDeleteReview = null;
+    packageDeleteTypedInput = '';
+  }
+
+  async function openPackageDeleteReview(pkg) {
     const appId = String(pkg?.id || '').trim();
     if (!appId) return;
 
     clearFeedback();
-    const ok = globalThis.confirm(`Remove package "${pkg.title || appId}"?`);
-    if (!ok) return;
-
-    removingPackageId = appId;
-    let deleteCommitted = false;
+    packageDeleteTypedInput = '';
+    packageDeleteReview = {
+      appId,
+      pkg,
+      loading: true,
+      preflight: null,
+      error: ''
+    };
     try {
       const response = await withTimeout(
         preflightPackageDelete(appId),
         10000,
         'Package delete preflight request timed out.'
       );
-      const preflight = normalizePackageDeletePreflight(response, pkg);
+      packageDeleteReview = {
+        ...packageDeleteReview,
+        loading: false,
+        preflight: normalizePackageDeletePreflight(response, pkg)
+      };
+    } catch (err) {
+      packageDeleteReview = {
+        ...packageDeleteReview,
+        loading: false,
+        error: err?.message || 'Package delete preflight failed.'
+      };
+    }
+  }
+
+  async function executePackageDelete() {
+    const review = packageDeleteReview;
+    const pkg = review?.pkg;
+    const appId = String(review?.appId || pkg?.id || '').trim();
+    if (!appId || !pkg || !review?.preflight || removingPackageId) return;
+
+    const typedConfirmation = String(review.preflight.approval.typedConfirmation || appId);
+    if (packageDeleteTypedInput.trim() !== typedConfirmation) {
+      packageDeleteReview = {
+        ...review,
+        error: `Type ${typedConfirmation} to approve package removal.`
+      };
+      return;
+    }
+
+    removingPackageId = appId;
+    let deleteCommitted = false;
+    try {
       const approvalResponse = await approvePackageDelete(appId, {
-        operationId: preflight.operationId,
-        typedConfirmation: preflight.approval.typedConfirmation || appId
+        operationId: review.preflight.operationId,
+        typedConfirmation
       });
       const approval = approvalResponse?.approval;
       if (!approval?.nonce) {
@@ -2691,11 +2906,13 @@
       await removeInstalledPackageRequest(appId, {
         approval: {
           ...approval,
-          targetHash: preflight.targetHash
+          targetHash: review.preflight.targetHash
         },
         reason: 'Package Center user-approved removal'
       });
       deleteCommitted = true;
+      packageDeleteReview = null;
+      packageDeleteTypedInput = '';
       await cleanupRemovedInstalledPackage(pkg);
     } catch (err) {
       const fallbackMessage = deleteCommitted
@@ -2703,7 +2920,13 @@
         : 'Failed to remove package.';
       const retry = deleteCommitted
         ? () => Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()])
-        : () => removeInstalledPackage(pkg);
+        : () => openPackageDeleteReview(pkg);
+      packageDeleteReview = packageDeleteReview
+        ? {
+            ...packageDeleteReview,
+            error: err?.message || fallbackMessage
+          }
+        : packageDeleteReview;
       setFeedbackError(err, fallbackMessage, deleteCommitted ? 'Refresh packages' : 'Remove package', retry);
     } finally {
       if (removingPackageId === appId) {
@@ -2894,7 +3117,14 @@
             <button
               class="btn primary"
               onclick={executeZipImport}
-              disabled={!zipImportFile || !zipImportReview || zipImportReview.blocked || zipImportPreflighting || zipImporting}
+              disabled={
+                !zipImportFile ||
+                !zipImportReview ||
+                zipImportReview.blocked ||
+                zipImportPreflighting ||
+                zipImporting ||
+                zipImportLifecycleTypedInput.trim() !== getLifecycleTypedConfirmation(zipImportReview)
+              }
             >
               <Upload size={14} />
               {zipImporting ? 'Importing...' : 'Import ZIP'}
@@ -2919,6 +3149,14 @@
                 {#if zipImportReview.blockedReason}
                   <div class="preflight-blocked-reason">{zipImportReview.blockedReason}</div>
                 {/if}
+                <label class="approval-field">
+                  <span>Type {getLifecycleTypedConfirmation(zipImportReview)} to approve</span>
+                  <input
+                    bind:value={zipImportLifecycleTypedInput}
+                    disabled={zipImporting}
+                    autocomplete="off"
+                  />
+                </label>
                 <div class="preflight-grid">
                   <div class="preflight-group">
                     <div class="preflight-label">Selected File</div>
@@ -3505,6 +3743,14 @@
                             <div class="runtime-log-empty">Policy bypass is unavailable for current blockers.</div>
                           {/if}
                         {/if}
+                        <label class="approval-field">
+                          <span>Type {getLifecycleTypedConfirmation(installReview)} to approve</span>
+                          <input
+                            bind:value={installLifecycleTypedInput}
+                            disabled={installingPackageId === pkg.id}
+                            autocomplete="off"
+                          />
+                        </label>
                         <div class="preflight-buttons">
                           <button class="btn ghost" onclick={closeInstallReview} disabled={installingPackageId === pkg.id}>Cancel</button>
                           <button
@@ -3518,7 +3764,8 @@
                                   !canBypassInstallReviewPolicy(installReview) ||
                                   !installReview.forcePolicyBypass
                                 )
-                              )
+                              ) ||
+                              installLifecycleTypedInput.trim() !== getLifecycleTypedConfirmation(installReview)
                             }
                           >
                             {installingPackageId === pkg.id
@@ -3662,14 +3909,14 @@
                   <button class="btn ghost" onclick={() => toggleOpsConsole(pkg)} disabled={lifecycleLoading === pkg.id || runtimeEventsLoading === pkg.id}>
                     {isConsoleOpen(pkg) ? 'Ops Close' : 'Ops Console'}
                   </button>
-                  <button class="btn ghost" onclick={() => cloneInstalledPackage(pkg)}>
+                  <button class="btn ghost" onclick={() => openCloneDialog(pkg)}>
                     Clone
                   </button>
                   <button class="btn ghost" onclick={() => downloadInstalledPackage(pkg)}>
                     <Download size={14} />
                     Export
                   </button>
-                  <button class="btn danger" onclick={() => removeInstalledPackage(pkg)} disabled={isPackageDeleteBusy(pkg.id)}>
+                  <button class="btn danger" onclick={() => openPackageDeleteReview(pkg)} disabled={isPackageDeleteBusy(pkg.id)}>
                     <Trash2 size={14} />
                     Remove
                   </button>
@@ -3836,8 +4083,8 @@
                               </option>
                             {/each}
                           </select>
-                          <button class="btn tiny danger" onclick={() => rollbackToBackup(pkg)} disabled={lifecycleActioning === `${pkg.id}:rollback`}>
-                            {lifecycleActioning === `${pkg.id}:rollback` ? 'Rolling back...' : 'Rollback'}
+                          <button class="btn tiny danger" onclick={() => openRollbackReview(pkg)} disabled={lifecycleActioning === `${pkg.id}:rollback` || rollbackReview?.loading}>
+                            {lifecycleActioning === `${pkg.id}:rollback` ? 'Reviewing...' : 'Rollback'}
                           </button>
                         </div>
                       </div>
@@ -3938,6 +4185,15 @@
                                     {/each}
                                   </div>
                                 {/if}
+                                <label class="approval-field">
+                                  <span>Type {getLifecycleTypedConfirmation(getManifestEditorState(pkg.id)?.preflight)} to approve</span>
+                                  <input
+                                    value={getManifestEditorState(pkg.id)?.lifecycleTypedInput || ''}
+                                    oninput={(event) => setManifestLifecycleTypedInput(pkg, event.currentTarget.value)}
+                                    disabled={Boolean(getManifestEditorState(pkg.id)?.saving)}
+                                    autocomplete="off"
+                                  />
+                                </label>
                               {/if}
                               <div class="manifest-editor-actions">
                                 <button
@@ -3960,7 +4216,12 @@
                                   || Boolean(getManifestEditorState(pkg.id)?.preflightLoading)
                                   || Boolean(getManifestEditorState(pkg.id)?.parseError)
                                   || !getManifestEditorState(pkg.id)?.parsed
+                                  || !getManifestEditorState(pkg.id)?.preflight
                                   || Boolean(getManifestEditorState(pkg.id)?.preflight?.blocked)
+                                  || (
+                                    Boolean(getManifestEditorState(pkg.id)?.preflight)
+                                    && (getManifestEditorState(pkg.id)?.lifecycleTypedInput || '').trim() !== getLifecycleTypedConfirmation(getManifestEditorState(pkg.id)?.preflight)
+                                  )
                                   || (
                                     getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalRequired
                                     && !getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted
@@ -4100,6 +4361,161 @@
       </div>
     {/if}
   </section>
+
+  {#if rollbackReview}
+    <div class="modal-backdrop" role="presentation">
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="rollbackReviewTitle">
+        <div class="approval-head">
+          <h3 id="rollbackReviewTitle">Rollback Package</h3>
+          <span class="risk-chip danger">HIGH IMPACT</span>
+        </div>
+        <div class="approval-section">
+          <span>Target</span>
+          <strong>{rollbackReview.pkg?.title || rollbackReview.pkg?.id}</strong>
+        </div>
+        <div class="approval-section">
+          <span>Backup</span>
+          <code>{rollbackReview.backupId}</code>
+        </div>
+        <div class="approval-section">
+          <span>Review</span>
+          <p>{rollbackReview.summary}</p>
+        </div>
+        {#if rollbackReview.blockers?.length}
+          <div class="approval-section">
+            <span>Blockers</span>
+            <ul class="approval-list">
+              {#each rollbackReview.blockers as blocker}
+                <li>{blocker.message || blocker.reason || blocker.code || 'Rollback blocker'}</li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+        {#if rollbackReview.error}
+          <div class="approval-error">{rollbackReview.error}</div>
+        {/if}
+        <label class="dialog-field">
+          <span>Type {rollbackReview.typedConfirmation} to approve rollback</span>
+          <input
+            bind:value={rollbackLifecycleTypedInput}
+            disabled={rollbackReview.loading}
+            autocomplete="off"
+          />
+        </label>
+        <div class="approval-actions">
+          <button class="dialog-btn secondary" onclick={closeRollbackReview} disabled={rollbackReview.loading}>Cancel</button>
+          <button
+            class="dialog-btn danger"
+            onclick={executeRollbackReview}
+            disabled={rollbackReview.loading || rollbackReview.blocked || rollbackLifecycleTypedInput.trim() !== rollbackReview.typedConfirmation}
+          >
+            {rollbackReview.loading ? 'Working...' : 'Approve Rollback'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if cloneDialog}
+    <div class="modal-backdrop" role="presentation">
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="cloneDialogTitle">
+        <div class="approval-head">
+          <h3 id="cloneDialogTitle">Clone Package</h3>
+          <span class="risk-chip neutral">PACKAGE COPY</span>
+        </div>
+        <div class="approval-section">
+          <span>Source</span>
+          <strong>{cloneDialog.pkg.title || cloneDialog.pkg.id}</strong>
+        </div>
+        <label class="dialog-field">
+          <span>Clone target id</span>
+          <input
+            value={cloneDialog.targetId}
+            oninput={(event) => setCloneDialogField('targetId', event.currentTarget.value)}
+            disabled={cloneDialog.loading}
+            autocomplete="off"
+          />
+        </label>
+        <label class="dialog-field">
+          <span>Clone title</span>
+          <input
+            value={cloneDialog.title}
+            oninput={(event) => setCloneDialogField('title', event.currentTarget.value)}
+            disabled={cloneDialog.loading}
+            autocomplete="off"
+          />
+        </label>
+        {#if cloneDialog.error}
+          <div class="approval-error">{cloneDialog.error}</div>
+        {/if}
+        <div class="approval-actions">
+          <button class="dialog-btn ghost" onclick={closeCloneDialog} disabled={cloneDialog.loading}>Cancel</button>
+          <button class="dialog-btn primary" onclick={submitCloneDialog} disabled={cloneDialog.loading}>
+            {cloneDialog.loading ? 'Cloning...' : 'Create Clone'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if packageDeleteReview}
+    {@const deletePreflight = packageDeleteReview.preflight}
+    {@const deleteTypedConfirmation = deletePreflight?.approval?.typedConfirmation || packageDeleteReview.appId}
+    <div class="modal-backdrop" role="presentation">
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="packageDeleteTitle">
+        <div class="approval-head">
+          <h3 id="packageDeleteTitle">Remove Package</h3>
+          <span class="risk-chip">HIGH IMPACT</span>
+        </div>
+        <div class="approval-section">
+          <span>Target</span>
+          <strong>{deletePreflight?.target?.label || packageDeleteReview.pkg?.title || packageDeleteReview.appId}</strong>
+        </div>
+        <div class="approval-section">
+          <span>Impact</span>
+          {#if deletePreflight?.impact?.length > 0}
+            <ul class="approval-list">
+              {#each deletePreflight.impact as item}
+                <li>{item}</li>
+              {/each}
+            </ul>
+          {:else}
+            <p>Removes the installed package, runtime registration, and package-owned inventory state.</p>
+          {/if}
+        </div>
+        <div class="approval-section">
+          <span>Recoverability</span>
+          <p>
+            {deletePreflight?.recoverability?.backupAvailable
+              ? `Backup available${deletePreflight.recoverability.latestBackupId ? `: ${deletePreflight.recoverability.latestBackupId}` : ''}.`
+              : 'Recoverability depends on existing package backups or reinstall source availability.'}
+          </p>
+        </div>
+        {#if deletePreflight?.approval?.expiresAt}
+          <div class="approval-section">
+            <span>Approval expires</span>
+            <code>{deletePreflight.approval.expiresAt}</code>
+          </div>
+        {/if}
+        {#if packageDeleteReview.loading}
+          <div class="runtime-log-empty">Loading delete preflight...</div>
+        {/if}
+        {#if packageDeleteReview.error}
+          <div class="approval-error">{packageDeleteReview.error}</div>
+        {/if}
+        <label class="dialog-field">
+          <span>Type <code>{deleteTypedConfirmation}</code> to approve</span>
+          <input bind:value={packageDeleteTypedInput} disabled={packageDeleteReview.loading || removingPackageId || !deletePreflight} autocomplete="off" />
+        </label>
+        <div class="approval-actions">
+          <button class="dialog-btn ghost" onclick={closePackageDeleteReview} disabled={Boolean(removingPackageId)}>Cancel</button>
+          <button class="dialog-btn danger" onclick={executePackageDelete} disabled={Boolean(removingPackageId) || packageDeleteReview.loading || !deletePreflight}>
+            {removingPackageId ? 'Removing...' : 'Approve & Remove'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -5202,6 +5618,22 @@
     margin-top: 2px;
   }
 
+  .approval-field {
+    display: grid;
+    gap: 5px;
+    min-width: min(100%, 260px);
+    color: #cbd5e1;
+    font-size: 12px;
+  }
+
+  .approval-field input {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.8);
+    color: var(--text-main);
+    padding: 7px 9px;
+  }
+
   .preflight-buttons {
     display: inline-flex;
     gap: 8px;
@@ -5251,6 +5683,143 @@
     gap: 8px;
     flex-wrap: wrap;
     justify-content: flex-end;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(2, 6, 23, 0.72);
+  }
+
+  .approval-dialog {
+    width: min(580px, 100%);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    background: #111827;
+    color: var(--text-main);
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+  }
+
+  .approval-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .approval-head h3 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  .risk-chip {
+    border: 1px solid rgba(248, 113, 113, 0.42);
+    border-radius: 999px;
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.28);
+    padding: 3px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .risk-chip.neutral {
+    color: #bfdbfe;
+    border-color: rgba(96, 165, 250, 0.42);
+    background: rgba(30, 64, 175, 0.24);
+  }
+
+  .approval-section {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    padding: 8px;
+    display: grid;
+    gap: 4px;
+    background: rgba(15, 23, 42, 0.75);
+  }
+
+  .approval-section span,
+  .dialog-field span {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  .approval-section strong {
+    overflow-wrap: anywhere;
+  }
+
+  .approval-section p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .approval-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    color: #e2e8f0;
+  }
+
+  .approval-error {
+    border: 1px dashed rgba(248, 113, 113, 0.4);
+    border-radius: 8px;
+    padding: 8px;
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.22);
+    font-size: 12px;
+  }
+
+  .dialog-field {
+    display: grid;
+    gap: 6px;
+  }
+
+  .dialog-field input {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.8);
+    color: var(--text-main);
+    padding: 9px 10px;
+  }
+
+  .approval-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .dialog-btn {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-main);
+    padding: 8px 11px;
+    cursor: pointer;
+  }
+
+  .dialog-btn.primary {
+    border-color: rgba(96, 165, 250, 0.46);
+    color: #bfdbfe;
+    background: rgba(30, 64, 175, 0.28);
+  }
+
+  .dialog-btn.danger {
+    border-color: rgba(248, 113, 113, 0.46);
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.28);
+  }
+
+  .dialog-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   @media (max-width: 1000px) {

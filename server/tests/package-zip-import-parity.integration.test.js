@@ -15,6 +15,7 @@ const inventoryPaths = require('../utils/inventoryPaths');
 const serverConfig = require('../config/serverConfig');
 const packageLifecycleService = require('../services/packageLifecycleService');
 const stateStore = require('../services/stateStore');
+const operationApprovalService = require('../services/operationApprovalService');
 
 function signToken(username) {
   return jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '1h' });
@@ -187,6 +188,38 @@ async function deletePackageWithApproval(baseUrl, appId, token) {
   });
 }
 
+async function approveLifecycle(baseUrl, token, preflight) {
+  const approveRes = await requestJson(baseUrl, '/api/packages/lifecycle/approve', token, {
+    method: 'POST',
+    body: {
+      operationId: preflight.operationId,
+      action: preflight.action,
+      targetId: preflight.target?.id,
+      typedConfirmation: preflight.approval?.typedConfirmation
+    }
+  });
+  assert.equal(approveRes.status, 200, JSON.stringify(approveRes.json));
+  assert.ok(approveRes.json?.approval?.nonce, JSON.stringify(approveRes.json));
+  return {
+    ...approveRes.json.approval,
+    targetHash: preflight.targetHash
+  };
+}
+
+async function importZipWithApproval(baseUrl, token, zipBuffer, fields = {}) {
+  const preflightRes = await requestMultipart(baseUrl, '/api/packages/import/preflight', token, {
+    ...fields,
+    package: zipBuffer
+  });
+  assert.equal(preflightRes.status, 200, JSON.stringify(preflightRes.json));
+  const approval = await approveLifecycle(baseUrl, token, preflightRes.json.preflight);
+  return requestMultipart(baseUrl, '/api/packages/import', token, {
+    ...fields,
+    package: zipBuffer,
+    approval
+  });
+}
+
 async function cleanupAppArtifacts(appId) {
   const roots = await inventoryPaths.ensureInventoryStructure();
   const appRoot = await appPaths.getAppRoot(appId).catch(() => null);
@@ -250,6 +283,7 @@ test('zip import preflight returns registry-style readiness and local workspace 
 });
 
 test('zip import overwrite creates backup and records lifecycle evidence', async () => {
+  operationApprovalService._resetForTests();
   const server = await createServer();
   const adminUsername = await serverConfig.get('auth.adminUsername').catch(() => process.env.ADMIN_USERNAME || 'admin');
   const token = signToken(adminUsername);
@@ -257,9 +291,11 @@ test('zip import overwrite creates backup and records lifecycle evidence', async
   const appId = `it-zip-import-${suffix}`;
 
   try {
-    const installRes = await requestMultipart(server.baseUrl, '/api/packages/import', token, {
-      package: buildPackageZipBuffer(appId, '1.0.0', '<!doctype html><title>v1</title>')
-    });
+    const installRes = await importZipWithApproval(
+      server.baseUrl,
+      token,
+      buildPackageZipBuffer(appId, '1.0.0', '<!doctype html><title>v1</title>')
+    );
     assert.equal(installRes.status, 201, JSON.stringify(installRes.json));
     assert.equal(installRes.json?.localWorkspaceBridge?.status, 'inventory-only', JSON.stringify(installRes.json));
 
@@ -273,8 +309,7 @@ test('zip import overwrite creates backup and records lifecycle evidence', async
     assert.equal(preflightRes.json?.preflight?.backupPlan?.required, true, JSON.stringify(preflightRes.json));
     assert.equal(preflightRes.json?.preflight?.executionReadiness?.ready, true, JSON.stringify(preflightRes.json));
 
-    const overwriteRes = await requestMultipart(server.baseUrl, '/api/packages/import', token, {
-      package: buildPackageZipBuffer(appId, '2.0.0', '<!doctype html><title>v2</title>'),
+    const overwriteRes = await importZipWithApproval(server.baseUrl, token, buildPackageZipBuffer(appId, '2.0.0', '<!doctype html><title>v2</title>'), {
       overwrite: 'true'
     });
     assert.equal(overwriteRes.status, 201, JSON.stringify(overwriteRes.json));
@@ -305,6 +340,7 @@ test('zip import overwrite creates backup and records lifecycle evidence', async
 });
 
 test('package delete clears stale file association default app settings', async () => {
+  operationApprovalService._resetForTests();
   const server = await createServer();
   const adminUsername = await serverConfig.get('auth.adminUsername').catch(() => process.env.ADMIN_USERNAME || 'admin');
   const token = signToken(adminUsername);
@@ -313,9 +349,7 @@ test('package delete clears stale file association default app settings', async 
   const previousContextMenu = await stateStore.readState('contextMenu');
 
   try {
-    const installRes = await requestMultipart(server.baseUrl, '/api/packages/import', token, {
-      package: buildPackageZipBuffer(appId, '1.0.0')
-    });
+    const installRes = await importZipWithApproval(server.baseUrl, token, buildPackageZipBuffer(appId, '1.0.0'));
     assert.equal(installRes.status, 201, JSON.stringify(installRes.json));
 
     await stateStore.writeState('contextMenu', {

@@ -11,6 +11,7 @@
   // Editor State
   let editorMode = $state('list'); // 'list' | 'create' | 'edit'
   let editingId = $state(null);
+  let deleteTemplateId = $state('');
   
   let tempTitle = $state('');
   let tempSource = $state('');
@@ -72,13 +73,30 @@
   }
 
   function removeTemplate(id) {
-    if (confirm('Are you sure you want to delete this widget template?')) {
-      widgetLibrary.removeTemplate(id);
-    }
+    deleteTemplateId = String(id || '');
+  }
+
+  function confirmRemoveTemplate() {
+    const id = deleteTemplateId;
+    deleteTemplateId = '';
+    if (id) widgetLibrary.removeTemplate(id);
   }
 
   const filteredLibrary = $derived($widgetLibrary.filter(i => i.type === (activeTab === 'url' ? 'url' : 'custom')));
 </script>
+
+{#if deleteTemplateId}
+  <div class="widget-modal-backdrop" role="presentation">
+    <div class="widget-confirm" role="dialog" aria-modal="true" aria-labelledby="widgetDeleteTitle">
+      <h3 id="widgetDeleteTitle">Delete Template</h3>
+      <p>This removes the local widget template from the library.</p>
+      <div class="widget-confirm-actions">
+        <button onclick={() => { deleteTemplateId = ''; }}>Cancel</button>
+        <button class="danger" onclick={confirmRemoveTemplate}>Delete</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <div class="widget-store">
   <div class="store-header">
@@ -249,6 +267,12 @@
   .empty-state { text-align: center; padding: 40px 0; color: var(--text-dim); font-size: 12px; opacity: 0.6; }
 
   .active-footer { padding: 12px 20px; border-top: 1px solid var(--glass-border); background: rgba(0,0,0,0.15); font-size: 11px; color: var(--text-dim); }
+  .widget-modal-backdrop { position: fixed; inset: 0; z-index: 13000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.42); }
+  .widget-confirm { width: min(360px, calc(100vw - 32px)); border: 1px solid var(--glass-border); border-radius: 8px; background: rgba(16, 20, 30, 0.97); padding: 16px; display: grid; gap: 10px; color: var(--text-main); }
+  .widget-confirm h3, .widget-confirm p { margin: 0; }
+  .widget-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  .widget-confirm-actions button { border: 1px solid var(--glass-border); border-radius: 6px; padding: 8px 10px; background: rgba(255,255,255,0.08); color: var(--text-main); cursor: pointer; }
+  .widget-confirm-actions button.danger { color: #ff5858; }
 
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 </style>

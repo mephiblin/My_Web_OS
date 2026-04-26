@@ -16,6 +16,8 @@
   let creating = $state(false);
   let runningJobId = $state('');
   let deletingJobId = $state('');
+  let deleteDialogJob = $state(null);
+  let deleteDialogError = $state('');
 
   let form = $state({
     name: '',
@@ -153,26 +155,45 @@
     }
   }
 
-  async function handleDeleteJob(job) {
+  function openDeleteDialog(job) {
     const jobId = getJobId(job);
     if (!jobId) {
       addToast('Invalid backup job id', 'error');
       return;
     }
-    const ok = confirm(`Delete backup job "${job.name || jobId}"?`);
-    if (!ok) return;
+    deleteDialogJob = job;
+    deleteDialogError = '';
+  }
+
+  function closeDeleteDialog() {
+    if (deletingJobId) return;
+    deleteDialogJob = null;
+    deleteDialogError = '';
+  }
+
+  async function handleDeleteJob() {
+    const job = deleteDialogJob;
+    const jobId = getJobId(job);
+    if (!jobId) {
+      deleteDialogError = 'Invalid backup job id.';
+      return;
+    }
 
     deletingJobId = jobId;
     try {
       const result = await deleteBackupJob(jobId);
       if (result?.success === false) {
-        addToast(result.error || result.message || 'Failed to delete backup job', 'error');
+        deleteDialogError = result.error || result.message || 'Failed to delete backup job';
+        addToast(deleteDialogError, 'error');
       } else {
         addToast(`Deleted backup job "${job.name || jobId}"`, 'success');
+        deleteDialogJob = null;
+        deleteDialogError = '';
       }
       await loadJobs();
     } catch (err) {
-      addToast(err?.message || 'Failed to delete backup job', 'error');
+      deleteDialogError = err?.message || 'Failed to delete backup job';
+      addToast(deleteDialogError, 'error');
     } finally {
       deletingJobId = '';
     }
@@ -240,7 +261,7 @@
                 <Play size={14} />
                 {runningJobId === jobId ? 'Running...' : 'Run now'}
               </button>
-              <button class="action-btn danger" onclick={() => handleDeleteJob(job)} disabled={deletingJobId === jobId || !jobId}>
+              <button class="action-btn danger" onclick={() => openDeleteDialog(job)} disabled={deletingJobId === jobId || !jobId}>
                 <Trash2 size={14} />
                 {deletingJobId === jobId ? 'Deleting...' : 'Delete'}
               </button>
@@ -276,6 +297,39 @@
       {/each}
     {/if}
   </div>
+
+  {#if deleteDialogJob}
+    {@const dialogJobId = getJobId(deleteDialogJob)}
+    <div class="modal-backdrop" role="presentation">
+      <div class="approval-dialog" role="dialog" aria-modal="true" aria-labelledby="backupDeleteTitle">
+        <div class="approval-head">
+          <h4 id="backupDeleteTitle">Delete Backup Job</h4>
+          <span class="risk-chip">CONFIG CHANGE</span>
+        </div>
+        <div class="approval-section">
+          <span>Target</span>
+          <strong>{deleteDialogJob.name || dialogJobId}</strong>
+        </div>
+        <div class="approval-section">
+          <span>Impact</span>
+          <p>This removes the saved backup job configuration. Existing backup output and history may remain depending on backend retention policy.</p>
+        </div>
+        <div class="approval-section">
+          <span>Recoverability</span>
+          <p>The job can be recreated manually if the source and destination paths are known.</p>
+        </div>
+        {#if deleteDialogError}
+          <div class="approval-error">{deleteDialogError}</div>
+        {/if}
+        <div class="approval-actions">
+          <button class="dialog-btn ghost" onclick={closeDeleteDialog} disabled={Boolean(deletingJobId)}>Cancel</button>
+          <button class="dialog-btn danger" onclick={handleDeleteJob} disabled={Boolean(deletingJobId)}>
+            {deletingJobId ? 'Deleting...' : 'Delete Job'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -364,6 +418,94 @@
   .primary-btn { border-color: rgba(88,166,255,0.45); color: #7ec3ff; background: rgba(88,166,255,0.12); }
   .action-btn:disabled, .primary-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(2, 6, 23, 0.72);
+  }
+  .approval-dialog {
+    width: min(520px, 100%);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    background: #111827;
+    color: var(--text-main);
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+  }
+  .approval-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+  .approval-head h4 { margin: 0; font-size: 15px; }
+  .risk-chip {
+    border: 1px solid rgba(250, 204, 21, 0.42);
+    border-radius: 999px;
+    color: #fde68a;
+    background: rgba(113, 63, 18, 0.28);
+    padding: 3px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .approval-section {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 8px;
+    padding: 8px;
+    display: grid;
+    gap: 4px;
+    background: rgba(15, 23, 42, 0.75);
+  }
+  .approval-section span {
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .approval-section strong {
+    overflow-wrap: anywhere;
+  }
+  .approval-section p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .approval-error {
+    border: 1px dashed rgba(248, 113, 113, 0.4);
+    border-radius: 8px;
+    padding: 8px;
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.22);
+    font-size: 12px;
+  }
+  .approval-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .dialog-btn {
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-main);
+    padding: 8px 11px;
+    cursor: pointer;
+  }
+  .dialog-btn.danger {
+    border-color: rgba(248, 113, 113, 0.46);
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.28);
+  }
+  .dialog-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
@@ -372,4 +514,3 @@
     .history li { grid-template-columns: 1fr; gap: 4px; }
   }
 </style>
-

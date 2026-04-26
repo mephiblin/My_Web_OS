@@ -18,7 +18,16 @@
 # Runtime/generated local state
 /server/storage/index.json
 /server/storage/media-library/
+/server/storage/cloud-transfer-jobs.json
+/server/storage/transfer-jobs.json
+/server/storage/shares.json
+/server/storage/audit.log
+/server/storage/.trash/
+/server/storage/.trash_info.json
+/server/storage/inventory/system/*.corrupt-*.json
 /storage/rehearsal-backups/
+/storage/cloud_mock/
+/config/rclone.conf
 /.playwright-mcp/
 
 # Logs

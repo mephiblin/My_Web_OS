@@ -98,17 +98,25 @@
       }
     } catch (err) {
       if (target.mode === 'host' && err?.code === 'FS_WRITE_OVERWRITE_APPROVAL_REQUIRED') {
-        const confirmed = globalThis.confirm('기존 파일을 덮어쓸까요?');
-        if (!confirmed) return;
         try {
-          const overwriteResult = await editorApi.saveFile(target.path, editor.getValue(), {
+          const approvalContext = {
             grantId: target.grantId,
             appId: target.grantId ? 'editor' : '',
-            operationSource: target.grantId ? 'addon' : '',
+            operationSource: target.grantId ? 'addon' : ''
+          };
+          const preflightResponse = await editorApi.preflightOverwrite(target.path, approvalContext);
+          const preflight = preflightResponse?.preflight;
+          const approvalResponse = await editorApi.approveOverwrite(target.path, preflight, approvalContext);
+          const approval = approvalResponse?.approval;
+          if (!approval?.nonce) {
+            throw new Error('Overwrite approval response did not include a nonce.');
+          }
+          const overwriteResult = await editorApi.saveFile(target.path, editor.getValue(), {
+            ...approvalContext,
             overwrite: true,
             approval: {
-              approved: true,
-              reason: 'manual-save-overwrite'
+              ...approval,
+              targetHash: preflight?.targetHash
             }
           });
           if (overwriteResult.success || !overwriteResult.error) {

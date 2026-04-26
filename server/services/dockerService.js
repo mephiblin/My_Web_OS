@@ -1,4 +1,5 @@
 const { exec } = require('child_process');
+const crypto = require('crypto');
 
 function sanitizeContainerId(id) {
   if (!id || typeof id !== 'string') return null;
@@ -20,6 +21,15 @@ function runDockerCommand(cmd) {
 }
 
 function classifyDockerError(err, fallbackCode = 'DOCKER_OPERATION_FAILED') {
+  if (err?.status && err?.code) {
+    return {
+      status: err.status,
+      code: err.code,
+      message: err.message || 'Docker operation failed.',
+      details: err.details || null
+    };
+  }
+
   const raw = String(err?.message || '').trim();
   const message = raw || 'Docker operation failed.';
   const normalized = message.toLowerCase();
@@ -106,8 +116,20 @@ function parseDockerJsonLines(output) {
     });
 }
 
+function buildDockerApprovalTargetHash(input = {}) {
+  const evidence = {
+    id: sanitizeContainerId(input.id) || '',
+    action: String(input.action || '').trim().toLowerCase()
+  };
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ scope: 'docker.container.lifecycle.v1', evidence }))
+    .digest('hex');
+}
+
 module.exports = {
   sanitizeContainerId,
+  buildDockerApprovalTargetHash,
   runDockerCommand,
   classifyDockerError,
   parseDockerJsonLines

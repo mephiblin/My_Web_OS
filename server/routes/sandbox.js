@@ -1,11 +1,14 @@
 const express = require('express');
 const fs = require('fs-extra');
 const path = require('path');
+const crypto = require('crypto');
 
 const auth = require('../middleware/auth');
 const auditService = require('../services/auditService');
 const packageRegistryService = require('../services/packageRegistryService');
 const fileGrantService = require('../services/fileGrantService');
+const fileTicketService = require('../services/fileTicketService');
+const operationApprovalService = require('../services/operationApprovalService');
 const serverConfig = require('../config/serverConfig');
 const { CAPABILITY_CATALOG } = require('../services/capabilityCatalog');
 const appPaths = require('../utils/appPaths');
@@ -121,6 +124,103 @@ async function resolveAllowedHostPath(rawPath) {
   await assertWithinAllowedRealRoots(resolvedPath, allowedRoots);
 
   return resolvedPath;
+}
+
+function hashJson(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+async function buildSandboxFileTargetEvidence(appId, targetPath) {
+  const stats = await fs.lstat(targetPath);
+  const realPath = await fs.realpath(targetPath).catch(() => targetPath);
+  const evidence = {
+    appId,
+    path: targetPath,
+    realPath,
+    type: stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other',
+    size: stats.size,
+    mtimeMs: Math.trunc(stats.mtimeMs),
+    inode: stats.ino || null,
+    device: stats.dev || null
+  };
+  return {
+    evidence,
+    targetHash: hashJson({ scope: 'sandbox.file.write.overwrite.v1', evidence })
+  };
+}
+
+function sandboxWriteTargetId(appId, targetPath) {
+  return `${appId}:${targetPath}`;
+}
+
+function getApprovalInput(body = {}) {
+  return body.approval && typeof body.approval === 'object' && !Array.isArray(body.approval)
+    ? body.approval
+    : {};
+}
+
+async function createSandboxWritePreflight(req, { app, targetPath }) {
+  const { evidence, targetHash } = await buildSandboxFileTargetEvidence(app.id, targetPath);
+  const targetId = sandboxWriteTargetId(app.id, targetPath);
+  const operation = operationApprovalService.createOperation({
+    action: 'sandbox.file.write.overwrite',
+    userId: req.user?.username,
+    target: {
+      type: evidence.type,
+      id: targetId,
+      label: path.basename(targetPath)
+    },
+    targetHash,
+    typedConfirmation: path.basename(targetPath),
+    metadata: {
+      impact: 'Sandbox app overwrites the current host file contents.',
+      recoverability: 'recoverable only from external backup or previous app state',
+      evidence,
+      appId: app.id,
+      riskLevel: 'high'
+    }
+  });
+
+  await auditService.log('SANDBOX', 'sandbox.file.write.overwrite.preflight', {
+    operationId: operation.operationId,
+    appId: app.id,
+    path: targetPath,
+    targetHash,
+    expiresAt: operation.expiresAt,
+    user: req.user?.username
+  }, 'WARNING');
+
+  return {
+    action: 'sandbox.file.write.overwrite',
+    operationId: operation.operationId,
+    target: operation.target,
+    targetHash,
+    impact: operation.metadata.impact,
+    recoverability: operation.metadata.recoverability,
+    evidence,
+    expiresAt: operation.expiresAt,
+    approval: {
+      required: true,
+      typedConfirmation: path.basename(targetPath)
+    }
+  };
+}
+
+function consumeSandboxWriteApproval(req, { app, targetPath, targetHash }) {
+  const approval = getApprovalInput(req.body);
+  if (!String(approval.operationId || '').trim() || !String(approval.nonce || '').trim()) {
+    const err = new Error('Sandbox overwrite requires a scoped approval nonce.');
+    err.code = 'SANDBOX_FILE_WRITE_APPROVAL_REQUIRED';
+    throw err;
+  }
+  return operationApprovalService.consumeApproval({
+    operationId: approval.operationId,
+    nonce: approval.nonce,
+    userId: req.user?.username,
+    action: 'sandbox.file.write.overwrite',
+    targetId: sandboxWriteTargetId(app.id, targetPath),
+    targetHash
+  });
 }
 
 router.get('/sdk.js', async (_req, res) => {
@@ -295,6 +395,166 @@ router.post('/:appId/file/read', auth, async (req, res) => {
   }
 });
 
+router.post('/:appId/file/write/preflight', auth, async (req, res) => {
+  const app = await ensurePermittedSandboxApp(res, req.params.appId, 'host.file.write');
+  if (!app) return;
+
+  try {
+    const body = await readJsonBody(req);
+    const targetPath = await resolveAllowedHostPath(body.path);
+    fileGrantService.consumeGrant(body.grantId, {
+      path: targetPath,
+      requiredMode: 'readwrite',
+      appId: app.id,
+      user: req.user?.username
+    });
+
+    const exists = await fs.pathExists(targetPath);
+    if (!exists) {
+      return res.status(400).json({
+        error: true,
+        code: 'SANDBOX_FILE_WRITE_APPROVAL_NOT_REQUIRED',
+        message: 'Overwrite approval is only required for an existing file.'
+      });
+    }
+
+    const preflight = await createSandboxWritePreflight(req, { app, targetPath });
+    return res.json({ success: true, preflight });
+  } catch (err) {
+    const status = err.code?.startsWith('FS_') || err.code === 'SANDBOX_FILE_PATH_REQUIRED' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'SANDBOX_FILE_WRITE_PREFLIGHT_FAILED',
+      message: err.message,
+      details: err.details || null
+    });
+  }
+});
+
+router.post('/:appId/file/write/approve', auth, async (req, res) => {
+  const app = await ensurePermittedSandboxApp(res, req.params.appId, 'host.file.write');
+  if (!app) return;
+
+  try {
+    const body = await readJsonBody(req);
+    const targetPath = await resolveAllowedHostPath(body.path);
+    const approval = operationApprovalService.approveOperation({
+      operationId: body.operationId,
+      userId: req.user?.username,
+      action: 'sandbox.file.write.overwrite',
+      targetId: sandboxWriteTargetId(app.id, targetPath),
+      typedConfirmation: body.typedConfirmation
+    });
+
+    await auditService.log('SANDBOX', 'sandbox.file.write.overwrite.approved', {
+      operationId: approval.operationId,
+      appId: app.id,
+      path: targetPath,
+      expiresAt: approval.expiresAt,
+      user: req.user?.username
+    }, 'WARNING');
+
+    return res.json({ success: true, approval });
+  } catch (err) {
+    await auditService.log('SANDBOX', 'sandbox.file.write.overwrite.approval_rejected', {
+      operationId: req.body?.operationId || null,
+      appId: req.params.appId,
+      approvalCode: err?.code || null,
+      user: req.user?.username
+    }, 'WARNING');
+    return res.status(400).json({
+      error: true,
+      code: 'SANDBOX_FILE_WRITE_APPROVAL_INVALID',
+      message: err.message
+    });
+  }
+});
+
+router.post('/:appId/file/raw-ticket', auth, async (req, res) => {
+  const app = await ensurePermittedSandboxApp(res, req.params.appId, 'host.file.read');
+  if (!app) return;
+
+  try {
+    const body = await readJsonBody(req);
+    const targetPath = await resolveAllowedHostPath(body.path);
+    fileGrantService.consumeGrant(body.grantId, {
+      path: targetPath,
+      requiredMode: 'read',
+      appId: app.id,
+      user: req.user?.username
+    });
+
+    const stats = await fs.stat(targetPath);
+    if (!stats.isFile()) {
+      return res.status(400).json({
+        error: true,
+        code: 'FS_NOT_FILE',
+        message: 'Requested path is not a file.'
+      });
+    }
+
+    const profile = String(body.profile || body.purpose || fileTicketService.PROFILE_PREVIEW).trim().toLowerCase();
+    const ticket = fileTicketService.createTicket({
+      scope: 'fs.raw',
+      profile,
+      user: req.user?.username,
+      appId: app.id,
+      path: targetPath,
+      stats,
+      ttlMs: body.ttlMs,
+      absoluteTtlMs: body.absoluteTtlMs,
+      idleTimeoutMs: body.idleTimeoutMs,
+      metadata: {
+        source: 'sandbox.raw-ticket'
+      }
+    });
+
+    await auditService.log(
+      'SANDBOX',
+      `Issue Host Raw Ticket via Grant: ${app.id}`,
+      {
+        appId: app.id,
+        path: targetPath,
+        scope: ticket.scope,
+        profile: ticket.profile,
+        expiresAt: new Date(ticket.expiresAt).toISOString(),
+        user: req.user?.username
+      },
+      'INFO'
+    );
+
+    return res.status(201).json({
+      success: true,
+      result: {
+        url: `/api/fs/raw?ticket=${encodeURIComponent(ticket.ticket)}`,
+        scope: ticket.scope,
+        profile: ticket.profile,
+        path: targetPath,
+        appId: app.id,
+        expiresAt: new Date(ticket.expiresAt).toISOString(),
+        ttlMs: ticket.expiresAt - ticket.createdAt,
+        ...(ticket.profile === fileTicketService.PROFILE_MEDIA
+          ? {
+              idleTimeoutMs: ticket.idleTimeoutMs,
+              absoluteExpiresAt: new Date(ticket.absoluteExpiresAt).toISOString(),
+              lastAccess: new Date(ticket.lastAccess).toISOString(),
+              size: ticket.size,
+              mtime: ticket.mtime
+            }
+          : {})
+      }
+    });
+  } catch (err) {
+    const status = err.code?.startsWith('FS_') || err.code === 'SANDBOX_FILE_PATH_REQUIRED' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'SANDBOX_FILE_RAW_TICKET_FAILED',
+      message: err.message,
+      details: err.details || null
+    });
+  }
+});
+
 router.post('/:appId/file/write', auth, async (req, res) => {
   const app = await ensurePermittedSandboxApp(res, req.params.appId, 'host.file.write');
   if (!app) return;
@@ -312,7 +572,7 @@ router.post('/:appId/file/write', auth, async (req, res) => {
     const content = String(body.content || '');
     const overwrite = body.overwrite === true;
     const approval = body.approval && typeof body.approval === 'object' ? body.approval : {};
-    const approvalReceived = approval.approved === true;
+    let approvalContext = null;
     const exists = await fs.pathExists(targetPath);
 
     if (exists && !overwrite) {
@@ -326,16 +586,27 @@ router.post('/:appId/file/write', auth, async (req, res) => {
         }
       });
     }
-    if (exists && overwrite && !approvalReceived) {
-      return res.status(400).json({
-        error: true,
-        code: 'FS_WRITE_APPROVAL_REQUIRED',
-        message: 'Sandbox overwrite approval is required.',
-        details: {
-          path: targetPath,
-          requiresApproval: true
+    if (exists && overwrite) {
+      const { targetHash } = await buildSandboxFileTargetEvidence(app.id, targetPath);
+      try {
+        approvalContext = consumeSandboxWriteApproval(req, { app, targetPath, targetHash });
+      } catch (approvalErr) {
+        if (approval.approved === true) {
+          await auditService.log('SANDBOX', 'sandbox.file.write.overwrite.legacy_approval_rejected', {
+            appId: app.id,
+            path: targetPath,
+            approvalCode: approvalErr?.code || null,
+            user: req.user?.username
+          }, 'WARNING');
         }
-      });
+        const preflight = await createSandboxWritePreflight(req, { app, targetPath });
+        return res.status(428).json({
+          error: true,
+          code: 'SANDBOX_FILE_WRITE_APPROVAL_REQUIRED',
+          message: approvalErr.message || 'Sandbox overwrite approval is required.',
+          preflight
+        });
+      }
     }
 
     await fs.writeFile(targetPath, content, 'utf8');
@@ -346,7 +617,9 @@ router.post('/:appId/file/write', auth, async (req, res) => {
         appId: app.id,
         path: targetPath,
         overwrite,
-        approvalReceived,
+        approvalReceived: Boolean(approvalContext),
+        operationId: approvalContext?.operationId || null,
+        targetHash: approvalContext?.targetHash || null,
         user: req.user?.username
       },
       'INFO'
@@ -367,51 +640,15 @@ router.post('/:appId/file/write', auth, async (req, res) => {
   }
 });
 
-router.get('/:appId/file/raw', async (req, res) => {
-  const appId = String(req.params.appId || '').trim();
-  try {
-    const app = await packageRegistryService.getSandboxApp(appId);
-    if (!app) {
-      return res.status(404).json({
-        error: true,
-        code: 'APP_NOT_FOUND',
-        message: 'Sandbox app not found.'
-      });
+router.get('/:appId/file/raw', async (_req, res) => {
+  return res.status(410).json({
+    error: true,
+    code: 'SANDBOX_RAW_GRANT_URL_DISABLED',
+    message: 'Sandbox raw grant URLs are disabled. Request a raw ticket and use WebOS.files.rawUrl({ url }).',
+    details: {
+      replacement: 'POST /api/sandbox/:appId/file/raw-ticket'
     }
-
-    if (!app.permissions.includes('host.file.read')) {
-      return res.status(403).json({
-        error: true,
-        code: 'APP_PERMISSION_DENIED',
-        message: 'Sandbox app is not allowed to read host files.'
-      });
-    }
-
-    const targetPath = await resolveAllowedHostPath(req.query.path);
-    fileGrantService.consumeGrant(req.query.grantId, {
-      path: targetPath,
-      requiredMode: 'read',
-      appId: app.id
-    });
-
-    const stats = await fs.stat(targetPath);
-    if (!stats.isFile()) {
-      return res.status(400).json({
-        error: true,
-        code: 'FS_NOT_FILE',
-        message: 'Requested path is not a file.'
-      });
-    }
-
-    return res.sendFile(targetPath);
-  } catch (err) {
-    const status = err.code?.startsWith('FS_') || err.code === 'SANDBOX_FILE_PATH_REQUIRED' ? 400 : 500;
-    return res.status(status).json({
-      error: true,
-      code: err.code || 'SANDBOX_FILE_RAW_FAILED',
-      message: err.message
-    });
-  }
+  });
 });
 
 router.get('/:appId/manifest', async (req, res) => {

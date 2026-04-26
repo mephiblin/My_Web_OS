@@ -51,6 +51,7 @@
 - `[COMPLETED]` `doc/operations/backup-restore-rehearsal-2026-04-25.md`
 - `[COMPLETED]` `doc/operations/station-real-use-validation-2026-04-25.md`
 - `[COMPLETED]` `doc/operations/runtime-stability-notes-2026-04-26.md`
+- `[SNAPSHOT]` `doc/operations/home-server-readiness-review-2026-04-26.md`
 - `[SNAPSHOT]` `doc/operations/acme-real-domain-validation-2026-04-25.md`
 
 ## Policies

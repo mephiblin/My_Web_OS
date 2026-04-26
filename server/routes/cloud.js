@@ -5,8 +5,9 @@ const path = require('path');
 const router = express.Router();
 const auth = require('../middleware/auth');
 const cloudService = require('../services/cloudService');
+const cloudTransferJobService = require('../services/cloudTransferJobService');
+const fileTicketService = require('../services/fileTicketService');
 
-router.use(auth);
 const CLOUD_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const CLOUD_UPLOAD_TMP_DIR = path.join(__dirname, '../storage/tmp/cloud-uploads');
 fs.ensureDirSync(CLOUD_UPLOAD_TMP_DIR);
@@ -56,6 +57,182 @@ function parseBoolean(value) {
   return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
 }
 
+function getUserId(req) {
+  return String(req.user?.username || req.user?.id || req.user?.sub || 'unknown');
+}
+
+function createCloudHttpError(status, code, message, details = null) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  err.details = details;
+  return err;
+}
+
+function parseCloudLocation(input = {}) {
+  const cloudPath = parseRemotePath(input.path || input.cloudPath || '');
+  if (cloudPath.startsWith('cloud://')) {
+    const normalized = cloudPath.slice('cloud://'.length);
+    const parts = normalized.split('/');
+    const remote = parseRemoteName(parts.shift());
+    const remotePath = parts.join('/');
+    if (!remote || !remotePath) {
+      throw createCloudHttpError(400, 'CLOUD_RAW_INVALID_PATH', 'Cloud path must include remote and file path.');
+    }
+    return {
+      remote,
+      remotePath,
+      cloudPath: `cloud://${remote}/${remotePath}`
+    };
+  }
+
+  const remote = parseRemoteName(input.remote || input.remoteName || '');
+  const remotePath = parseRemotePath(input.remotePath || input.path || '');
+  if (!remote || !remotePath) {
+    throw createCloudHttpError(400, 'CLOUD_RAW_INVALID_PATH', 'Remote and remotePath are required.');
+  }
+  return {
+    remote,
+    remotePath,
+    cloudPath: `cloud://${remote}/${remotePath}`
+  };
+}
+
+function parseByteRange(rangeHeader, size) {
+  const header = String(rangeHeader || '').trim();
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header);
+  if (!match || !Number.isFinite(size) || size < 0) {
+    throw createCloudHttpError(416, 'CLOUD_RAW_RANGE_INVALID', 'Requested range is invalid.');
+  }
+
+  let start;
+  let end;
+  if (match[1] === '' && match[2] === '') {
+    throw createCloudHttpError(416, 'CLOUD_RAW_RANGE_INVALID', 'Requested range is invalid.');
+  }
+  if (match[1] === '') {
+    const suffixLength = Number.parseInt(match[2], 10);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+      throw createCloudHttpError(416, 'CLOUD_RAW_RANGE_INVALID', 'Requested range is invalid.');
+    }
+    start = Math.max(0, size - suffixLength);
+    end = size > 0 ? size - 1 : 0;
+  } else {
+    start = Number.parseInt(match[1], 10);
+    end = match[2] === '' ? size - 1 : Number.parseInt(match[2], 10);
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || start >= size) {
+    throw createCloudHttpError(416, 'CLOUD_RAW_RANGE_INVALID', 'Requested range is outside the remote file.');
+  }
+  return {
+    start,
+    end: Math.min(end, size - 1),
+    count: Math.min(end, size - 1) - start + 1
+  };
+}
+
+async function sendCloudRawFile(req, res, location, options = {}) {
+  const entry = await cloudService.getEntryMetadata(location.remote, location.remotePath);
+  if (entry.isDirectory) {
+    throw createCloudHttpError(400, 'CLOUD_RAW_DIRECTORY_UNSUPPORTED', 'Cannot stream a remote directory.');
+  }
+
+  if (options.ticketRecord) {
+    fileTicketService.assertTicketTargetUnchanged(options.ticketRecord, {
+      size: entry.size,
+      mtimeMs: entry.mtimeMs
+    });
+  }
+
+  const range = parseByteRange(req.headers.range, entry.size);
+  const child = cloudService.createReadStream(location.remote, location.remotePath, range
+    ? { offset: range.start, count: range.count }
+    : {});
+  let stderr = '';
+  let settled = false;
+
+  const finishWithError = (err) => {
+    if (settled) return;
+    settled = true;
+    if (!res.headersSent) {
+      sendError(res, 'CLOUD_RAW_STREAM_FAILED', 'Failed to stream remote file', err);
+      return;
+    }
+    res.destroy(err);
+  };
+
+  child.stderr.on('data', (chunk) => {
+    stderr += String(chunk);
+  });
+  child.on('error', (err) => {
+    const code = err?.code === 'ENOENT' ? 'CLOUD_RAW_RCLONE_NOT_FOUND' : 'CLOUD_RAW_STREAM_FAILED';
+    finishWithError(createCloudHttpError(502, code, err?.code === 'ENOENT'
+      ? 'rclone binary not found. Please install rclone.'
+      : 'Failed to start remote file stream.'));
+  });
+  child.on('close', (code) => {
+    if (settled) return;
+    settled = true;
+    if (code !== 0 && !res.writableEnded) {
+      const err = createCloudHttpError(502, 'CLOUD_RAW_RCLONE_FAILED', 'rclone failed while streaming remote file.', {
+        stderrSummary: String(stderr || '').replace(/\s+/g, ' ').trim().slice(0, 500) || null,
+        exitCode: code
+      });
+      if (!res.headersSent) {
+        sendError(res, 'CLOUD_RAW_STREAM_FAILED', 'Failed to stream remote file', err);
+      } else {
+        res.destroy(err);
+      }
+      return;
+    }
+    if (options.ticketRecord?.profile === fileTicketService.PROFILE_MEDIA) {
+      fileTicketService.touchTicket(options.ticketRecord.ticket, {
+        metadata: {
+          lastRequestRange: req.headers.range || ''
+        }
+      });
+    }
+  });
+  res.on('close', () => {
+    if (!settled && !child.killed) child.kill('SIGTERM');
+  });
+
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.type(entry.mimeType || path.basename(location.remotePath) || 'application/octet-stream');
+  if (range) {
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${entry.size}`);
+    res.setHeader('Content-Length', String(range.count));
+  } else if (Number.isFinite(entry.size)) {
+    res.setHeader('Content-Length', String(entry.size));
+  }
+  child.stdout.pipe(res);
+}
+
+const CLOUD_TRANSFER_STATUS_ALIASES = new Map([
+  ['error', 'failed'],
+  ['cancelled', 'canceled'],
+  ['success', 'completed'],
+  ['done', 'completed'],
+  ['active', 'running'],
+  ['working', 'running'],
+  ['quota', 'paused_by_quota'],
+  ['retryable', 'retryable_failed']
+]);
+
+function parsePruneStatuses(req) {
+  const raw = Array.isArray(req.body?.statuses)
+    ? req.body.statuses
+    : String(req.query?.statuses || '')
+      .split(',');
+  return raw
+    .map((item) => String(item || '').trim().toLowerCase())
+    .map((status) => CLOUD_TRANSFER_STATUS_ALIASES.get(status) || status)
+    .filter(Boolean);
+}
+
 function uploadSingle(req, res, next) {
   upload.single('file')(req, res, (err) => {
     if (!err) {
@@ -77,6 +254,30 @@ function uploadSingle(req, res, next) {
     sendError(res, 'CLOUD_UPLOAD_PARSE_FAILED', 'Failed to parse upload payload', err);
   });
 }
+
+/**
+ * GET /api/cloud/raw?ticket=...
+ * Redeem a short-lived cloud raw ticket without Authorization.
+ */
+router.get('/raw', async (req, res, next) => {
+  const ticket = String(req.query?.ticket || '').trim();
+  if (!ticket) return next();
+
+  try {
+    const record = fileTicketService.getTicket(ticket, { scope: 'cloud.raw' });
+    const metadata = record.metadata && typeof record.metadata === 'object' ? record.metadata : {};
+    const location = parseCloudLocation({
+      remote: metadata.remote,
+      remotePath: metadata.remotePath,
+      path: record.path
+    });
+    return await sendCloudRawFile(req, res, location, { ticketRecord: record });
+  } catch (err) {
+    return sendError(res, 'CLOUD_RAW_TICKET_FAILED', 'Failed to redeem cloud raw ticket', err);
+  }
+});
+
+router.use(auth);
 // Get available cloud providers
 router.get('/providers', async (req, res) => {
   const providers = await cloudService.listProviders();
@@ -108,10 +309,14 @@ router.get('/remotes', async (req, res) => {
 router.post('/setup', async (req, res) => {
   const { name, provider } = req.body;
   if (!name || !provider) {
-    return res.status(400).json({ error: 'Name and provider are required' });
+    return sendError(res, 'CLOUD_SETUP_INVALID_REQUEST', 'Name and provider are required', null, 400);
   }
-  const result = await cloudService.setupRemote(name, provider);
-  res.json(result);
+  try {
+    const result = await cloudService.setupRemote(name, provider);
+    return res.json(result);
+  } catch (err) {
+    return sendError(res, 'CLOUD_SETUP_FAILED', 'Failed to setup cloud remote', err);
+  }
 });
 
 // List entries in a remote
@@ -135,6 +340,77 @@ router.get('/read', async (req, res) => {
     res.json({ content });
   } catch (err) {
     sendError(res, 'CLOUD_READ_FAILED', 'Failed to read remote file', err);
+  }
+});
+
+router.post('/raw-ticket', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const location = parseCloudLocation(body);
+    const appId = String(body.appId || '').trim();
+    const profile = String(body.profile || body.purpose || fileTicketService.PROFILE_PREVIEW).trim().toLowerCase();
+    const entry = await cloudService.getEntryMetadata(location.remote, location.remotePath);
+    if (entry.isDirectory) {
+      throw createCloudHttpError(400, 'CLOUD_RAW_DIRECTORY_UNSUPPORTED', 'Cannot issue a raw ticket for a remote directory.');
+    }
+
+    const ticket = fileTicketService.createTicket({
+      scope: 'cloud.raw',
+      profile,
+      user: req.user?.username,
+      appId,
+      path: location.cloudPath,
+      stats: {
+        size: entry.size,
+        mtimeMs: entry.mtimeMs
+      },
+      ttlMs: body.ttlMs,
+      absoluteTtlMs: body.absoluteTtlMs,
+      idleTimeoutMs: body.idleTimeoutMs,
+      metadata: {
+        remote: location.remote,
+        remotePath: location.remotePath,
+        mimeType: entry.mimeType || null
+      }
+    });
+
+    return res.status(201).json({
+      success: true,
+      ticket: ticket.ticket,
+      url: `/api/cloud/raw?ticket=${encodeURIComponent(ticket.ticket)}`,
+      scope: ticket.scope,
+      profile: ticket.profile,
+      path: location.cloudPath,
+      remote: location.remote,
+      remotePath: location.remotePath,
+      appId,
+      expiresAt: new Date(ticket.expiresAt).toISOString(),
+      ttlMs: ticket.expiresAt - ticket.createdAt,
+      ...(ticket.profile === fileTicketService.PROFILE_MEDIA
+        ? {
+            idleTimeoutMs: ticket.idleTimeoutMs,
+            absoluteExpiresAt: new Date(ticket.absoluteExpiresAt).toISOString(),
+            lastAccess: new Date(ticket.lastAccess).toISOString(),
+            size: ticket.size,
+            mtime: ticket.mtime
+          }
+        : {})
+    });
+  } catch (err) {
+    return sendError(res, 'CLOUD_RAW_TICKET_CREATE_FAILED', 'Failed to create cloud raw ticket', err);
+  }
+});
+
+router.get('/raw', async (req, res) => {
+  try {
+    const location = parseCloudLocation({
+      remote: req.query.remote,
+      remotePath: req.query.remotePath || req.query.path,
+      path: req.query.path
+    });
+    return await sendCloudRawFile(req, res, location);
+  } catch (err) {
+    return sendError(res, 'CLOUD_RAW_FETCH_FAILED', 'Failed to stream remote file', err);
   }
 });
 
@@ -300,10 +576,124 @@ router.post('/upload', uploadSingle, async (req, res) => {
   }
 });
 
+// Preflight an A-owned server-to-cloud transfer. This does not upload browser files.
+router.post('/transfer/preflight', async (req, res) => {
+  try {
+    const preflight = await cloudTransferJobService.preflight(req.body || {}, {
+      userId: getUserId(req)
+    });
+    return res.json({
+      success: true,
+      ...preflight
+    });
+  } catch (err) {
+    return sendError(res, 'CLOUD_TRANSFER_PREFLIGHT_FAILED', 'Failed to preflight cloud transfer', err);
+  }
+});
+
+// Approve a risky A-owned cloud transfer, currently overwrite/destination conflict.
+router.post('/transfer/approve', async (req, res) => {
+  try {
+    const result = cloudTransferJobService.approve(req.body || {}, {
+      userId: getUserId(req)
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendError(res, 'CLOUD_TRANSFER_APPROVAL_INVALID', 'Failed to approve cloud transfer', err, 409);
+  }
+});
+
+// Enqueue an A-owned server-to-cloud transfer.
+router.post('/transfer', async (req, res) => {
+  try {
+    const job = await cloudTransferJobService.enqueue(req.body || {}, {
+      userId: getUserId(req)
+    });
+    return res.status(202).json({
+      success: true,
+      accepted: true,
+      jobId: job.id,
+      job
+    });
+  } catch (err) {
+    return sendError(res, 'CLOUD_TRANSFER_CREATE_FAILED', 'Failed to create cloud transfer job', err);
+  }
+});
+
+router.get('/transfer-jobs', (_req, res) => {
+  try {
+    return res.json({
+      success: true,
+      jobs: cloudTransferJobService.listJobs(),
+      summary: cloudTransferJobService.getSummary()
+    });
+  } catch (err) {
+    return sendError(res, 'CLOUD_TRANSFER_JOBS_LIST_FAILED', 'Failed to list cloud transfer jobs', err);
+  }
+});
+
+router.get('/transfer-jobs/:id', (req, res) => {
+  try {
+    const job = cloudTransferJobService.getJob(req.params.id);
+    if (!job) {
+      return sendError(res, 'CLOUD_TRANSFER_JOB_NOT_FOUND', 'Cloud transfer job was not found', null, 404);
+    }
+    return res.json({
+      success: true,
+      job
+    });
+  } catch (err) {
+    return sendError(res, 'CLOUD_TRANSFER_JOB_FETCH_FAILED', 'Failed to fetch cloud transfer job', err);
+  }
+});
+
+router.post('/transfer-jobs/:id/cancel', (req, res) => {
+  try {
+    const job = cloudTransferJobService.cancelJob(req.params.id);
+    return res.json({
+      success: true,
+      accepted: true,
+      job
+    });
+  } catch (err) {
+    return sendError(res, 'CLOUD_TRANSFER_CANCEL_FAILED', 'Failed to cancel cloud transfer job', err);
+  }
+});
+
+router.post('/transfer-jobs/:id/retry', async (req, res) => {
+  try {
+    const job = await cloudTransferJobService.retryJob(req.params.id, {
+      userId: getUserId(req)
+    });
+    return res.status(202).json({
+      success: true,
+      job
+    });
+  } catch (err) {
+    return sendError(res, 'CLOUD_TRANSFER_RETRY_FAILED', 'Failed to retry cloud transfer job', err);
+  }
+});
+
+router.delete('/transfer-jobs', (req, res) => {
+  try {
+    const result = cloudTransferJobService.clearJobs({
+      statuses: parsePruneStatuses(req)
+    });
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (err) {
+    return sendError(res, 'CLOUD_TRANSFER_PRUNE_FAILED', 'Failed to prune cloud transfer jobs', err);
+  }
+});
+
 // Setup a new WebDAV connection
 router.post('/add-webdav', async (req, res) => {
   const { name, url, user, pass } = req.body;
-  if (!name || !url) return res.status(400).json({ error: 'Name and URL are required' });
+  if (!name || !url) {
+    return sendError(res, 'CLOUD_ADD_WEBDAV_INVALID_REQUEST', 'Name and URL are required', null, 400);
+  }
   try {
     await cloudService.addWebDAV(name, url, user, pass);
     res.json({ success: true });

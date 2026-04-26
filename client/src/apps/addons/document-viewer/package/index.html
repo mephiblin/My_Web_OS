@@ -107,7 +107,12 @@
             showError('파일 경로 또는 권한이 없습니다.');
             return;
           }
-          const rawUrl = window.WebOS.files.rawUrl({ path, grantId });
+          const rawTicket = await window.WebOS.files.rawTicket({ path, grantId, profile: 'preview' });
+          const rawUrl = window.WebOS.files.rawUrl(rawTicket);
+          if (!rawUrl) {
+            showError('파일 미리보기 티켓을 만들지 못했습니다.');
+            return;
+          }
           if (ext === 'pdf') {
             contentEl.innerHTML = '<iframe title="PDF 미리보기" src="' + rawUrl + '"></iframe>';
             return;

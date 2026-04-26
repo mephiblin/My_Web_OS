@@ -39,12 +39,22 @@ function pickErrorCode(payload, status) {
 }
 
 function pickMessage(payload, status) {
-  if (typeof payload?.message === 'string' && payload.message) return payload.message;
-  if (typeof payload?.detail === 'string' && payload.detail) return payload.detail;
-  if (typeof payload?.title === 'string' && payload.title) return payload.title;
-  if (typeof payload?.error?.message === 'string' && payload.error.message) return payload.error.message;
-  if (typeof payload?.error === 'string' && payload.error) return payload.error;
+  if (typeof payload?.message === 'string' && payload.message) return redactSensitiveText(payload.message);
+  if (typeof payload?.detail === 'string' && payload.detail) return redactSensitiveText(payload.detail);
+  if (typeof payload?.title === 'string' && payload.title) return redactSensitiveText(payload.title);
+  if (typeof payload?.error?.message === 'string' && payload.error.message) return redactSensitiveText(payload.error.message);
+  if (typeof payload?.error === 'string' && payload.error) return redactSensitiveText(payload.error);
   return status ? `HTTP Error: ${status}` : 'API request failed';
+}
+
+export function redactSensitiveText(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  return text
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)([^/\s?#@]+):([^/\s?#@]+)@/gi, '$1[redacted]@')
+    .replace(/([?&](?:token|grantId|ticket|code|secret|password|authorization)=)[^&#\s"']*/gi, '$1[redacted]')
+    .replace(/\b(authorization\s*[:=]\s*bearer\s+)[^\s"',;}]+/gi, '$1[redacted]')
+    .replace(/\b((?:token|grantId|ticket|secret|password)\s*[:=]\s*)[^\s"',;}]+/gi, '$1[redacted]');
 }
 
 export class ApiError extends Error {
@@ -72,8 +82,8 @@ export function getErrorCode(err, fallback = 'UNKNOWN_ERROR') {
 }
 
 export function getUserFacingMessage(err, fallback = 'Request failed.') {
-  if (isApiError(err) && err.message) return err.message;
-  if (typeof err?.message === 'string' && err.message) return err.message;
+  if (isApiError(err) && err.message) return redactSensitiveText(err.message);
+  if (typeof err?.message === 'string' && err.message) return redactSensitiveText(err.message);
   return fallback;
 }
 
@@ -155,10 +165,27 @@ export async function apiFetchTicketUrl(path, body = {}, options = {}) {
   return url;
 }
 
+function isCloudPath(filePath) {
+  return String(filePath || '').trim().startsWith('cloud://');
+}
+
 export function fetchRawFileTicketUrl(filePath, options = {}) {
-  return apiFetchTicketUrl('/api/fs/raw-ticket', {
-    path: String(filePath || ''),
+  const path = String(filePath || '');
+  return apiFetchTicketUrl(isCloudPath(path) ? '/api/cloud/raw-ticket' : '/api/fs/raw-ticket', {
+    path,
     disposition: options.disposition || 'inline'
+  }, {
+    signal: options.signal
+  });
+}
+
+export function fetchRawMediaLeaseUrl(filePath, options = {}) {
+  const path = String(filePath || '');
+  return apiFetchTicketUrl(isCloudPath(path) ? '/api/cloud/raw-ticket' : '/api/fs/raw-ticket', {
+    path,
+    disposition: options.disposition || 'inline',
+    profile: 'media',
+    appId: options.appId || ''
   }, {
     signal: options.signal
   });
