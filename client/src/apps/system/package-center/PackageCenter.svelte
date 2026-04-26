@@ -2,15 +2,16 @@
   import { get } from 'svelte/store';
   import { onMount } from 'svelte';
   import { LayoutGrid, Store, Link2, RefreshCw, Download, Upload, Play, Square, RotateCcw, Trash2 } from 'lucide-svelte';
-  import { API_BASE } from '../../../utils/constants.js';
   import { apiFetch } from '../../../utils/api.js';
   import {
+    approvePackageDelete,
     cancelPackageBackupJob,
     createPackageBackup,
     createPackageBackupJob,
     cloneInstalledPackage as cloneInstalledPackageRequest,
     controlRuntimeApp,
     fetchPackageBackupJobs,
+    fetchPackageExportTicketUrl,
     fetchInstalledOpsSummary,
     fetchPackageFileEntries,
     fetchPackageManifest,
@@ -25,6 +26,7 @@
     fetchRuntimeLogs,
     importZipPackage,
     installRegistryPackage,
+    preflightPackageDelete,
     preflightZipPackageImport,
     recoverRuntimeApp,
     removeInstalledPackage as removeInstalledPackageRequest,
@@ -67,6 +69,7 @@
   let installingPackageId = $state('');
   let message = $state('');
   let error = $state('');
+  let lastFailure = $state(null);
   let activeStoreSource = $state('all');
 
   let registrySources = $state([]);
@@ -105,6 +108,7 @@
   let backupJobActioningByApp = $state({});
   let selectedBackupByApp = $state({});
   let installReview = $state(null);
+  let removingPackageId = $state('');
   let zipImportFile = $state(null);
   let zipImportInputKey = $state(0);
   let zipImportOverwrite = $state(false);
@@ -374,6 +378,32 @@
   function clearFeedback() {
     message = '';
     error = '';
+    lastFailure = null;
+  }
+
+  function formatApiError(err, fallbackMessage) {
+    const code = String(err?.code || '').trim();
+    const text = String(err?.message || fallbackMessage || 'Request failed.').trim();
+    return code ? `${text} (${code})` : text;
+  }
+
+  function setFeedbackError(err, fallbackMessage, operation, retry = null) {
+    const nextMessage = formatApiError(err, fallbackMessage);
+    error = nextMessage;
+    lastFailure = {
+      operation: operation || 'Package Center operation',
+      message: nextMessage,
+      code: String(err?.code || '').trim(),
+      retry
+    };
+  }
+
+  async function retryLastFailure() {
+    const retry = lastFailure?.retry;
+    if (typeof retry !== 'function') return;
+    message = '';
+    error = '';
+    await retry();
   }
 
   async function withTimeout(promise, timeoutMs, timeoutMessage) {
@@ -1697,7 +1727,7 @@
       }
     } catch (err) {
       installedPackages = [];
-      error = err.message || 'Failed to load installed packages.';
+      setFeedbackError(err, 'Failed to load installed packages.', 'Load installed packages', loadInstalledPackages);
     } finally {
       loadingInstalled = false;
     }
@@ -1762,7 +1792,7 @@
     } catch (err) {
       storePackages = [];
       storeSourceErrors = [];
-      error = err.message || 'Failed to load store packages.';
+      setFeedbackError(err, 'Failed to load store packages.', 'Load store packages', loadStorePackages);
     } finally {
       loadingStore = false;
     }
@@ -1860,20 +1890,19 @@
     await scaffoldTemplate(template);
   }
 
-  function downloadInstalledPackage(pkg) {
-    const token = localStorage.getItem('web_os_token') || '';
-    if (!token) {
-      error = 'Authentication required for export.';
-      return;
+  async function downloadInstalledPackage(pkg) {
+    try {
+      const href = await fetchPackageExportTicketUrl(pkg.id);
+      const anchor = document.createElement('a');
+      anchor.href = href;
+      anchor.download = `${pkg.id || 'package'}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      message = `Export started: ${pkg.title}`;
+    } catch (err) {
+      error = err?.message || 'Package export failed.';
     }
-    const href = `${API_BASE}/api/packages/${encodeURIComponent(pkg.id)}/export?token=${encodeURIComponent(token)}`;
-    const anchor = document.createElement('a');
-    anchor.href = href;
-    anchor.download = '';
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    message = `Export started: ${pkg.title}`;
   }
 
   async function cloneInstalledPackage(pkg) {
@@ -2359,7 +2388,7 @@
       }
 
       desktopAppModelStats = next;
-    } catch (_err) {
+    } catch (err) {
       desktopAppInventory = [];
       desktopAppModelStats = {
         system: 0,
@@ -2367,6 +2396,7 @@
         package: 0,
         total: 0
       };
+      setFeedbackError(err, 'Failed to load desktop app contract.', 'Load desktop app contract', loadDesktopAppModelStats);
     } finally {
       loadingDesktopApps = false;
     }
@@ -2544,54 +2574,141 @@
     ]);
   }
 
+  function normalizePackageDeletePreflight(payload, pkg) {
+    const raw = payload?.preflight || payload?.data?.preflight || payload || {};
+    const target = raw.target && typeof raw.target === 'object' ? raw.target : {};
+    const approval = raw.approval && typeof raw.approval === 'object' ? raw.approval : {};
+    const recoverability = raw.recoverability && typeof raw.recoverability === 'object'
+      ? raw.recoverability
+      : {};
+    const targetId = String(target.id || pkg?.id || '').trim();
+    const targetLabel = String(target.label || pkg?.title || targetId || 'Package').trim();
+    const typedConfirmation = approval.typedConfirmation != null
+      ? String(approval.typedConfirmation)
+      : String(targetId || pkg?.id || '').trim();
+
+    return {
+      operationId: String(raw.operationId || '').trim(),
+      action: String(raw.action || 'package.delete').trim(),
+      target: {
+        type: String(target.type || 'package').trim(),
+        id: targetId,
+        label: targetLabel
+      },
+      riskLevel: String(raw.riskLevel || 'high').trim().toLowerCase(),
+      impact: Array.isArray(raw.impact)
+        ? raw.impact.map((item) => normalizeReviewText(item, '')).filter(Boolean)
+        : [],
+      recoverability: {
+        backupAvailable: recoverability.backupAvailable === true,
+        latestBackupId: String(recoverability.latestBackupId || '').trim(),
+        rollbackSupported: recoverability.rollbackSupported === true
+      },
+      approval: {
+        required: approval.required !== false,
+        typedConfirmation,
+        expiresAt: String(approval.expiresAt || '').trim()
+      },
+      targetHash: String(raw.targetHash || '').trim()
+    };
+  }
+
+  function isPackageDeleteBusy(appId) {
+    return removingPackageId === appId;
+  }
+
+  async function cleanupRemovedInstalledPackage(pkg) {
+    stopInstalledPackage(pkg);
+    message = `Package "${pkg.title}" removed.`;
+    clearRuntimeLogs(pkg.id);
+    clearRuntimeEvents(pkg.id);
+    lifecycleByApp = { ...lifecycleByApp, [pkg.id]: null };
+    healthByApp = { ...healthByApp, [pkg.id]: null };
+    consoleOpenByApp = { ...consoleOpenByApp, [pkg.id]: false };
+    selectedBackupByApp = { ...selectedBackupByApp, [pkg.id]: '' };
+    backupJobsByApp = { ...backupJobsByApp, [pkg.id]: [] };
+    backupJobsLoadingByApp = { ...backupJobsLoadingByApp, [pkg.id]: false };
+    {
+      const nextBackupPolicyDraftByApp = { ...backupPolicyDraftByApp };
+      delete nextBackupPolicyDraftByApp[pkg.id];
+      backupPolicyDraftByApp = nextBackupPolicyDraftByApp;
+    }
+    {
+      const nextManifestEditorByApp = { ...manifestEditorByApp };
+      delete nextManifestEditorByApp[pkg.id];
+      manifestEditorByApp = nextManifestEditorByApp;
+    }
+    {
+      const nextPackageFilesByApp = { ...packageFilesByApp };
+      delete nextPackageFilesByApp[pkg.id];
+      packageFilesByApp = nextPackageFilesByApp;
+    }
+    {
+      const nextPackageFilesLoadingByApp = { ...packageFilesLoadingByApp };
+      delete nextPackageFilesLoadingByApp[pkg.id];
+      packageFilesLoadingByApp = nextPackageFilesLoadingByApp;
+    }
+    {
+      const nextPackageFilesErrorByApp = { ...packageFilesErrorByApp };
+      delete nextPackageFilesErrorByApp[pkg.id];
+      packageFilesErrorByApp = nextPackageFilesErrorByApp;
+    }
+    await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
+  }
+
   async function removeInstalledPackage(pkg) {
+    const appId = String(pkg?.id || '').trim();
+    if (!appId) return;
+
     clearFeedback();
-    const ok = globalThis.confirm(`Remove package "${pkg.title}"?`);
+    const ok = globalThis.confirm(`Remove package "${pkg.title || appId}"?`);
     if (!ok) return;
 
+    removingPackageId = appId;
+    let deleteCommitted = false;
     try {
+      const response = await withTimeout(
+        preflightPackageDelete(appId),
+        10000,
+        'Package delete preflight request timed out.'
+      );
+      const preflight = normalizePackageDeletePreflight(response, pkg);
+      const approvalResponse = await approvePackageDelete(appId, {
+        operationId: preflight.operationId,
+        typedConfirmation: preflight.approval.typedConfirmation || appId
+      });
+      const approval = approvalResponse?.approval;
+      if (!approval?.nonce) {
+        const err = new Error('Delete approval response did not include a nonce.');
+        err.code = 'PACKAGE_DELETE_APPROVAL_INVALID';
+        throw err;
+      }
+
       if (isServicePackage(pkg)) {
-        await stopRuntimeApp(pkg.id).catch(() => {});
+        await stopRuntimeApp(appId).catch(() => {});
       }
-      await removeInstalledPackageRequest(pkg.id);
-      stopInstalledPackage(pkg);
-      message = `Package "${pkg.title}" removed.`;
-      clearRuntimeLogs(pkg.id);
-      clearRuntimeEvents(pkg.id);
-      lifecycleByApp = { ...lifecycleByApp, [pkg.id]: null };
-      healthByApp = { ...healthByApp, [pkg.id]: null };
-      consoleOpenByApp = { ...consoleOpenByApp, [pkg.id]: false };
-      selectedBackupByApp = { ...selectedBackupByApp, [pkg.id]: '' };
-      backupJobsByApp = { ...backupJobsByApp, [pkg.id]: [] };
-      backupJobsLoadingByApp = { ...backupJobsLoadingByApp, [pkg.id]: false };
-      {
-        const nextBackupPolicyDraftByApp = { ...backupPolicyDraftByApp };
-        delete nextBackupPolicyDraftByApp[pkg.id];
-        backupPolicyDraftByApp = nextBackupPolicyDraftByApp;
-      }
-      {
-        const nextManifestEditorByApp = { ...manifestEditorByApp };
-        delete nextManifestEditorByApp[pkg.id];
-        manifestEditorByApp = nextManifestEditorByApp;
-      }
-      {
-        const nextPackageFilesByApp = { ...packageFilesByApp };
-        delete nextPackageFilesByApp[pkg.id];
-        packageFilesByApp = nextPackageFilesByApp;
-      }
-      {
-        const nextPackageFilesLoadingByApp = { ...packageFilesLoadingByApp };
-        delete nextPackageFilesLoadingByApp[pkg.id];
-        packageFilesLoadingByApp = nextPackageFilesLoadingByApp;
-      }
-      {
-        const nextPackageFilesErrorByApp = { ...packageFilesErrorByApp };
-        delete nextPackageFilesErrorByApp[pkg.id];
-        packageFilesErrorByApp = nextPackageFilesErrorByApp;
-      }
-      await Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()]);
+
+      await removeInstalledPackageRequest(appId, {
+        approval: {
+          ...approval,
+          targetHash: preflight.targetHash
+        },
+        reason: 'Package Center user-approved removal'
+      });
+      deleteCommitted = true;
+      await cleanupRemovedInstalledPackage(pkg);
     } catch (err) {
-      error = err.message || 'Failed to remove package.';
+      const fallbackMessage = deleteCommitted
+        ? 'Package was removed, but Package Center refresh failed.'
+        : 'Failed to remove package.';
+      const retry = deleteCommitted
+        ? () => Promise.all([loadInstalledPackages(), loadStorePackages(), loadRuntimeStatuses()])
+        : () => removeInstalledPackage(pkg);
+      setFeedbackError(err, fallbackMessage, deleteCommitted ? 'Refresh packages' : 'Remove package', retry);
+    } finally {
+      if (removingPackageId === appId) {
+        removingPackageId = '';
+      }
     }
   }
 
@@ -2638,7 +2755,20 @@
       <div class="feedback info glass-effect">{message}</div>
     {/if}
     {#if error}
-      <div class="feedback error glass-effect">{error}</div>
+      <div class="feedback error glass-effect" role="alert" aria-live="polite">
+        <div class="feedback-copy">
+          {#if lastFailure?.operation}
+            <strong>{lastFailure.operation}</strong>
+          {/if}
+          <span>{error}</span>
+        </div>
+        {#if typeof lastFailure?.retry === 'function'}
+          <button class="btn ghost feedback-retry" onclick={retryLastFailure}>
+            <RefreshCw size={14} />
+            Retry
+          </button>
+        {/if}
+      </div>
     {/if}
 
     {#if activeCategory === CATEGORY.STORE}
@@ -3539,7 +3669,7 @@
                     <Download size={14} />
                     Export
                   </button>
-                  <button class="btn danger" onclick={() => removeInstalledPackage(pkg)}>
+                  <button class="btn danger" onclick={() => removeInstalledPackage(pkg)} disabled={isPackageDeleteBusy(pkg.id)}>
                     <Trash2 size={14} />
                     Remove
                   </button>
@@ -4034,6 +4164,29 @@
     padding: 10px 12px;
     font-size: 13px;
     background: rgba(15, 23, 36, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .feedback-copy {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .feedback-copy strong {
+    color: #fff1f2;
+    font-size: 12px;
+  }
+
+  .feedback-copy span {
+    line-height: 1.35;
+  }
+
+  .feedback-retry {
+    flex-shrink: 0;
   }
 
   .feedback.info {

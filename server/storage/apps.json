@@ -124,6 +124,76 @@
     ]
   },
   {
+    "id": "download-station",
+    "title": "Download Station",
+    "icon": "Send",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "download-station",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
+  },
+  {
+    "id": "photo-station",
+    "title": "Photo Station",
+    "icon": "Image",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "photo-station",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
+  },
+  {
+    "id": "music-station",
+    "title": "Music Station",
+    "icon": "Music2",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "music-station",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
+  },
+  {
+    "id": "document-station",
+    "title": "Document Station",
+    "icon": "FileText",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "document-station",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
+  },
+  {
+    "id": "video-station",
+    "title": "Video Station",
+    "icon": "Video",
+    "appModel": "system",
+    "type": "system",
+    "version": "1.0.0",
+    "entry": "video-station",
+    "runtime": "builtin",
+    "singleton": true,
+    "permissions": [
+      "system.info"
+    ]
+  },
+  {
     "id": "player",
     "title": "Media Player",
     "icon": "Video",

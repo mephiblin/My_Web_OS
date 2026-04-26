@@ -33,16 +33,19 @@
 - `[ACTIVE]` `doc/planning/product-brief-home-server-remote-computer.md`
 - `[ACTIVE]` `doc/planning/feature-inventory-home-server-remote-computer.md`
 - `[ACTIVE]` `doc/planning/implementation-priority-plan.md`
+- `[ACTIVE]` `doc/planning/real-use-remediation-plan.md`
 - `[ACTIVE]` `doc/planning/roadmap-home-server-remote-computer.md`
 - `[ACTIVE]` `doc/planning/project-identity-boundaries.md`
 - `[ACTIVE]` `doc/planning/feature-scope-priorities.md`
 - `[ACTIVE]` `doc/planning/ui-ux-customization-agent.md`
 - `[ACTIVE]` `doc/planning/app-install-file-workflow-direction.md`
+- `[ACTIVE]` `doc/planning/large-file-continuity-and-cloud-transfer-considerations.md`
 
 ## Operations
 - `[ACTIVE]` `doc/operations/completed-backlog-log.md`
 - `[ACTIVE]` `doc/operations/local-run-guide.md`
 - `[ACTIVE]` `doc/operations/remote-access-hardening-guide.md`
+- `[ACTIVE]` `doc/operations/verification-gate-guide.md`
 - `[ACTIVE]` `doc/operations/package-troubleshooting.md`
 - `[SNAPSHOT]` `doc/operations/next-tasks-2026-04-25.md`
 - `[COMPLETED]` `doc/operations/backup-restore-rehearsal-2026-04-25.md`

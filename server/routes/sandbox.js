@@ -9,7 +9,12 @@ const fileGrantService = require('../services/fileGrantService');
 const serverConfig = require('../config/serverConfig');
 const { CAPABILITY_CATALOG } = require('../services/capabilityCatalog');
 const appPaths = require('../utils/appPaths');
-const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath } = require('../utils/pathPolicy');
+const {
+  resolveSafePath,
+  isWithinAllowedRoots,
+  isProtectedSystemPath,
+  assertWithinAllowedRealRoots
+} = require('../utils/pathPolicy');
 
 const router = express.Router();
 const SANDBOX_SDK_FILE = path.join(__dirname, '../static/webos-sandbox-sdk.js');
@@ -112,6 +117,8 @@ async function resolveAllowedHostPath(rawPath) {
     err.code = 'FS_SYSTEM_PROTECTED';
     throw err;
   }
+
+  await assertWithinAllowedRealRoots(resolvedPath, allowedRoots);
 
   return resolvedPath;
 }
@@ -435,6 +442,10 @@ router.use('/:appId', async (req, res) => {
     }
 
     const requestedPath = req.path === '/' ? app.entry : req.path.replace(/^[/\\]+/, '');
+    if (requestedPath === 'manifest.json' || requestedPath.endsWith('/manifest.json')) {
+      return res.status(403).send('Sandbox package manifest is not served as a static asset.');
+    }
+
     const absolutePath = await appPaths.resolveAppAssetPath(req.params.appId, requestedPath);
     const exists = await fs.pathExists(absolutePath);
 

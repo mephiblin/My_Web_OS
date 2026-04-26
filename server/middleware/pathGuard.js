@@ -1,5 +1,10 @@
 const serverConfig = require('../config/serverConfig');
-const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath } = require('../utils/pathPolicy');
+const {
+  resolveSafePath,
+  isWithinAllowedRoots,
+  isProtectedSystemPath,
+  assertWithinAllowedRealRoots
+} = require('../utils/pathPolicy');
 
 /**
  * Path Guard Middleware
@@ -25,9 +30,7 @@ const pathGuard = async (req, res, next) => {
       });
     }
 
-    const isAllowed = isWithinAllowedRoots(absolutePath, allowedRoots);
-
-    if (!isAllowed) {
+    if (!isWithinAllowedRoots(absolutePath, allowedRoots)) {
       return res.status(403).json({
         error: true,
         code: 'FS_PERMISSION_DENIED',
@@ -36,11 +39,13 @@ const pathGuard = async (req, res, next) => {
       });
     }
 
+    await assertWithinAllowedRealRoots(absolutePath, allowedRoots);
+
     req.safePath = absolutePath;
     next();
   } catch (err) {
     const code = err.code || 'FS_INVALID_PATH';
-    return res.status(400).json({
+    return res.status(err.status || 400).json({
       error: true,
       code,
       message: err.message || 'Invalid path provided.',

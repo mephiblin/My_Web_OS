@@ -14,6 +14,7 @@
 2. **P1 - 운영 안정성/핵심 워크플로**
    - `feature-scope-priorities.md`
    - `app-install-file-workflow-direction.md`
+   - `real-use-remediation-plan.md`
    - 이유: 파일/패키지/승인/감사/복구 흐름이 코어 신뢰성의 중심이며, UI 확장보다 먼저 닫혀야 한다.
 
 3. **P2 - 실행 순서/릴리즈 단위**
@@ -32,6 +33,7 @@
 
 1. **Core Freeze Gate**
    - R5 실사용 검증 증적(대용량 root), R8 실도메인 ACME 발급 증적 확보
+   - `real-use-remediation-plan.md`의 5개 축(보안 경계, 위험 작업 승인, 오류/빈 상태, 런처 통합, 검증 게이트) 완료
    - 목표: Web OS 코어를 “완료선”에 올리고, 신규 코어 기능 확장을 중단
 
 2. **App Ecosystem 집중 (R4~R6 확장)**

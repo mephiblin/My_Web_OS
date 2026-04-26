@@ -1,6 +1,6 @@
 <script>
   import { FileText, Download, Maximize, ZoomIn, ZoomOut, RotateCcw, Search, ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { API_BASE } from '../../../../utils/constants.js';
+  import { fetchRawFileTicketUrl } from '../../../../utils/api.js';
   import { fetchDocumentText } from '../services/documentApi.js';
   import { collectMatchOffsets, renderHighlightedText } from '../services/textSearch.js';
 
@@ -19,13 +19,9 @@
   let textContent = $state('');
   let loadingText = $state(false);
   let textError = $state('');
+  let binaryError = $state('');
   let contentContainer = $state(null);
-
-  let rawDocUrl = $derived(
-    docPath
-      ? `${API_BASE}/api/fs/raw?path=${encodeURIComponent(docPath)}&token=${localStorage.getItem('web_os_token')}`
-      : ''
-  );
+  let rawDocUrl = $state('');
 
   let iframeDocUrl = $derived.by(() => {
     if (!rawDocUrl || !isPdf) return rawDocUrl;
@@ -39,14 +35,19 @@
     return `${rawDocUrl}#${fragments.join('&')}`;
   });
 
-  function handleDownload() {
-    if (!rawDocUrl) return;
-    const a = document.createElement('a');
-    a.href = rawDocUrl;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  async function handleDownload() {
+    if (!docPath) return;
+    try {
+      const downloadUrl = await fetchRawFileTicketUrl(docPath, { disposition: 'attachment' });
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (err) {
+      binaryError = err?.message || '다운로드를 준비하지 못했습니다.';
+    }
   }
 
   let matchOffsets = $derived(collectMatchOffsets(textContent, searchQuery.trim()));
@@ -130,6 +131,28 @@
   $effect(() => {
     syncActiveMatchIntoView();
   });
+
+  $effect(() => {
+    const path = docPath;
+    rawDocUrl = '';
+    binaryError = '';
+    if (!path || isTextDoc) return;
+
+    const controller = new AbortController();
+    fetchRawFileTicketUrl(path, { signal: controller.signal })
+      .then((url) => {
+        if (controller.signal.aborted) return;
+        rawDocUrl = url;
+      })
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
+        binaryError = err?.message || '문서를 불러오지 못했습니다.';
+      });
+
+    return () => {
+      controller.abort();
+    };
+  });
 </script>
 
 <div class="document-viewer-app">
@@ -206,7 +229,13 @@
         </pre>
       {/if}
     {:else}
-      <iframe src={iframeDocUrl} title={fileName} frameborder="0" width="100%" height="100%"></iframe>
+      {#if binaryError}
+        <div class="empty-state error"><p>{binaryError}</p></div>
+      {:else if !rawDocUrl}
+        <div class="empty-state"><p>문서를 불러오는 중...</p></div>
+      {:else}
+        <iframe src={iframeDocUrl} title={fileName} frameborder="0" width="100%" height="100%"></iframe>
+      {/if}
     {/if}
   </div>
 </div>

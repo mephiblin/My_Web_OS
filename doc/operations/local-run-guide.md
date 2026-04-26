@@ -22,6 +22,8 @@ node server/index.js
 `server/storage/inventory/system/apps.json`로 1회 이관하는 명령이다.
 legacy가 없으면 built-in seed로 `apps.json`을 생성한다.
 이미 `inventory/system/apps.json`이 있으면 자동으로 skip 된다.
+검증 게이트에서는 `--dry-run --fail-on-removal`로 현재 registry에서
+사라질 앱 id가 있는지 확인한다.
 
 ## Frontend
 - 위치: `client/`

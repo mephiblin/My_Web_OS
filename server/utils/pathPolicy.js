@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs/promises');
 
 function toComparablePath(value) {
   return path.resolve(value).replace(/[\\/]+/g, path.sep).toLowerCase();
@@ -43,9 +44,115 @@ function isSafeLeafName(name) {
   return true;
 }
 
+async function realpathSafe(inputPath) {
+  return fs.realpath(resolveSafePath(inputPath));
+}
+
+async function pathExists(inputPath) {
+  try {
+    await fs.access(inputPath);
+    return true;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+async function resolvePolicyRealPath(targetPath) {
+  const resolvedTarget = resolveSafePath(targetPath);
+  if (await pathExists(resolvedTarget)) {
+    return realpathSafe(resolvedTarget);
+  }
+
+  const missingSegments = [];
+  let currentPath = resolvedTarget;
+
+  while (!(await pathExists(currentPath))) {
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) {
+      const err = new Error('No existing parent path was found.');
+      err.code = 'FS_PATH_NOT_FOUND';
+      throw err;
+    }
+    missingSegments.unshift(path.basename(currentPath));
+    currentPath = parentPath;
+  }
+
+  const realParent = await realpathSafe(currentPath);
+  return path.join(realParent, ...missingSegments);
+}
+
+async function pathHasSymlinkSegment(targetPath, rootPath) {
+  const resolvedTarget = resolveSafePath(targetPath);
+  const resolvedRoot = resolveSafePath(rootPath);
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+
+  if (relative === '') return false;
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+
+  let currentPath = resolvedRoot;
+  const segments = relative.split(path.sep).filter(Boolean);
+
+  for (const segment of segments) {
+    currentPath = path.join(currentPath, segment);
+
+    try {
+      const stat = await fs.lstat(currentPath);
+      if (stat.isSymbolicLink()) return true;
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return false;
+      throw err;
+    }
+  }
+
+  return false;
+}
+
+async function isWithinAllowedRealRoots(targetPath, allowedRoots, options = {}) {
+  if (!Array.isArray(allowedRoots) || allowedRoots.length === 0) return false;
+
+  const allowSymlinks = options.allowSymlinks === true;
+  const resolvedTarget = resolveSafePath(targetPath);
+  const targetRealPath = await resolvePolicyRealPath(resolvedTarget);
+
+  for (const root of allowedRoots) {
+    const resolvedRoot = resolveSafePath(root);
+    let rootRealPath;
+
+    try {
+      rootRealPath = await realpathSafe(resolvedRoot);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      throw err;
+    }
+
+    if (!isWithinAllowedRoots(targetRealPath, [rootRealPath])) continue;
+    if (!allowSymlinks && await pathHasSymlinkSegment(resolvedTarget, resolvedRoot)) continue;
+
+    return true;
+  }
+
+  return false;
+}
+
+async function assertWithinAllowedRealRoots(targetPath, allowedRoots, options = {}) {
+  const isAllowed = await isWithinAllowedRealRoots(targetPath, allowedRoots, options);
+  if (isAllowed) return true;
+
+  const err = new Error('Access to this path is restricted.');
+  err.status = 403;
+  err.code = 'FS_PERMISSION_DENIED';
+  throw err;
+}
+
 module.exports = {
   resolveSafePath,
   isWithinAllowedRoots,
   isProtectedSystemPath,
-  isSafeLeafName
+  isSafeLeafName,
+  realpathSafe,
+  resolvePolicyRealPath,
+  pathHasSymlinkSegment,
+  isWithinAllowedRealRoots,
+  assertWithinAllowedRealRoots
 };

@@ -107,12 +107,14 @@ async function requestMultipart(baseUrl, endpoint, token, fields = {}) {
   };
 }
 
-async function requestJson(baseUrl, endpoint, token) {
+async function requestJson(baseUrl, endpoint, token, options = {}) {
   const response = await fetch(`${baseUrl}${endpoint}`, {
+    method: options.method || 'GET',
     headers: {
       authorization: `Bearer ${token}`,
       'content-type': 'application/json'
-    }
+    },
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined
   });
 
   const text = await response.text();
@@ -129,13 +131,14 @@ async function requestJson(baseUrl, endpoint, token) {
   };
 }
 
-async function requestDelete(baseUrl, endpoint, token) {
+async function requestDelete(baseUrl, endpoint, token, body = undefined) {
   const response = await fetch(`${baseUrl}${endpoint}`, {
     method: 'DELETE',
     headers: {
       authorization: `Bearer ${token}`,
       'content-type': 'application/json'
-    }
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined
   });
 
   const text = await response.text();
@@ -150,6 +153,38 @@ async function requestDelete(baseUrl, endpoint, token) {
     status: response.status,
     json
   };
+}
+
+async function deletePackageWithApproval(baseUrl, appId, token) {
+  const preflightRes = await requestJson(baseUrl, `/api/packages/${appId}/delete/preflight`, token, {
+    method: 'POST',
+    body: {}
+  });
+  assert.equal(preflightRes.status, 200, JSON.stringify(preflightRes.json));
+  const operationId = preflightRes.json?.preflight?.operationId;
+  const targetHash = preflightRes.json?.preflight?.targetHash;
+  assert.ok(operationId, JSON.stringify(preflightRes.json));
+  assert.ok(targetHash, JSON.stringify(preflightRes.json));
+
+  const approveRes = await requestJson(baseUrl, `/api/packages/${appId}/delete/approve`, token, {
+    method: 'POST',
+    body: {
+      operationId,
+      typedConfirmation: appId
+    }
+  });
+  assert.equal(approveRes.status, 200, JSON.stringify(approveRes.json));
+  const nonce = approveRes.json?.approval?.nonce;
+  assert.ok(nonce, JSON.stringify(approveRes.json));
+
+  return requestDelete(baseUrl, `/api/packages/${appId}`, token, {
+    approval: {
+      operationId,
+      nonce,
+      targetHash
+    },
+    reason: 'zip-import-parity-open-with-cleanup'
+  });
 }
 
 async function cleanupAppArtifacts(appId) {
@@ -292,7 +327,7 @@ test('package delete clears stale file association default app settings', async 
       }
     });
 
-    const deleteRes = await requestDelete(server.baseUrl, `/api/packages/${appId}`, token);
+    const deleteRes = await deletePackageWithApproval(server.baseUrl, appId, token);
     assert.equal(deleteRes.status, 200, JSON.stringify(deleteRes.json));
     assert.deepEqual(deleteRes.json?.associationCleanup?.removedExtensions, ['ziptest']);
 

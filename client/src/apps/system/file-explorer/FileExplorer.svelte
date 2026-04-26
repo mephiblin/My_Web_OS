@@ -28,8 +28,10 @@
   const FILE_STATION_GRANT_SOURCE = 'file-station';
   const PREVIEW_GRANT_SOURCE = 'file-station-preview';
 
-  let currentPath = $state('/');
-  let initialPath = $state('/');
+  let { data = {} } = $props();
+
+  let currentPath = $state(getLaunchPath() || '/');
+  let initialPath = $state(getLaunchPath() || '/');
   let items = $state([]);
   let loading = $state(false);
   let selectedItem = $state(null);
@@ -38,6 +40,8 @@
   let allowedRoots = $state([]);
   let activeFileGrants = $state([]);
   let showGrantPanel = $state(false);
+  let launchDataReady = $state(false);
+  let handledLaunchPath = $state('');
   let lockedFolders = $state(JSON.parse(localStorage.getItem('web_os_locked_folders') || '[]'));
 
   // Search & Trash State
@@ -53,6 +57,7 @@
   let cloudUploadPolling = $state(null);
   let cloudUploadStatusAvailable = $state(true);
   let cancelingUploadIds = $state(new Set());
+  let fileActionError = $state(null);
 
   // Preview State
   let previewContent = $state(null);
@@ -94,6 +99,27 @@
 
   function addToast(message, type = 'info', title = 'File Station') {
     notifications.add({ title, message, type });
+  }
+
+  function formatApiError(err, fallbackMessage) {
+    const code = String(err?.code || '').trim();
+    const message = String(err?.message || fallbackMessage || 'Request failed.').trim();
+    return code ? `${message} (${code})` : message;
+  }
+
+  function setFileActionError(err, fallbackMessage, action = 'File operation') {
+    fileActionError = {
+      action,
+      message: formatApiError(err, fallbackMessage)
+    };
+  }
+
+  function normalizeLaunchPath(value) {
+    return String(value || '').trim();
+  }
+
+  function getLaunchPath() {
+    return normalizeLaunchPath(data?.path) || normalizeLaunchPath(data?.initialPath);
   }
 
   async function refreshTransferStatus() {
@@ -295,11 +321,26 @@
 
   async function openFileWithApp(item, appId, action) {
     const mode = action === 'edit' ? 'readwrite' : 'read';
-    const grantResponse = await fsApi.createFileGrant(item.path, mode, appId, FILE_STATION_GRANT_SOURCE).catch(() => null);
-    const grant = grantResponse?.grant || null;
-    if (grant?.id) {
-      loadActiveFileGrants().catch(() => {});
+    let grantResponse;
+    try {
+      grantResponse = await fsApi.createFileGrant(item.path, mode, appId, FILE_STATION_GRANT_SOURCE);
+    } catch (err) {
+      const appMeta = resolveAppMeta(appId);
+      const message = `Could not authorize ${appMeta?.title || appId} to open ${item?.name || 'this file'}.`;
+      setFileActionError(err, message, 'Open with app');
+      notifyApiError(err, 'File Grant Failed');
+      return;
     }
+    const grant = grantResponse?.grant || null;
+    if (!grant?.id) {
+      const err = new Error('File grant response did not include a grant id.');
+      err.code = 'FILE_GRANT_MISSING';
+      setFileActionError(err, 'Could not authorize app access to this file.', 'Open with app');
+      notifyApiError(err, 'File Grant Failed');
+      return;
+    }
+    loadActiveFileGrants().catch(() => {});
+    fileActionError = null;
     const fileContext = buildFileContext(item, grant, mode);
 
     const appMeta = resolveAppMeta(appId);
@@ -689,6 +730,7 @@
 
   async function fetchItems(path) {
     loading = true;
+    fileActionError = null;
     closePreview();
     isSearchView = false;
     isTrashView = false;
@@ -740,6 +782,7 @@
   async function handleSearch() {
     if (!searchQuery.trim()) return;
     loading = true;
+    fileActionError = null;
     isSearchView = true;
     isTrashView = false;
     closePreview();
@@ -805,6 +848,7 @@
 
   async function fetchTrash() {
     loading = true;
+    fileActionError = null;
     closePreview();
     isTrashView = true;
     isSearchView = false;
@@ -1205,6 +1249,14 @@
     if (e.key === 'Enter') fetchItems(currentPath);
   }
 
+  $effect(() => {
+    if (!launchDataReady) return;
+    const launchPath = getLaunchPath();
+    if (!launchPath || launchPath === handledLaunchPath) return;
+    handledLaunchPath = launchPath;
+    fetchItems(launchPath);
+  });
+
   onMount(async () => {
     try {
       const [config, userDirs, remotes, apps, grants] = await Promise.all([
@@ -1215,9 +1267,12 @@
         fsApi.fetchActiveFileGrants('').catch(() => ({ grants: [] }))
       ]);
 
-      if (config.initialPath) {
-        initialPath = config.initialPath;
+      const launchPath = getLaunchPath();
+      const configuredInitialPath = normalizeLaunchPath(config.initialPath);
+      if (launchPath || configuredInitialPath) {
+        initialPath = launchPath || configuredInitialPath;
         currentPath = initialPath;
+        handledLaunchPath = launchPath;
       }
       allowedRoots = Array.isArray(config.allowedRoots) ? config.allowedRoots : [];
 
@@ -1230,6 +1285,7 @@
       notifyApiError(e, 'File Station Load Failed');
     }
     fetchItems(currentPath);
+    launchDataReady = true;
     refreshTransferStatus();
     transferPolling = setInterval(() => refreshTransferStatus(), 3000);
     refreshCloudUploadStatus();
@@ -1413,11 +1469,41 @@
          ondragover={handleDragOver}
          ondragleave={handleDragLeave}
          ondrop={handleDrop}>
+      {#if fileActionError}
+        <div class="file-error-state" role="alert" aria-live="polite">
+          <div>
+            <strong>{fileActionError.action}</strong>
+            <span>{fileActionError.message}</span>
+          </div>
+          <button onclick={() => (fileActionError = null)}>Dismiss</button>
+        </div>
+      {/if}
       {#if loading}
         <div class="loading">Loading...</div>
       {:else}
-        <div class="view-container {viewMode}">
-          {#each filteredItems as item}
+        {#if filteredItems.length === 0}
+          <div class="empty-state">
+            {#if isSearchView}
+              <strong>No matching files</strong>
+              <span>
+                {#if filterQuery.trim()}
+                  No results match "{filterQuery}" within the current search.
+                {:else}
+                  Search returned no files for "{searchQuery}".
+                {/if}
+              </span>
+              <button onclick={() => fetchItems(currentPath)}>Back to Folder</button>
+            {:else if isTrashView}
+              <strong>Trash is empty</strong>
+              <span>Deleted files will appear here before permanent removal.</span>
+            {:else}
+              <strong>This folder is empty</strong>
+              <span>Create a file, create a folder, or drag files here to add content.</span>
+            {/if}
+          </div>
+        {:else}
+          <div class="view-container {viewMode}">
+            {#each filteredItems as item}
             {@const fileProviderHint = getFileProviderHint(item)}
             <div
               class="item {selectedItem?.path === item.path ? 'selected' : ''}"
@@ -1469,8 +1555,9 @@
                 {/if}
               </div>
             </div>
-          {/each}
-        </div>
+            {/each}
+          </div>
+        {/if}
       {/if}
     </div>
 
@@ -1771,6 +1858,65 @@
   }
 
   .content-area { flex: 1; overflow: auto; padding: 20px; }
+  .file-error-state {
+    border: 1px solid rgba(248, 113, 113, 0.34);
+    border-radius: 8px;
+    background: rgba(127, 29, 29, 0.18);
+    color: #fecaca;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .file-error-state div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .file-error-state strong {
+    color: #fff1f2;
+    font-size: 13px;
+  }
+  .file-error-state span {
+    font-size: 12px;
+    line-height: 1.35;
+  }
+  .file-error-state button,
+  .empty-state button {
+    border: 1px solid rgba(148, 163, 184, 0.26);
+    border-radius: 7px;
+    background: rgba(15, 23, 42, 0.54);
+    color: var(--text-main);
+    padding: 6px 9px;
+    cursor: pointer;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .empty-state {
+    min-height: 220px;
+    border: 1px dashed rgba(148, 163, 184, 0.25);
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.22);
+    color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-align: center;
+    padding: 24px;
+  }
+  .empty-state strong {
+    color: var(--text-main);
+    font-size: 14px;
+  }
+  .empty-state span {
+    max-width: 360px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
   .view-container.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 20px; }
   .view-container.list { display: flex; flex-direction: column; gap: 4px; }
   .item { display: flex; border-radius: 8px; cursor: pointer; transition: background 0.2s; border: 1px solid transparent; }

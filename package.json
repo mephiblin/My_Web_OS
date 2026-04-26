@@ -5,6 +5,12 @@
   "scripts": {
     "test": "npm run test:server",
     "test:server": "node --test --test-concurrency=1 server/tests",
+    "verify:syntax": "node tools/verify-syntax.js",
+    "verify:packages": "npm run apps:registry:migrate -- --dry-run --fail-on-removal && npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json",
+    "verify:client": "npm --prefix client run build",
+    "verify:docker-config": "docker compose config",
+    "verify": "npm run verify:syntax && npm test && npm run verify:packages && npm run verify:client",
+    "verify:ci": "npm run verify:syntax && npm test && npm run verify:packages && npm run verify:client",
     "apps:registry:migrate": "node tools/migrate-apps-registry.js",
     "package:doctor": "node tools/package-doctor.js",
     "package:doctor:json": "node tools/package-doctor.js --json",

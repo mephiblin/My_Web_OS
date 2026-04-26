@@ -420,6 +420,6 @@
   - `node --test server/tests/sandbox-sdk-contract.test.js` 통과.
   - `npm test` 통과(62개).
   - `cd client && npm run build` 통과.
-  - `npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json` 통과(`fails=0`, 기존 builtin warning 19개 유지).
+  - `npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json` 통과(`fails=0`; 후속 package doctor 정리에서 builtin warning debt는 `warns=0`으로 해소).
   - backend/frontend HTTP smoke 통과.
   - Terminal socket/PTY 한글 출력 smoke 통과.

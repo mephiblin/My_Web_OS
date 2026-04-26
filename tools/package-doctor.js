@@ -3,22 +3,24 @@
 
 const fs = require('fs');
 const path = require('path');
+const builtinAppsSeed = require('../server/config/builtinAppsSeed');
 const { normalizeRuntimeProfile } = require('../server/services/runtimeProfiles');
 
 const SUPPORTED_RUNTIME_TYPES = new Set(['sandbox-html', 'process-node', 'process-python', 'binary']);
 const SUPPORTED_APP_TYPES = new Set(['app', 'widget', 'service', 'hybrid', 'developer']);
 const SUPPORTED_APP_MODELS = new Set(['system', 'standard', 'package']);
-const BUILTIN_SYSTEM_APP_IDS = new Set([
-  'files',
-  'terminal',
-  'monitor',
-  'docker',
-  'control-panel',
-  'settings',
-  'logs',
-  'package-center',
-  'transfer'
-]);
+function collectBuiltinSystemAppIds(seed = builtinAppsSeed) {
+  return new Set((Array.isArray(seed) ? seed : [])
+    .filter((app) => {
+      const appModel = String(app?.appModel || '').trim().toLowerCase();
+      const type = String(app?.type || app?.appType || app?.kind || '').trim().toLowerCase();
+      return appModel === 'system' || type === 'system' || type === 'core' || type === 'host';
+    })
+    .map((app) => String(app?.id || '').trim())
+    .filter(Boolean));
+}
+
+const BUILTIN_SYSTEM_APP_IDS = collectBuiltinSystemAppIds();
 const KNOWN_PERMISSIONS = new Set([
   'app.data.list',
   'app.data.read',
@@ -596,6 +598,10 @@ function runBuiltinRegistryChecks(registry) {
           String(fileAssociations.length)
         )
       );
+    } else if (appModel === 'system') {
+      checks.push(
+        makeResult('pass', `builtin.${appId}.fileAssociations`, 'System app does not declare file associations.', 'none')
+      );
     } else {
       checks.push(
         makeResult('warn', `builtin.${appId}.fileAssociations`, 'No file associations declared.')
@@ -683,6 +689,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  collectBuiltinSystemAppIds,
   runChecks,
   runBuiltinRegistryChecks
 };

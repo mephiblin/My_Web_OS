@@ -1,4 +1,4 @@
-import { apiFetch } from '../../../utils/api.js';
+import { apiFetch, apiFetchTicketUrl } from '../../../utils/api.js';
 
 function encodeAppId(appId) {
   return encodeURIComponent(String(appId || ''));
@@ -152,10 +152,43 @@ export async function stopRuntimeApp(appId) {
   });
 }
 
-export async function removeInstalledPackage(appId) {
-  return apiFetch(`/api/packages/${encodeAppId(appId)}`, {
-    method: 'DELETE'
+export async function preflightPackageDelete(appId) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/delete/preflight`, {
+    method: 'POST'
   });
+}
+
+export async function approvePackageDelete(appId, approval = {}) {
+  return apiFetch(`/api/packages/${encodeAppId(appId)}/delete/approve`, {
+    method: 'POST',
+    body: JSON.stringify({
+      operationId: String(approval.operationId || ''),
+      typedConfirmation: String(approval.typedConfirmation || '')
+    })
+  });
+}
+
+export async function removeInstalledPackage(appId, options = {}) {
+  const payload = {};
+  if (options.approval && typeof options.approval === 'object') {
+    payload.approval = options.approval;
+  }
+  if (options.reason) {
+    payload.reason = String(options.reason);
+  }
+
+  const requestOptions = {
+    method: 'DELETE'
+  };
+  if (Object.keys(payload).length > 0) {
+    requestOptions.body = JSON.stringify(payload);
+  }
+
+  return apiFetch(`/api/packages/${encodeAppId(appId)}`, requestOptions);
+}
+
+export async function fetchPackageExportTicketUrl(appId) {
+  return apiFetchTicketUrl(`/api/packages/${encodeAppId(appId)}/export-ticket`, {});
 }
 
 export async function cloneInstalledPackage(appId, targetId, title = '') {

@@ -17,17 +17,18 @@ const APP_MODELS = Object.freeze({
   PACKAGE: 'package'
 });
 const OWNERSHIP_CONTRACT_VERSION = '1.0.0';
-const BUILTIN_SYSTEM_APP_IDS = new Set([
-  'files',
-  'terminal',
-  'monitor',
-  'docker',
-  'control-panel',
-  'settings',
-  'logs',
-  'package-center',
-  'transfer'
-]);
+function collectBuiltinSystemAppIds(seed = builtinAppsSeed) {
+  return new Set((Array.isArray(seed) ? seed : [])
+    .filter((app) => {
+      const appModel = String(app?.appModel || '').trim().toLowerCase();
+      const type = String(app?.type || app?.appType || app?.kind || '').trim().toLowerCase();
+      return appModel === APP_MODELS.SYSTEM || type === 'system' || type === 'core' || type === 'host';
+    })
+    .map((app) => String(app?.id || '').trim())
+    .filter(Boolean));
+}
+
+const BUILTIN_SYSTEM_APP_IDS = collectBuiltinSystemAppIds();
 const BUILTIN_DEFAULT_VERSION = '0.0.0';
 const ICON_FILE_EXT_RE = /\.(png|jpe?g|webp|gif|svg|ico)$/i;
 const MEDIA_SCOPE_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/;

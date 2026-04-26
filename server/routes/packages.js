@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const fs = require('fs-extra');
 const path = require('path');
 const multer = require('multer');
@@ -7,6 +8,8 @@ const AdmZip = require('adm-zip');
 const auth = require('../middleware/auth');
 const serverConfig = require('../config/serverConfig');
 const auditService = require('../services/auditService');
+const fileTicketService = require('../services/fileTicketService');
+const operationApprovalService = require('../services/operationApprovalService');
 const packageRegistryService = require('../services/packageRegistryService');
 const packageLifecycleService = require('../services/packageLifecycleService');
 const channelUpdatePolicyService = require('../services/channelUpdatePolicyService');
@@ -21,7 +24,6 @@ const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath } = require
 const { normalizeRuntimeProfile, assertValidRuntimeProfile, toManifestRuntimeFields } = require('../services/runtimeProfiles');
 
 const router = express.Router();
-router.use(auth);
 
 const DEFAULT_ENTRY = 'index.html';
 const DEFAULT_WINDOW = {
@@ -56,6 +58,29 @@ const APP_ID_ROUTE = ':id';
 const ROOT_PACKAGE_JSON_PATH = path.join(__dirname, '../../package.json');
 let cachedServerVersion = '';
 let cachedAdminUsername = '';
+
+router.get(`/${APP_ID_ROUTE}/export`, async (req, res, next) => {
+  const ticket = String(req.query?.ticket || '').trim();
+  if (!ticket) return next();
+
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const record = fileTicketService.getTicket(ticket, {
+      scope: 'package.export',
+      appId
+    });
+    return sendPackageExport(appId, record.user, res);
+  } catch (err) {
+    const status = err.status || (err.code === 'APP_ID_INVALID' ? 400 : 403);
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_EXPORT_TICKET_INVALID',
+      message: err.message || 'Package export ticket is invalid or expired.'
+    });
+  }
+});
+
+router.use(auth);
 
 function toPosixPath(value = '') {
   return String(value).split(path.sep).join('/');
@@ -155,6 +180,161 @@ async function readManifestRaw(appId) {
   return manifest && typeof manifest === 'object' ? manifest : null;
 }
 
+async function computePackageDeleteTargetHash(appId, manifest = null) {
+  const appRoot = await appPaths.getAppRoot(appId);
+  const appDataRoot = await appPaths.getAppDataRoot(appId);
+  const hash = crypto.createHash('sha256');
+  hash.update('package-delete-target-v2\0');
+  hash.update(JSON.stringify({ appId, manifestId: manifest?.id || null }));
+  hash.update('\0');
+
+  async function addPathSnapshot(rootPath, label, relativePath = '') {
+    const targetPath = path.join(rootPath, relativePath);
+    const stat = await fs.lstat(targetPath).catch(() => null);
+    const normalizedRelativePath = toPosixPath(relativePath || '.');
+    if (!stat) {
+      hash.update(JSON.stringify({ label, path: normalizedRelativePath, missing: true }));
+      hash.update('\0');
+      return;
+    }
+
+    if (stat.isSymbolicLink()) {
+      const linkTarget = await fs.readlink(targetPath).catch(() => '');
+      hash.update(JSON.stringify({ label, path: normalizedRelativePath, type: 'symlink', linkTarget }));
+      hash.update('\0');
+      return;
+    }
+
+    if (stat.isDirectory()) {
+      hash.update(JSON.stringify({ label, path: normalizedRelativePath, type: 'directory' }));
+      hash.update('\0');
+      const entries = await fs.readdir(targetPath, { withFileTypes: true });
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const entry of entries) {
+        await addPathSnapshot(rootPath, label, path.join(relativePath, entry.name));
+      }
+      return;
+    }
+
+    if (stat.isFile()) {
+      hash.update(JSON.stringify({
+        label,
+        path: normalizedRelativePath,
+        type: 'file',
+        size: stat.size,
+        mode: stat.mode
+      }));
+      hash.update('\0');
+      await new Promise((resolve, reject) => {
+        const stream = fs.createReadStream(targetPath);
+        stream.on('data', (chunk) => hash.update(chunk));
+        stream.on('error', reject);
+        stream.on('end', resolve);
+      });
+      hash.update('\0');
+      return;
+    }
+
+    hash.update(JSON.stringify({ label, path: normalizedRelativePath, type: 'other', mode: stat.mode }));
+    hash.update('\0');
+  }
+
+  await addPathSnapshot(appRoot, 'appRoot');
+  await addPathSnapshot(appDataRoot, 'appDataRoot');
+  return `sha256:${hash.digest('hex')}`;
+}
+
+function getPackageDeleteLabel(appId, manifest = null, installed = null) {
+  return String(
+    installed?.title ||
+    installed?.name ||
+    manifest?.title ||
+    manifest?.name ||
+    appId
+  ).trim() || appId;
+}
+
+async function buildPackageDeletePreflight(appId, options = {}) {
+  const safeAppId = appPaths.assertSafeAppId(appId);
+  const appRoot = await appPaths.getAppRoot(safeAppId);
+  if (!(await fs.pathExists(appRoot))) {
+    const err = new Error('Package not found.');
+    err.code = 'PACKAGE_NOT_FOUND';
+    throw err;
+  }
+
+  const manifest = await readManifestRaw(safeAppId);
+  const installed = await packageRegistryService.getSandboxApp(safeAppId).catch(() => null);
+  const lifecycle = await packageLifecycleService.getLifecycle(safeAppId, manifest).catch(() => null);
+  const backups = Array.isArray(lifecycle?.backups) ? lifecycle.backups : [];
+  const latestBackup = backups.length > 0 ? backups[backups.length - 1] : null;
+  const recoverability = {
+    backupAvailable: Boolean(latestBackup),
+    latestBackupId: latestBackup?.id || null,
+    rollbackSupported: Boolean(latestBackup)
+  };
+  const target = {
+    type: 'package',
+    id: safeAppId,
+    label: getPackageDeleteLabel(safeAppId, manifest, installed)
+  };
+  const targetHash = await computePackageDeleteTargetHash(safeAppId, manifest);
+  const operation = operationApprovalService.createOperation({
+    action: 'package.delete',
+    userId: options.userId,
+    target,
+    targetHash,
+    typedConfirmation: safeAppId,
+    metadata: {
+      recoverability
+    }
+  });
+
+  return {
+    operationId: operation.operationId,
+    action: 'package.delete',
+    target,
+    riskLevel: 'high',
+    impact: [
+      'Package files will be removed.',
+      'Package app data will be removed.',
+      'Open With defaults for this package will be cleared.'
+    ],
+    recoverability,
+    approval: {
+      required: true,
+      typedConfirmation: safeAppId,
+      expiresAt: operation.expiresAt
+    },
+    targetHash
+  };
+}
+
+function buildPackageDeleteApprovalAudit(input = {}) {
+  return {
+    operationId: input.operationId,
+    target: input.target,
+    riskLevel: 'high',
+    approval: {
+      operationId: input.operationId,
+      user: input.user,
+      nonceConsumed: true,
+      approvedAt: input.approvedAt || null,
+      consumedAt: input.consumedAt || null,
+      expiresAt: input.expiresAt || null,
+      targetHash: input.targetHash || ''
+    },
+    recoverability: input.recoverability || {
+      backupAvailable: false,
+      latestBackupId: null,
+      rollbackSupported: false
+    },
+    result: input.result,
+    reason: input.reason || '',
+    user: input.user
+  };
+}
+
 async function resolvePackagePath(appId, relativePath = '') {
   const appRoot = await appPaths.getAppRoot(appId);
   const safeRelativePath = normalizeRelativePath(relativePath);
@@ -174,6 +354,42 @@ async function addDirectoryToZip(zip, rootPath, relativePath = '') {
     if (!entry.isFile()) continue;
     zip.addLocalFile(path.join(rootPath, childRelativePath), path.dirname(toPosixPath(childRelativePath)));
   }
+}
+
+async function sendPackageExport(appId, username, res) {
+  const appRoot = await appPaths.getAppRoot(appId);
+  if (!(await fs.pathExists(appRoot))) {
+    return res.status(404).json({
+      error: true,
+      code: 'PACKAGE_NOT_FOUND',
+      message: 'Package not found.'
+    });
+  }
+
+  const manifest = await readManifestRaw(appId);
+  if (!manifest) {
+    return res.status(404).json({
+      error: true,
+      code: 'PACKAGE_MANIFEST_NOT_FOUND',
+      message: 'manifest.json not found.'
+    });
+  }
+
+  const zip = new AdmZip();
+  await addDirectoryToZip(zip, appRoot);
+  const output = zip.toBuffer();
+  const fileName = `${appId}-${String(manifest.version || '0.0.0').replace(/[^a-zA-Z0-9._-]/g, '_')}.webospkg.zip`;
+
+  await auditService.log(
+    'PACKAGES',
+    `Export Package: ${appId}`,
+    { appId, user: username },
+    'INFO'
+  );
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  return res.send(output);
 }
 
 function getManifestEntryFromZip(zip) {
@@ -4208,7 +4424,93 @@ router.post(`/${APP_ID_ROUTE}/clone`, async (req, res) => {
   }
 });
 
+router.post(`/${APP_ID_ROUTE}/delete/preflight`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const preflight = await buildPackageDeletePreflight(appId, {
+      userId: req.user?.username
+    });
+
+    return res.json({
+      success: true,
+      preflight
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID'
+        ? 400
+        : err.code === 'PACKAGE_NOT_FOUND'
+          ? 404
+          : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_DELETE_PREFLIGHT_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.post(`/${APP_ID_ROUTE}/delete/approve`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const operationId = String(body.operationId || '').trim();
+    if (!operationId) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_DELETE_OPERATION_ID_REQUIRED',
+        message: 'Body "operationId" is required.'
+      });
+    }
+
+    const approval = operationApprovalService.approveOperation({
+      operationId,
+      userId: req.user?.username,
+      action: 'package.delete',
+      targetId: appId,
+      typedConfirmation: body.typedConfirmation
+    });
+
+    return res.json({
+      success: true,
+      approval
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_ID_INVALID'
+        ? 400
+        : err.code === 'OPERATION_APPROVAL_NOT_FOUND' ||
+            err.code === 'OPERATION_APPROVAL_EXPIRED' ||
+            err.code === 'OPERATION_APPROVAL_USER_MISMATCH' ||
+            err.code === 'OPERATION_APPROVAL_ACTION_MISMATCH' ||
+            err.code === 'OPERATION_APPROVAL_TARGET_MISMATCH' ||
+            err.code === 'OPERATION_APPROVAL_CONFIRMATION_MISMATCH'
+          ? 400
+          : err.code === 'OPERATION_APPROVAL_ALREADY_APPROVED' ||
+              err.code === 'OPERATION_APPROVAL_ALREADY_CONSUMED'
+            ? 409
+          : 500;
+    return res.status(status).json({
+      error: true,
+      code:
+        err.code === 'APP_ID_INVALID'
+          ? err.code
+          : err.code === 'OPERATION_APPROVAL_ALREADY_APPROVED'
+            ? 'PACKAGE_DELETE_APPROVAL_ALREADY_APPROVED'
+            : err.code === 'OPERATION_APPROVAL_ALREADY_CONSUMED'
+              ? 'PACKAGE_DELETE_APPROVAL_ALREADY_CONSUMED'
+              : 'PACKAGE_DELETE_APPROVAL_INVALID',
+      message: err.message
+    });
+  }
+});
+
 router.delete(`/${APP_ID_ROUTE}`, async (req, res) => {
+  let approvalContext = null;
+  let auditTarget = null;
+  let auditRecoverability = null;
+  let auditReason = '';
+  let auditUser = req.user?.username;
   try {
     const appId = appPaths.assertSafeAppId(req.params.id);
     const appRoot = await appPaths.getAppRoot(appId);
@@ -4221,6 +4523,63 @@ router.delete(`/${APP_ID_ROUTE}`, async (req, res) => {
       });
     }
 
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const approval = body.approval && typeof body.approval === 'object' && !Array.isArray(body.approval)
+      ? body.approval
+      : null;
+    auditReason = String(body.reason || '').trim();
+
+    if (!approval || !String(approval.operationId || '').trim() || !String(approval.nonce || '').trim()) {
+      const preflight = await buildPackageDeletePreflight(appId, {
+        userId: req.user?.username
+      });
+      return res.status(428).json({
+        error: true,
+        code: 'PACKAGE_DELETE_APPROVAL_REQUIRED',
+        message: 'Package delete requires a scoped approval nonce.',
+        preflight
+      });
+    }
+
+    const currentManifest = await readManifestRaw(appId);
+    const currentTargetHash = await computePackageDeleteTargetHash(appId, currentManifest);
+    const requestedTargetHash = String(approval.targetHash || '').trim();
+    if (requestedTargetHash && requestedTargetHash !== currentTargetHash) {
+      const preflight = await buildPackageDeletePreflight(appId, {
+        userId: req.user?.username
+      });
+      return res.status(428).json({
+        error: true,
+        code: 'PACKAGE_DELETE_APPROVAL_INVALID',
+        message: 'Package delete approval target hash does not match the current package state.',
+        preflight
+      });
+    }
+
+    try {
+      approvalContext = operationApprovalService.consumeApproval({
+        operationId: approval.operationId,
+        nonce: approval.nonce,
+        userId: req.user?.username,
+        action: 'package.delete',
+        targetId: appId,
+        targetHash: currentTargetHash
+      });
+    } catch (approvalErr) {
+      const preflight = await buildPackageDeletePreflight(appId, {
+        userId: req.user?.username
+      });
+      return res.status(428).json({
+        error: true,
+        code: 'PACKAGE_DELETE_APPROVAL_INVALID',
+        message: approvalErr.message,
+        preflight
+      });
+    }
+
+    auditTarget = approvalContext.target;
+    auditRecoverability = approvalContext.metadata?.recoverability || null;
+
     await runtimeManager?.stopApp?.(appId).catch(() => {});
     await fs.remove(appRoot);
     await fs.remove(await appPaths.getAppDataRoot(appId)).catch(() => {});
@@ -4231,13 +4590,23 @@ router.delete(`/${APP_ID_ROUTE}`, async (req, res) => {
     }));
     await auditService.log(
       'PACKAGES',
-      `Delete Package: ${appId}`,
-      {
-        appId,
-        user: req.user?.username,
-        openWithDefaultsRemoved: associationCleanup.removedExtensions || [],
-        openWithCleanupError: associationCleanup.error || ''
-      },
+      'package.delete',
+      buildPackageDeleteApprovalAudit({
+        operationId: approvalContext.operationId,
+        target: auditTarget,
+        targetHash: approvalContext.targetHash,
+        recoverability: auditRecoverability,
+        approvedAt: approvalContext.approvedAt,
+        consumedAt: approvalContext.consumedAt,
+        expiresAt: approvalContext.expiresAt,
+        reason: auditReason,
+        user: auditUser,
+        result: {
+          status: 'success',
+          openWithDefaultsRemoved: associationCleanup.removedExtensions || [],
+          openWithCleanupError: associationCleanup.error || ''
+        }
+      }),
       'WARN'
     );
     return res.json({
@@ -4245,6 +4614,29 @@ router.delete(`/${APP_ID_ROUTE}`, async (req, res) => {
       associationCleanup
     });
   } catch (err) {
+    if (approvalContext) {
+      await auditService.log(
+        'PACKAGES',
+        'package.delete',
+        buildPackageDeleteApprovalAudit({
+          operationId: approvalContext.operationId,
+          target: auditTarget || approvalContext.target,
+          targetHash: approvalContext.targetHash,
+          recoverability: auditRecoverability || approvalContext.metadata?.recoverability,
+          approvedAt: approvalContext.approvedAt,
+          consumedAt: approvalContext.consumedAt,
+          expiresAt: approvalContext.expiresAt,
+          reason: auditReason,
+          user: auditUser,
+          result: {
+            status: 'failure',
+            code: err.code || 'PACKAGE_DELETE_FAILED',
+            message: err.message
+          }
+        }),
+        'ERROR'
+      ).catch(() => {});
+    }
     const status = err.code === 'APP_ID_INVALID' ? 400 : 500;
     return res.status(status).json({
       error: true,
@@ -4254,7 +4646,7 @@ router.delete(`/${APP_ID_ROUTE}`, async (req, res) => {
   }
 });
 
-router.get(`/${APP_ID_ROUTE}/export`, async (req, res) => {
+router.post(`/${APP_ID_ROUTE}/export-ticket`, async (req, res) => {
   try {
     const appId = appPaths.assertSafeAppId(req.params.id);
     const appRoot = await appPaths.getAppRoot(appId);
@@ -4275,21 +4667,48 @@ router.get(`/${APP_ID_ROUTE}/export`, async (req, res) => {
       });
     }
 
-    const zip = new AdmZip();
-    await addDirectoryToZip(zip, appRoot);
-    const output = zip.toBuffer();
-    const fileName = `${appId}-${String(manifest.version || '0.0.0').replace(/[^a-zA-Z0-9._-]/g, '_')}.webospkg.zip`;
+    const ticket = fileTicketService.createTicket({
+      scope: 'package.export',
+      user: req.user?.username,
+      appId,
+      path: appRoot
+    });
 
     await auditService.log(
       'PACKAGES',
-      `Export Package: ${appId}`,
-      { appId, user: req.user?.username },
+      `Issue Package Export Ticket: ${appId}`,
+      {
+        appId,
+        scope: ticket.scope,
+        expiresAt: new Date(ticket.expiresAt).toISOString(),
+        user: req.user?.username
+      },
       'INFO'
     );
 
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    return res.send(output);
+    return res.status(201).json({
+      success: true,
+      ticket: ticket.ticket,
+      url: `/api/packages/${encodeURIComponent(appId)}/export?ticket=${encodeURIComponent(ticket.ticket)}`,
+      scope: ticket.scope,
+      appId,
+      expiresAt: new Date(ticket.expiresAt).toISOString(),
+      ttlMs: ticket.expiresAt - ticket.createdAt
+    });
+  } catch (err) {
+    const status = err.code === 'APP_ID_INVALID' ? 400 : 500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || 'PACKAGE_EXPORT_TICKET_CREATE_FAILED',
+      message: err.message
+    });
+  }
+});
+
+router.get(`/${APP_ID_ROUTE}/export`, async (req, res) => {
+  try {
+    const appId = appPaths.assertSafeAppId(req.params.id);
+    return sendPackageExport(appId, req.user?.username, res);
   } catch (err) {
     const status = err.code === 'APP_ID_INVALID' ? 400 : 500;
     return res.status(status).json({

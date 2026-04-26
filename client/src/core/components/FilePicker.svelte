@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { Folder, File, ChevronRight, X, Search, Grid, List, HardDrive, Image as ImageIcon, Video, Home, ArrowLeft } from 'lucide-svelte';
-  import { apiFetch } from '../../utils/api.js';
+  import { apiFetch, fetchRawFileTicketUrl } from '../../utils/api.js';
 
   let { onSelect, onCancel, filter = [] } = $props();
 
@@ -12,6 +12,7 @@
   let isLoading = $state(false);
   let selectedItem = $state(null);
   let loadError = $state('');
+  let thumbnailUrls = $state({});
 
   function withTimeout(promise, timeoutMs = 10000, message = 'Request timed out.') {
     let timer;
@@ -133,6 +134,36 @@
     items.filter(i => isAllowed(i) && i.name.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
+  function isPreviewImage(item) {
+    return !item.isDirectory && ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(item.name.split('.').pop().toLowerCase());
+  }
+
+  $effect(() => {
+    const previewItems = filteredItems.filter(isPreviewImage);
+    thumbnailUrls = {};
+    if (!previewItems.length) return;
+
+    const controller = new AbortController();
+    const nextThumbnailUrls = {};
+    for (const item of previewItems) {
+      fetchRawFileTicketUrl(item.path, { signal: controller.signal })
+        .then((url) => {
+          if (controller.signal.aborted) return;
+          nextThumbnailUrls[item.path] = url;
+          thumbnailUrls = { ...nextThumbnailUrls };
+        })
+        .catch((err) => {
+          if (err?.name !== 'AbortError') {
+            console.error('Failed to load thumbnail', err);
+          }
+        });
+    }
+
+    return () => {
+      controller.abort();
+    };
+  });
+
   const getIcon = (item) => {
     if (item.isDirectory) return Folder;
     const ext = item.name.split('.').pop().toLowerCase();
@@ -221,8 +252,8 @@
                 ondblclick={() => !item.isDirectory && onSelect(item.path)}
               >
                 <div class="icon-preview {item.isDirectory ? 'dir' : ''}">
-                  {#if !item.isDirectory && ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(item.name.split('.').pop().toLowerCase())}
-                    <img src="/api/fs/raw?path={encodeURIComponent(item.path)}" alt={item.name} loading="lazy" />
+                  {#if isPreviewImage(item) && thumbnailUrls[item.path]}
+                    <img src={thumbnailUrls[item.path]} alt={item.name} loading="lazy" />
                   {:else}
                     {@const ItemIcon = getIcon(item)}
                     <ItemIcon size={item.isDirectory ? 32 : 24} />

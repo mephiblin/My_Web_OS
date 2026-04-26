@@ -19,6 +19,7 @@ const shareService = require('./services/shareService');
 const auditService = require('./services/auditService');
 const runtimeManager = require('./services/runtimeManager');
 const mediaLibraryPaths = require('./utils/mediaLibraryPaths');
+const { redactUrl } = require('./utils/urlRedaction');
 
 const fsRouter = require('./routes/fs');
 const sysRouter = require('./routes/system');
@@ -82,7 +83,7 @@ async function bootstrap() {
     const start = Date.now();
     res.on('finish', () => {
       const duration = Date.now() - start;
-      console.log(`[REQ] ${req.method} ${req.url} - ${res.statusCode} (${duration}ms)`);
+      console.log(`[REQ] ${req.method} ${redactUrl(req.originalUrl || req.url)} - ${res.statusCode} (${duration}ms)`);
     });
     next();
   });
@@ -114,8 +115,14 @@ async function bootstrap() {
   app.set('serviceManager', serviceManager);
   app.set('runtimeManager', runtimeManager);
 
-  // Static files for Inventory
-  app.use('/api/inventory-files', express.static(config.paths.inventoryRoot));
+  app.use('/api/inventory-files', (_req, res) => {
+    res.status(410).json({
+      error: true,
+      code: 'INVENTORY_STATIC_DISABLED',
+      message: 'Direct inventory file serving is disabled. Use package, sandbox, or system APIs.',
+      details: null
+    });
+  });
   await mediaLibraryPaths.ensureMediaLibraryStructure();
   const mediaLibraryRoot = await mediaLibraryPaths.getMediaLibraryRoot();
   app.use('/api/media-library-files', express.static(mediaLibraryRoot));

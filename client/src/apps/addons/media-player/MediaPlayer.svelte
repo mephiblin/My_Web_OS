@@ -14,6 +14,7 @@
   } from 'lucide-svelte';
   import { addToast } from '../../../core/stores/toastStore.js';
   import { activeWindowId, windows, updateWindowTitle } from '../../../core/stores/windowStore.js';
+  import { fetchRawFileTicketUrl } from '../../../utils/api.js';
   import {
     fetchMediaInfo,
     fetchMediaSubtitles,
@@ -42,6 +43,7 @@
   let metadata = $state(null);
   let loadingMeta = $state(false);
   let subtitleUrl = $state(null);
+  let subtitlePath = $state('');
   let neighbors = $state({ prev: null, next: null });
   let zoomed = $state(false);
   let lastFetchedPath = $state('');
@@ -52,6 +54,8 @@
   let repeatMode = $state('off');
   let backgroundAudioEnabled = $state(true);
   let pendingAutoplay = $state(false);
+  let mediaUrl = $state('');
+  let mediaUrlError = $state('');
 
   const currentWindow = $derived(
     $windows.find((win) => win.appId === 'player' && win.data === data) || null
@@ -89,9 +93,6 @@
       playing = false;
     }
   });
-
-  // Use relative URLs (proxied via Vite) with token auth
-  let mediaUrl = $derived(mediaPath ? `/api/fs/raw?path=${encodeURIComponent(mediaPath)}&token=${localStorage.getItem('web_os_token')}` : '');
 
   function parsePlaylistPayload(payload) {
     const source = Array.isArray(payload)
@@ -142,9 +143,9 @@
       
       metadata = info;
       if (subs && subs.path) {
-        subtitleUrl = `/api/fs/raw?path=${encodeURIComponent(subs.path)}&token=${localStorage.getItem('web_os_token')}`;
+        subtitlePath = subs.path;
       } else {
-        subtitleUrl = null;
+        subtitlePath = '';
       }
       neighbors = neighborData;
       if (isVideo || isAudio) {
@@ -338,11 +339,57 @@
       }
     }
   });
+
+  $effect(() => {
+    const path = mediaPath;
+    mediaUrl = '';
+    mediaUrlError = '';
+    if (!path) return;
+
+    const controller = new AbortController();
+    fetchRawFileTicketUrl(path, { signal: controller.signal })
+      .then((url) => {
+        if (controller.signal.aborted) return;
+        mediaUrl = url;
+      })
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
+        mediaUrlError = err?.message || 'Failed to load media.';
+      });
+
+    return () => {
+      controller.abort();
+    };
+  });
+
+  $effect(() => {
+    const path = subtitlePath;
+    subtitleUrl = null;
+    if (!path) return;
+
+    const controller = new AbortController();
+    fetchRawFileTicketUrl(path, { signal: controller.signal })
+      .then((url) => {
+        if (controller.signal.aborted) return;
+        subtitleUrl = url;
+      })
+      .catch((err) => {
+        if (err?.name === 'AbortError') return;
+        console.error('Failed to load subtitles', err);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  });
 </script>
 
 <div class="media-player-app" role="button" aria-label="Media player" oncontextmenu={(e) => e.preventDefault()} tabindex="-1">
   <div class="player-container glass-effect">
     {#if isVideo}
+      {#if mediaUrlError}
+        <div class="error-state"><p>{mediaUrlError}</p></div>
+      {/if}
       <!-- svelte-ignore a11y_media_has_caption -->
       <video 
         bind:this={videoEl}
@@ -360,6 +407,9 @@
         {/if}
       </video>
     {:else if isAudio}
+      {#if mediaUrlError}
+        <div class="error-state"><p>{mediaUrlError}</p></div>
+      {/if}
       <div class="audio-visual">
         <span class="music-icon"><Music size={120} /></span>
         <audio 
@@ -373,6 +423,9 @@
         ></audio>
       </div>
     {:else if isImage}
+      {#if mediaUrlError}
+        <div class="error-state"><p>{mediaUrlError}</p></div>
+      {/if}
       <div
         class="image-viewer"
         role="button"

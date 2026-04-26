@@ -49,7 +49,7 @@
   import { windowDefaultsSettings } from './stores/windowDefaultsStore.js';
   import { widgetLibrary } from './stores/widgetLibraryStore.js';
   import { systemSettings } from './stores/systemStore.js';
-  import { apiFetch } from '../utils/api.js';
+  import { appRegistryState, loadAppRegistry } from './stores/appRegistryStore.js';
   import { buildShortcutLaunch } from './shortcutLaunch.js';
   import { installWebOSBridge } from '../utils/webosBridge.js';
   import { loadBuiltinComponent, resolveWindowLaunch } from './appLaunchRegistry.js';
@@ -156,8 +156,10 @@
     };
   }
 
-  let rawApps = $state([]);
-  const apps = $derived.by(() => rawApps.map((app) => normalizeDesktopApp(app, $i18n)));
+  const apps = $derived.by(() => {
+    const registryApps = Array.isArray($appRegistryState.apps) ? $appRegistryState.apps : [];
+    return registryApps.map((app) => normalizeDesktopApp(app, $i18n));
+  });
   const appById = $derived.by(() => new Map(apps.map((app) => [String(app.id), app])));
   let startButtonEl = $state(null);
   let loadedBuiltinComponents = $state({});
@@ -166,15 +168,9 @@
   let appGridEl = $state(null);
   const DEFAULT_DESKTOP_ROWS = 8;
 
-  async function loadApps() {
+  async function retryLoadAppRegistry() {
     try {
-      const data = await apiFetch('/api/system/apps');
-      if (!Array.isArray(data)) {
-        console.error('Invalid apps data received:', data);
-        return;
-      }
-
-      rawApps = data;
+      await loadAppRegistry({ force: true });
     } catch (err) {
       console.error('Failed to load apps:', err);
     }
@@ -205,7 +201,7 @@
     ]);
 
     updateTime();
-    loadApps();
+    loadAppRegistry().catch((err) => console.error('Failed to load apps:', err));
     const disposeWebOSBridge = installWebOSBridge({ openAppById });
     const timer = setInterval(updateTime, 1000);
     return () => {
@@ -440,12 +436,14 @@
 
     let target = apps.find((item) => item.id === normalizedId);
     if (!target) {
-      await loadApps();
-      target = apps.find((item) => item.id === normalizedId);
+      const refreshedApps = await loadAppRegistry({ force: true });
+      target = refreshedApps
+        .map((item) => normalizeDesktopApp(item, $i18n))
+        .find((item) => item.id === normalizedId);
     }
     if (!target) {
       const err = new Error(`App "${normalizedId}" not found.`);
-      err.code = 'WEBOS_BRIDGE_APP_NOT_FOUND';
+      err.code = $appRegistryState.error?.code || 'WEBOS_BRIDGE_APP_NOT_FOUND';
       throw err;
     }
 
@@ -526,6 +524,18 @@
       }
     }}
   >
+    {#if $appRegistryState.error}
+      <div class="desktop-error-panel glass-effect" role="alert" aria-live="polite">
+        <div>
+          <strong>{translateWith($i18n, 'desktop.appRegistryLoadFailed', {}, 'App registry unavailable')}</strong>
+          <span>{$appRegistryState.error.message}</span>
+        </div>
+        <button onclick={retryLoadAppRegistry} disabled={$appRegistryState.loading}>
+          {$appRegistryState.loading ? translateWith($i18n, 'desktop.retrying', {}, 'Retrying...') : translateWith($i18n, 'desktop.retry', {}, 'Retry')}
+        </button>
+      </div>
+    {/if}
+
     {#each visibleShortcuts as shortcut, shortcutIndex (shortcut.id)}
       <button
         class="app-icon shortcut"
@@ -616,7 +626,7 @@
     ></div>
   {/if}
 
-  <Spotlight />
+  <Spotlight apps={apps} onOpenAppById={openAppById} />
   <StartMenu
     apps={apps}
     onOpenApp={handleOpenStartMenuApp}
@@ -655,6 +665,50 @@
     width: calc(100% - 36px);
     height: calc(100% - 100px);
     pointer-events: auto;
+  }
+  .desktop-error-panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: min(420px, calc(100vw - 36px));
+    border: 1px solid rgba(248, 113, 113, 0.34);
+    border-radius: 10px;
+    background: rgba(69, 10, 10, 0.78);
+    color: #fecaca;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    z-index: 12;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+  }
+  .desktop-error-panel div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .desktop-error-panel strong {
+    color: #fff1f2;
+    font-size: 13px;
+  }
+  .desktop-error-panel span {
+    font-size: 12px;
+    line-height: 1.35;
+  }
+  .desktop-error-panel button {
+    border: 1px solid rgba(254, 202, 202, 0.45);
+    border-radius: 8px;
+    background: rgba(127, 29, 29, 0.35);
+    color: #fff1f2;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .desktop-error-panel button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
   .app-grid.layout-edit-mode .app-icon {
     animation: icon-jiggle 0.72s ease-in-out infinite;

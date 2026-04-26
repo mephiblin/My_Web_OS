@@ -9,11 +9,14 @@ const auditService = require('../services/auditService');
 const indexService = require('../services/indexService');
 const trashService = require('../services/trashService');
 const fileGrantService = require('../services/fileGrantService');
+const fileTicketService = require('../services/fileTicketService');
 const serverConfig = require('../config/serverConfig');
-const { resolveSafePath, isWithinAllowedRoots, isSafeLeafName } = require('../utils/pathPolicy');
-
-// Auth required for ALL fs routes
-router.use(auth);
+const {
+  resolveSafePath,
+  isWithinAllowedRoots,
+  isSafeLeafName,
+  assertWithinAllowedRealRoots
+} = require('../utils/pathPolicy');
 
 function createFsHttpError(status, code, message, details = null) {
   const err = new Error(message);
@@ -100,6 +103,50 @@ function mapFileGrantHttpError(err) {
   }
   return err;
 }
+
+function sendRawFile(targetPath, res) {
+  console.log(`[FS] Sending raw file: ${targetPath}`);
+  return res.sendFile(targetPath, (err) => {
+    if (err) {
+      console.error(`[FS] Error sending file: ${err.message}`);
+      if (!res.headersSent) {
+        sendFsError(res, err, 'FS_RAW_STREAM_FAILED', 'Failed to stream file.');
+      }
+    }
+  });
+}
+
+async function assertRawFileTarget(targetPath) {
+  const stats = await fs.stat(targetPath);
+
+  if (stats.isDirectory()) {
+    throw createFsHttpError(400, 'FS_NOT_FILE', 'Cannot stream a directory.');
+  }
+
+  return stats;
+}
+
+/**
+ * GET /api/fs/raw?ticket=...
+ * Redeem a short-lived raw file ticket without requiring Authorization.
+ */
+router.get('/raw', async (req, res, next) => {
+  const ticket = String(req.query?.ticket || '').trim();
+  if (!ticket) return next();
+
+  try {
+    const record = fileTicketService.getTicket(ticket, { scope: 'fs.raw' });
+    const { allowedRoots } = await serverConfig.getPaths();
+    await assertWithinAllowedRealRoots(record.path, allowedRoots);
+    await assertRawFileTarget(record.path);
+    return sendRawFile(record.path, res);
+  } catch (err) {
+    return sendFsError(res, err, 'FS_RAW_TICKET_FAILED', 'Failed to redeem raw file ticket.');
+  }
+});
+
+// Auth required for all non-ticket fs routes.
+router.use(auth);
 
 
 /**
@@ -306,6 +353,49 @@ router.delete('/grants/:grantId', async (req, res) => {
  */
 router.use(pathGuard);
 
+router.post('/raw-ticket', async (req, res) => {
+  try {
+    const targetPath = requireSafePath(req);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const appId = String(body.appId || '').trim();
+
+    await assertRawFileTarget(targetPath);
+
+    const ticket = fileTicketService.createTicket({
+      scope: 'fs.raw',
+      user: req.user?.username,
+      appId,
+      path: targetPath
+    });
+
+    await auditService.log(
+      'FILE_TRANSFER',
+      'Issue Raw File Ticket',
+      {
+        path: targetPath,
+        appId,
+        scope: ticket.scope,
+        expiresAt: new Date(ticket.expiresAt).toISOString(),
+        user: req.user?.username
+      },
+      'INFO'
+    );
+
+    return res.status(201).json({
+      success: true,
+      ticket: ticket.ticket,
+      url: `/api/fs/raw?ticket=${encodeURIComponent(ticket.ticket)}`,
+      scope: ticket.scope,
+      path: targetPath,
+      appId,
+      expiresAt: new Date(ticket.expiresAt).toISOString(),
+      ttlMs: ticket.expiresAt - ticket.createdAt
+    });
+  } catch (err) {
+    sendFsError(res, err, 'FS_RAW_TICKET_CREATE_FAILED', 'Failed to create raw file ticket.');
+  }
+});
+
 router.post('/grant', async (req, res) => {
   try {
     const targetPath = requireSafePath(req);
@@ -510,21 +600,8 @@ router.get('/read', async (req, res) => {
 router.get('/raw', async (req, res) => {
   try {
     const targetPath = requireSafePath(req);
-    const stats = await fs.stat(targetPath);
-
-    if (stats.isDirectory()) {
-      throw createFsHttpError(400, 'FS_NOT_FILE', 'Cannot stream a directory.');
-    }
-
-    console.log(`[FS] Sending raw file: ${targetPath}`);
-    res.sendFile(targetPath, (err) => {
-      if (err) {
-        console.error(`[FS] Error sending file: ${err.message}`);
-        if (!res.headersSent) {
-          sendFsError(res, err, 'FS_RAW_STREAM_FAILED', 'Failed to stream file.');
-        }
-      }
-    });
+    await assertRawFileTarget(targetPath);
+    return sendRawFile(targetPath, res);
   } catch (err) {
     console.error(`[FS] Error in /raw: ${err.message}`);
     sendFsError(res, err, 'FS_RAW_FETCH_FAILED', 'Failed to fetch file stream.');
@@ -657,12 +734,14 @@ router.put('/rename', async (req, res) => {
     if (!isAllowed) {
       throw createFsHttpError(403, 'FS_PERMISSION_DENIED', 'Access to this path is restricted.');
     }
+    await assertWithinAllowedRealRoots(resolvedOld, allowedRoots);
 
     if (!isSafeLeafName(newName)) {
       throw createFsHttpError(400, 'FS_INVALID_NAME', 'Invalid file name.');
     }
 
     const newPath = path.join(path.dirname(resolvedOld), newName);
+    await assertWithinAllowedRealRoots(newPath, allowedRoots);
     if (await fs.pathExists(newPath)) {
       throw createFsHttpError(409, 'FS_CONFLICT', 'A file or directory with the target name already exists.');
     }
@@ -722,6 +801,7 @@ router.post('/extract', async (req, res) => {
        if (!isAllowed) {
          throw createFsHttpError(403, 'FS_RESTRICTED_DESTINATION', 'Destination path is restricted.');
        }
+       await assertWithinAllowedRealRoots(resolvedDest, allowedRoots);
        destPath = resolvedDest;
     }
 

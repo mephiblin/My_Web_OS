@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const packageRegistryService = require('../services/packageRegistryService');
+const builtinAppsSeed = require('../config/builtinAppsSeed');
 const packageDoctor = require('../../tools/package-doctor');
 
 test('primary viewer addons resolve to sandbox package apps when inventory package exists', async () => {
@@ -20,6 +21,20 @@ test('primary viewer addons resolve to sandbox package apps when inventory packa
     assert.ok(Array.isArray(app.contributes?.fileCreateTemplates), `${appId} should expose file template contribution contract`);
     assert.ok(Array.isArray(app.contributes?.previewProviders), `${appId} should expose preview provider contribution contract`);
     assert.ok(Array.isArray(app.contributes?.thumbnailProviders), `${appId} should expose thumbnail provider contribution contract`);
+  }
+});
+
+test('package doctor accepts current built-in registry seed without warning debt', async () => {
+  const report = packageDoctor.runBuiltinRegistryChecks(builtinAppsSeed);
+  assert.equal(report.failCount, 0);
+  assert.equal(report.warnCount, 0);
+});
+
+test('package doctor derives station system allowlist from built-in seed', async () => {
+  const systemIds = packageDoctor.collectBuiltinSystemAppIds(builtinAppsSeed);
+
+  for (const appId of ['download-station', 'photo-station', 'music-station', 'document-station', 'video-station']) {
+    assert.equal(systemIds.has(appId), true, `${appId} should be recognized as a built-in system app`);
   }
 });
 

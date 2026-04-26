@@ -100,7 +100,8 @@ Observed:
 
 - `npm test`: 62 tests passed.
 - Client build passed.
-- Package doctor completed with `fails=0`, with existing builtin registry warnings for system apps without file associations/station allowlist entries.
+- Package doctor completed with `fails=0`.
+- Follow-up package doctor cleanup now reports `warns=0`; system apps without file associations are treated as intentional, and station system app allowlist entries derive from the built-in seed.
 - Terminal socket/PTY Korean output smoke passed.
 - Backend and frontend health checks passed.
 
