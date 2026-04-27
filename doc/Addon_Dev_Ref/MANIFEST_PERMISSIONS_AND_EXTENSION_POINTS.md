@@ -143,6 +143,8 @@ UI가 없는 background package:
 | `ui.notification` | notification/toast 표시 | 낮음 |
 | `window.open` | 다른 Web OS app 열기 | 낮음/중간 |
 | `system.info` | 시스템 요약 조회 | 중간 |
+| `calendar.read` | 코어 Calendar 공용 일정 읽기 | 낮음 |
+| `calendar.write` | 코어 Calendar 공용 일정 생성/수정/삭제 | 중간 |
 | `app.data.list` | app-owned data 목록 | 낮음 |
 | `app.data.read` | app-owned data 읽기 | 낮음 |
 | `app.data.write` | app-owned data 쓰기 | 낮음/중간 |

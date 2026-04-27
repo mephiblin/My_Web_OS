@@ -215,6 +215,38 @@
         });
       }
     },
+    calendar: {
+      list: function list(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('calendar.read', 'calendar.events.list', {
+          from: payload.from || '',
+          to: payload.to || ''
+        });
+      },
+      month: function month(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('calendar.read', 'calendar.events.month', {
+          year: payload.year,
+          month: payload.month
+        });
+      },
+      create: function create(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('calendar.write', 'calendar.events.create', payload);
+      },
+      update: function update(eventId, input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('calendar.write', 'calendar.events.update', {
+          eventId: eventId || payload.eventId || '',
+          patch: payload.patch && typeof payload.patch === 'object' ? payload.patch : payload
+        });
+      },
+      remove: function remove(eventId) {
+        return requestWithPermission('calendar.write', 'calendar.events.delete', {
+          eventId: eventId || ''
+        });
+      }
+    },
     files: {
       rawUrl: function rawUrl(input) {
         var payload = input && typeof input === 'object' ? input : {};

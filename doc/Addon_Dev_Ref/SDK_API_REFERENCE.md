@@ -146,7 +146,59 @@ Alias도 지원한다.
 await window.WebOS.appData.write({ path: 'note.txt', content: 'hello' });
 ```
 
-## 6. Host file grant API
+## 6. Shared calendar API
+
+Core Calendar 시스템 앱과 동기화되는 공용 일정 API다.
+정식 v1 계약(필드/SDK/오류/권한)은 `CALENDAR_STANDARD_V1.md`를 기준으로 한다.
+
+Permissions:
+
+- `calendar.read`
+- `calendar.write`
+
+### List events
+
+```js
+const result = await window.WebOS.calendar.list({
+  from: '2026-04-01T00:00:00.000Z',
+  to: '2026-04-30T23:59:59.999Z'
+});
+```
+
+### Get month events
+
+```js
+const result = await window.WebOS.calendar.month({
+  year: 2026,
+  month: 4
+});
+```
+
+### Create event
+
+```js
+const created = await window.WebOS.calendar.create({
+  title: 'Deploy window',
+  startAt: '2026-04-28T10:00:00.000Z',
+  endAt: '2026-04-28T11:00:00.000Z',
+  allDay: false,
+  color: '#34d399',
+  note: 'Smoke check after deploy'
+});
+```
+
+### Update/Delete event
+
+```js
+await window.WebOS.calendar.update('event-id', {
+  title: 'Deploy window (updated)',
+  endAt: '2026-04-28T11:30:00.000Z'
+});
+
+await window.WebOS.calendar.remove('event-id');
+```
+
+## 7. Host file grant API
 
 Host file 접근은 File Station 또는 trusted parent flow가 만든 grant가 필요하다.
 
@@ -210,7 +262,7 @@ await window.WebOS.files.approveWrite();
 WEBOS_APPROVAL_PARENT_ONLY
 ```
 
-## 7. Hybrid service bridge
+## 8. Hybrid service bridge
 
 Permission: `service.bridge`
 
@@ -261,7 +313,7 @@ Bridge 규칙:
 | `SANDBOX_SERVICE_BODY_TOO_LARGE` | body 제한 초과 |
 | `SANDBOX_SERVICE_TIMEOUT` | proxy timeout |
 
-## 8. Relaunch data
+## 9. Relaunch data
 
 Singleton app이 이미 열린 상태에서 새 파일로 다시 실행되면 parent가 launch-data message를 보낼 수 있다.
 
@@ -276,7 +328,7 @@ window.addEventListener('message', (event) => {
 });
 ```
 
-## 9. Permission failure handling
+## 10. Permission failure handling
 
 모든 SDK API는 Promise rejection으로 명시 오류를 낸다.
 

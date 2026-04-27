@@ -3,7 +3,7 @@
   import { widgetLibrary } from '../../../core/stores/widgetLibraryStore.js';
   import { 
     Clock, Activity, Globe, Code, Plus, Trash2, LayoutGrid, 
-    Cpu, Wifi, HardDrive, Edit3, Save, ArrowLeft, Send
+    Cpu, Wifi, HardDrive, Edit3, Save, ArrowLeft, Send, CalendarDays
   } from 'lucide-svelte';
 
   let activeTab = $state('presets'); // 'presets' | 'system' | 'url' | 'custom'
@@ -21,6 +21,7 @@
   ];
 
   const systemWidgets = [
+    { source: 'sys-calendar', title: 'Calendar Agenda', icon: CalendarDays, desc: 'Monthly calendar events', w: 280, h: 220 },
     { source: 'sys-cpu', title: 'CPU Monitor', icon: Cpu, desc: 'Live CPU usage & temp', w: 220, h: 200 },
     { source: 'sys-mem', title: 'Memory Monitor', icon: Activity, desc: 'Live RAM usage', w: 220, h: 200 },
     { source: 'sys-net', title: 'Network Monitor', icon: Wifi, desc: 'Live net TX/RX stats', w: 240, h: 200 },

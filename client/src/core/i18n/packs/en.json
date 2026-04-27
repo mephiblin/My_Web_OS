@@ -6,6 +6,7 @@
   "messages": {
     "app.title.files": "File Station",
     "app.title.terminal": "Terminal",
+    "app.title.calendar": "Calendar",
     "app.title.nexus-term": "NexusTerm v1.3.0",
     "app.title.monitor": "Resource Monitor",
     "app.title.docker": "Docker Manager",

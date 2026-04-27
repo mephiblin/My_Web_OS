@@ -48,6 +48,18 @@ const CAPABILITY_CATALOG = Object.freeze([
     summary: 'Read system overview metrics exposed by the gateway.'
   },
   {
+    id: 'calendar.read',
+    category: 'system',
+    risk: 'low',
+    summary: 'Read shared calendar events from the core calendar API.'
+  },
+  {
+    id: 'calendar.write',
+    category: 'system',
+    risk: 'medium',
+    summary: 'Create, update, and delete shared calendar events in the core calendar API.'
+  },
+  {
     id: 'runtime.process',
     category: 'runtime',
     risk: 'high',

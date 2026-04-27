@@ -183,6 +183,139 @@ function handleStateKeyError(res, err) {
   return res.status(500).json({ error: true, message: err.message });
 }
 
+function createCalendarError(status, code, message, details = null) {
+  const err = new Error(message);
+  err.status = status;
+  err.code = code;
+  err.details = details;
+  return err;
+}
+
+function sendCalendarError(res, err) {
+  return res.status(err.status || 500).json({
+    error: true,
+    code: err.code || 'CALENDAR_INTERNAL_ERROR',
+    message: err.message || 'Calendar operation failed.',
+    details: err.details || null
+  });
+}
+
+function isIsoDateTime(value) {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp);
+}
+
+function toTimestampOrNull(value) {
+  if (!isIsoDateTime(value)) return null;
+  return Date.parse(value);
+}
+
+function toTrimmedOptionalString(value, maxLength = 4000) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.slice(0, maxLength);
+}
+
+function normalizeCalendarCreateInput(body = {}) {
+  const title = toTrimmedOptionalString(body.title, 200);
+  const startAt = toTrimmedOptionalString(body.startAt, 64);
+  const endAt = toTrimmedOptionalString(body.endAt, 64);
+  const color = toTrimmedOptionalString(body.color, 20) || '#58a6ff';
+  const note = toTrimmedOptionalString(body.note, 4000);
+
+  if (!title) {
+    throw createCalendarError(400, 'CALENDAR_EVENT_TITLE_REQUIRED', 'title is required.');
+  }
+  if (!isIsoDateTime(startAt)) {
+    throw createCalendarError(400, 'CALENDAR_EVENT_START_INVALID', 'startAt must be a valid ISO datetime string.');
+  }
+  if (endAt && !isIsoDateTime(endAt)) {
+    throw createCalendarError(400, 'CALENDAR_EVENT_END_INVALID', 'endAt must be a valid ISO datetime string.');
+  }
+
+  const startTs = toTimestampOrNull(startAt);
+  const endTs = toTimestampOrNull(endAt);
+  if (startTs && endTs && endTs < startTs) {
+    throw createCalendarError(400, 'CALENDAR_EVENT_RANGE_INVALID', 'endAt must be greater than or equal to startAt.');
+  }
+
+  return {
+    title,
+    startAt: new Date(startTs).toISOString(),
+    endAt: endTs ? new Date(endTs).toISOString() : null,
+    allDay: body.allDay === true,
+    color,
+    note: note || null
+  };
+}
+
+function normalizeCalendarUpdateInput(body = {}) {
+  const hasField = (key) => Object.prototype.hasOwnProperty.call(body, key);
+  if (!hasField('title') && !hasField('startAt') && !hasField('endAt') && !hasField('allDay') && !hasField('color') && !hasField('note')) {
+    throw createCalendarError(400, 'CALENDAR_EVENT_PATCH_EMPTY', 'At least one updatable field is required.');
+  }
+
+  const patch = {};
+
+  if (hasField('title')) {
+    const title = toTrimmedOptionalString(body.title, 200);
+    if (!title) {
+      throw createCalendarError(400, 'CALENDAR_EVENT_TITLE_REQUIRED', 'title cannot be empty.');
+    }
+    patch.title = title;
+  }
+
+  if (hasField('startAt')) {
+    const startAt = toTrimmedOptionalString(body.startAt, 64);
+    if (!isIsoDateTime(startAt)) {
+      throw createCalendarError(400, 'CALENDAR_EVENT_START_INVALID', 'startAt must be a valid ISO datetime string.');
+    }
+    patch.startAt = new Date(Date.parse(startAt)).toISOString();
+  }
+
+  if (hasField('endAt')) {
+    const endAt = body.endAt == null ? '' : toTrimmedOptionalString(body.endAt, 64);
+    if (!endAt) {
+      patch.endAt = null;
+    } else if (!isIsoDateTime(endAt)) {
+      throw createCalendarError(400, 'CALENDAR_EVENT_END_INVALID', 'endAt must be a valid ISO datetime string.');
+    } else {
+      patch.endAt = new Date(Date.parse(endAt)).toISOString();
+    }
+  }
+
+  if (hasField('allDay')) {
+    patch.allDay = body.allDay === true;
+  }
+
+  if (hasField('color')) {
+    patch.color = toTrimmedOptionalString(body.color, 20) || '#58a6ff';
+  }
+
+  if (hasField('note')) {
+    const note = toTrimmedOptionalString(body.note, 4000);
+    patch.note = note || null;
+  }
+
+  return patch;
+}
+
+function rangesOverlap(startA, endA, startB, endB) {
+  return startA <= endB && startB <= endA;
+}
+
+function eventOverlapsRange(item, fromTs, toTs) {
+  const startTs = toTimestampOrNull(item?.startAt);
+  if (!startTs) return false;
+
+  const endTsRaw = toTimestampOrNull(item?.endAt);
+  const endTs = endTsRaw == null ? startTs : endTsRaw;
+
+  return rangesOverlap(startTs, endTs, fromTs, toTs);
+}
+
 function createBackupError(status, code, message, details = null) {
   const err = new Error(message);
   err.status = status;
@@ -871,6 +1004,242 @@ router.get('/language-packs/:code', async (req, res) => {
     });
   } catch (err) {
     return sendLanguagePackError(res, err);
+  }
+});
+
+/**
+ * GET /api/system/calendar/events
+ * Read calendar events with optional time range filtering.
+ */
+router.get('/calendar/events', async (req, res) => {
+  try {
+    const fromRaw = toTrimmedOptionalString(req.query?.from, 64);
+    const toRaw = toTrimmedOptionalString(req.query?.to, 64);
+
+    const fromTs = fromRaw ? toTimestampOrNull(fromRaw) : null;
+    const toTs = toRaw ? toTimestampOrNull(toRaw) : null;
+
+    if (fromRaw && fromTs == null) {
+      throw createCalendarError(400, 'CALENDAR_RANGE_FROM_INVALID', 'from must be a valid ISO datetime string.');
+    }
+    if (toRaw && toTs == null) {
+      throw createCalendarError(400, 'CALENDAR_RANGE_TO_INVALID', 'to must be a valid ISO datetime string.');
+    }
+    if (fromTs != null && toTs != null && toTs < fromTs) {
+      throw createCalendarError(400, 'CALENDAR_RANGE_INVALID', 'to must be greater than or equal to from.');
+    }
+
+    const state = await stateStore.readState('calendar');
+    const allEvents = Array.isArray(state?.events) ? state.events : [];
+    const rangeFromTs = fromTs == null ? Number.MIN_SAFE_INTEGER : fromTs;
+    const rangeToTs = toTs == null ? Number.MAX_SAFE_INTEGER : toTs;
+    const filtered = allEvents.filter((item) => eventOverlapsRange(item, rangeFromTs, rangeToTs));
+    const data = filtered
+      .slice()
+      .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt));
+
+    return res.json({
+      success: true,
+      data,
+      total: data.length,
+      lastUpdatedAt: state?.lastUpdatedAt || null
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+/**
+ * GET /api/system/calendar/month
+ * Read calendar events for one month window.
+ */
+router.get('/calendar/month', async (req, res) => {
+  try {
+    const now = new Date();
+    const year = Number.parseInt(String(req.query?.year ?? now.getFullYear()), 10);
+    const month = Number.parseInt(String(req.query?.month ?? now.getMonth() + 1), 10);
+
+    if (!Number.isFinite(year) || year < 1970 || year > 9999) {
+      throw createCalendarError(400, 'CALENDAR_MONTH_YEAR_INVALID', 'year must be between 1970 and 9999.');
+    }
+    if (!Number.isFinite(month) || month < 1 || month > 12) {
+      throw createCalendarError(400, 'CALENDAR_MONTH_VALUE_INVALID', 'month must be between 1 and 12.');
+    }
+
+    const fromTs = Date.UTC(year, month - 1, 1, 0, 0, 0, 0);
+    const toTs = Date.UTC(year, month, 0, 23, 59, 59, 999);
+
+    const state = await stateStore.readState('calendar');
+    const allEvents = Array.isArray(state?.events) ? state.events : [];
+    const data = allEvents
+      .filter((item) => eventOverlapsRange(item, fromTs, toTs))
+      .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt));
+
+    return res.json({
+      success: true,
+      data,
+      total: data.length,
+      range: {
+        from: new Date(fromTs).toISOString(),
+        to: new Date(toTs).toISOString(),
+        year,
+        month
+      },
+      lastUpdatedAt: state?.lastUpdatedAt || null
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+/**
+ * POST /api/system/calendar/events
+ * Create one calendar event.
+ */
+router.post('/calendar/events', async (req, res) => {
+  try {
+    const input = normalizeCalendarCreateInput(req.body || {});
+    const state = await stateStore.readState('calendar');
+    const events = Array.isArray(state?.events) ? state.events : [];
+    const now = Date.now();
+
+    const nextEvent = {
+      id: crypto.randomUUID(),
+      ...input,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const nextState = await stateStore.writeState('calendar', {
+      ...state,
+      events: [...events, nextEvent],
+      lastUpdatedAt: now
+    });
+
+    await auditService.log(
+      'SYSTEM',
+      'Create Calendar Event',
+      { user: req.user?.username, eventId: nextEvent.id, title: nextEvent.title },
+      'INFO'
+    );
+
+    return res.status(201).json({
+      success: true,
+      data: nextEvent,
+      lastUpdatedAt: nextState?.lastUpdatedAt || now
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+/**
+ * PUT /api/system/calendar/events/:id
+ * Update one calendar event.
+ */
+router.put('/calendar/events/:id', async (req, res) => {
+  try {
+    const eventId = toTrimmedOptionalString(req.params?.id, 128);
+    if (!eventId) {
+      throw createCalendarError(400, 'CALENDAR_EVENT_ID_REQUIRED', 'event id is required.');
+    }
+
+    const patch = normalizeCalendarUpdateInput(req.body || {});
+    const state = await stateStore.readState('calendar');
+    const events = Array.isArray(state?.events) ? state.events : [];
+    const existing = events.find((item) => String(item?.id || '') === eventId);
+    if (!existing) {
+      throw createCalendarError(404, 'CALENDAR_EVENT_NOT_FOUND', 'calendar event not found.', { id: eventId });
+    }
+
+    const candidate = {
+      ...existing,
+      ...patch
+    };
+
+    const startTs = toTimestampOrNull(candidate.startAt);
+    const endTs = toTimestampOrNull(candidate.endAt);
+    if (startTs == null) {
+      throw createCalendarError(400, 'CALENDAR_EVENT_START_INVALID', 'startAt must be a valid ISO datetime string.');
+    }
+    if (candidate.endAt && endTs == null) {
+      throw createCalendarError(400, 'CALENDAR_EVENT_END_INVALID', 'endAt must be a valid ISO datetime string.');
+    }
+    if (endTs != null && endTs < startTs) {
+      throw createCalendarError(400, 'CALENDAR_EVENT_RANGE_INVALID', 'endAt must be greater than or equal to startAt.');
+    }
+
+    const now = Date.now();
+    const nextEvent = {
+      ...candidate,
+      startAt: new Date(startTs).toISOString(),
+      endAt: endTs != null ? new Date(endTs).toISOString() : null,
+      updatedAt: now
+    };
+
+    const nextEvents = events.map((item) => (String(item?.id || '') === eventId ? nextEvent : item));
+    const nextState = await stateStore.writeState('calendar', {
+      ...state,
+      events: nextEvents,
+      lastUpdatedAt: now
+    });
+
+    await auditService.log(
+      'SYSTEM',
+      'Update Calendar Event',
+      { user: req.user?.username, eventId: eventId, title: nextEvent.title },
+      'INFO'
+    );
+
+    return res.json({
+      success: true,
+      data: nextEvent,
+      lastUpdatedAt: nextState?.lastUpdatedAt || now
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+/**
+ * DELETE /api/system/calendar/events/:id
+ * Remove one calendar event.
+ */
+router.delete('/calendar/events/:id', async (req, res) => {
+  try {
+    const eventId = toTrimmedOptionalString(req.params?.id, 128);
+    if (!eventId) {
+      throw createCalendarError(400, 'CALENDAR_EVENT_ID_REQUIRED', 'event id is required.');
+    }
+
+    const state = await stateStore.readState('calendar');
+    const events = Array.isArray(state?.events) ? state.events : [];
+    const nextEvents = events.filter((item) => String(item?.id || '') !== eventId);
+    if (nextEvents.length === events.length) {
+      throw createCalendarError(404, 'CALENDAR_EVENT_NOT_FOUND', 'calendar event not found.', { id: eventId });
+    }
+
+    const now = Date.now();
+    const nextState = await stateStore.writeState('calendar', {
+      ...state,
+      events: nextEvents,
+      lastUpdatedAt: now
+    });
+
+    await auditService.log(
+      'SYSTEM',
+      'Delete Calendar Event',
+      { user: req.user?.username, eventId: eventId },
+      'INFO'
+    );
+
+    return res.json({
+      success: true,
+      data: { removedId: eventId },
+      lastUpdatedAt: nextState?.lastUpdatedAt || now
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
   }
 });
 

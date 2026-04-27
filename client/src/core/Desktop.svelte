@@ -4,6 +4,7 @@
     AppWindow,
     Boxes,
     Braces,
+    CalendarDays,
     Clapperboard,
     Cuboid,
     DatabaseZap,
@@ -58,6 +59,7 @@
 
   const iconMap = {
     Box: Cuboid,
+    CalendarIcon: CalendarDays,
     Code2: Braces,
     Container: Boxes,
     FileText: ScrollText,
@@ -76,6 +78,7 @@
 
   const iconMapByAppId = {
     'control-panel': MonitorCog,
+    calendar: CalendarDays,
     'doc-viewer': ScrollText,
     'document-station': ScrollText,
     'download-station': DatabaseZap,

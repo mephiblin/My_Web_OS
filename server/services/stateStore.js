@@ -1,7 +1,7 @@
 const fs = require('fs-extra');
 const inventoryPaths = require('../utils/inventoryPaths');
 
-const STATE_KEYS = new Set(['settings', 'windows', 'widgets', 'shortcuts', 'desktops', 'startMenu', 'taskbar', 'windowDefaults', 'agentChat', 'themePresets', 'contextMenu', 'backupJobs']);
+const STATE_KEYS = new Set(['settings', 'windows', 'widgets', 'shortcuts', 'desktops', 'startMenu', 'taskbar', 'windowDefaults', 'agentChat', 'themePresets', 'contextMenu', 'backupJobs', 'calendar']);
 
 const DEFAULT_SETTINGS = {
   blurIntensity: 20,
@@ -91,6 +91,10 @@ const DEFAULT_BACKUP_JOBS = {
   jobs: [],
   history: []
 };
+const DEFAULT_CALENDAR = {
+  events: [],
+  lastUpdatedAt: null
+};
 
 const AGENT_CHAT_ALLOWED_ROLES = new Set(['user', 'assistant', 'system']);
 const AGENT_CHAT_ALLOWED_KINDS = new Set(['text', 'approval', 'result']);
@@ -118,7 +122,8 @@ const DEFAULT_BY_KEY = {
   agentChat: DEFAULT_AGENT_CHAT,
   themePresets: DEFAULT_THEME_PRESETS,
   contextMenu: DEFAULT_CONTEXT_MENU,
-  backupJobs: DEFAULT_BACKUP_JOBS
+  backupJobs: DEFAULT_BACKUP_JOBS,
+  calendar: DEFAULT_CALENDAR
 };
 
 function clone(value) {
@@ -584,6 +589,51 @@ function normalizeBackupJobs(value) {
   return { jobs, history };
 }
 
+function normalizeCalendarEvent(item, index) {
+  if (!isObject(item)) return null;
+
+  const title = asTrimmedString(item.title, '', 200);
+  const startAt = asTrimmedString(item.startAt, '', 64);
+  if (!title || !startAt) return null;
+
+  const endAt = asTrimmedString(item.endAt, '', 64) || null;
+  const allDay = item.allDay === true;
+  const color = asTrimmedString(item.color, '#58a6ff', 20);
+  const note = asTrimmedString(item.note, '', 4000);
+
+  const createdAt = asNullableTimestamp(item.createdAt) || Date.now();
+  const updatedAt = asNullableTimestamp(item.updatedAt) || createdAt;
+
+  return {
+    id: asTrimmedString(item.id, `calendar-event-${index + 1}`, 128),
+    title,
+    startAt,
+    endAt,
+    allDay,
+    color,
+    note: note || null,
+    createdAt,
+    updatedAt
+  };
+}
+
+function normalizeCalendar(value) {
+  if (!isObject(value)) return clone(DEFAULT_CALENDAR);
+
+  const events = Array.isArray(value.events)
+    ? value.events
+      .slice(0, 2000)
+      .map((item, index) => normalizeCalendarEvent(item, index))
+      .filter(Boolean)
+    : [];
+
+  const lastUpdatedAt = asNullableTimestamp(value.lastUpdatedAt);
+  return {
+    events,
+    lastUpdatedAt
+  };
+}
+
 function validateState(key, value) {
   ensureStateKey(key);
 
@@ -612,6 +662,8 @@ function validateState(key, value) {
       return normalizeContextMenu(value);
     case 'backupJobs':
       return normalizeBackupJobs(value);
+    case 'calendar':
+      return normalizeCalendar(value);
     default:
       return clone(DEFAULT_BY_KEY[key]);
   }

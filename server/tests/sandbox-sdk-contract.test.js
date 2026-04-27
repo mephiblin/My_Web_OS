@@ -159,6 +159,50 @@ test('sandbox SDK exposes service bridge requests for hybrid tool packages', asy
   });
 });
 
+test('sandbox SDK exposes calendar APIs for shared calendar sync', async () => {
+  const { WebOS, requestAndRespond } = loadSdkHarness(['calendar.read', 'calendar.write']);
+
+  const listRequest = await requestAndRespond(() => WebOS.calendar.list({
+    from: '2026-04-01T00:00:00.000Z',
+    to: '2026-04-30T23:59:59.999Z'
+  }));
+  assert.equal(listRequest.method, 'calendar.events.list');
+  assert.deepEqual(plain(listRequest.params), {
+    from: '2026-04-01T00:00:00.000Z',
+    to: '2026-04-30T23:59:59.999Z'
+  });
+
+  const monthRequest = await requestAndRespond(() => WebOS.calendar.month({
+    year: 2026,
+    month: 4
+  }));
+  assert.equal(monthRequest.method, 'calendar.events.month');
+  assert.deepEqual(plain(monthRequest.params), { year: 2026, month: 4 });
+
+  const createRequest = await requestAndRespond(() => WebOS.calendar.create({
+    title: 'Deploy window',
+    startAt: '2026-04-28T10:00:00.000Z'
+  }));
+  assert.equal(createRequest.method, 'calendar.events.create');
+
+  const updateRequest = await requestAndRespond(() => WebOS.calendar.update('event-1', {
+    title: 'Updated title'
+  }));
+  assert.equal(updateRequest.method, 'calendar.events.update');
+  assert.deepEqual(plain(updateRequest.params), {
+    eventId: 'event-1',
+    patch: { title: 'Updated title' }
+  });
+
+  const deleteRequest = await requestAndRespond(() => WebOS.calendar.remove('event-1'));
+  assert.equal(deleteRequest.method, 'calendar.events.delete');
+  assert.deepEqual(plain(deleteRequest.params), { eventId: 'event-1' });
+
+  await assert.rejects(() => loadSdkHarness([]).WebOS.calendar.list({}), {
+    code: 'APP_PERMISSION_DENIED'
+  });
+});
+
 test('sandbox service bridge is parent-mediated and permission-gated', () => {
   const bridgeSource = fs.readFileSync(
     path.join(__dirname, '../../client/src/core/components/SandboxAppFrame.svelte'),
@@ -170,7 +214,10 @@ test('sandbox service bridge is parent-mediated and permission-gated', () => {
   );
 
   assert.match(bridgeSource, /'service\.request': 'service\.bridge'/);
+  assert.match(bridgeSource, /'calendar\.events\.list': 'calendar\.read'/);
+  assert.match(bridgeSource, /'calendar\.events\.create': 'calendar\.write'/);
   assert.match(bridgeSource, /\/service\/request/);
+  assert.match(bridgeSource, /\/api\/system\/calendar\/events/);
   assert.match(sandboxRouteSource, /decodeURIComponent\(pathname\)/);
   assert.match(sandboxRouteSource, /requestPath\.startsWith\('\/\/'\)/);
   assert.match(sandboxRouteSource, /127\.0\.0\.1/);

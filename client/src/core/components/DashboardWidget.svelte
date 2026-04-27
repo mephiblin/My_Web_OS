@@ -1,5 +1,5 @@
 <script>
-  import { Clock, Activity, GripVertical, Lock, Unlock, X, Cpu, Wifi, HardDrive } from 'lucide-svelte';
+  import { Clock, Activity, GripVertical, Lock, Unlock, X, Cpu, Wifi, HardDrive, CalendarDays } from 'lucide-svelte';
   import { widgets } from '../stores/widgetStore.js';
 
   let { widget } = $props();
@@ -14,6 +14,7 @@
 
   // System API state (for type=system widgets)
   let sysData = $state(null);
+  let calendarData = $state([]);
 
   $effect(() => {
     if (widget.source === 'clock') {
@@ -24,12 +25,22 @@
       const fetchSys = async () => {
         try {
           const token = localStorage.getItem('web_os_token') || '';
+          if (widget.source === 'sys-calendar') {
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = now.getMonth() + 1;
+            const res = await fetch(`/api/system/calendar/month?year=${year}&month=${month}`, { headers: { Authorization: `Bearer ${token}` } });
+            const payload = await res.json();
+            calendarData = Array.isArray(payload?.data) ? payload.data : [];
+            return;
+          }
+
           const res = await fetch('/api/system/overview', { headers: { Authorization: `Bearer ${token}` } });
           sysData = await res.json();
         } catch (e) { /* silently fail */ }
       };
       fetchSys();
-      const timer = setInterval(fetchSys, 3000);
+      const timer = setInterval(fetchSys, widget.source === 'sys-calendar' ? 10000 : 3000);
       return () => clearInterval(timer);
     }
   });
@@ -122,7 +133,21 @@
       </div>
 
     {:else if widget.type === 'system'}
-      {#if !sysData}
+      {#if widget.source === 'sys-calendar'}
+        <div class="preset sys-widget">
+          <div class="sys-header"><CalendarDays size={14} color="#34d399"/><span>Calendar</span><span class="sys-val">{calendarData.length}</span></div>
+          {#if calendarData.length === 0}
+            <div class="sys-sub">No events this month</div>
+          {:else}
+            {#each calendarData.slice(0, 3) as item}
+              <div class="calendar-row">
+                <span class="dot" style="background:{item.color || '#58a6ff'}"></span>
+                <span class="calendar-title">{item.title}</span>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      {:else if !sysData}
         <div class="preset fallback"><span>Loading...</span></div>
       {:else if widget.source === 'sys-cpu'}
         <div class="preset sys-widget">
@@ -165,6 +190,7 @@
             </div>
           {/each}
         </div>
+
       {/if}
 
     {:else if widget.type === 'url'}
@@ -300,6 +326,9 @@
   .drive-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
   .drive-name { font-size: 10px; color: rgba(255,255,255,0.6); min-width: 55px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .drive-pct { font-size: 10px; color: #34d399; min-width: 30px; text-align: right; }
+  .calendar-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+  .dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+  .calendar-title { font-size: 10px; color: rgba(255,255,255,0.78); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Lock Handle */
   .handle-btn {

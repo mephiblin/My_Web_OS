@@ -22,6 +22,18 @@ const BUILTIN_APPS_SEED = [
     permissions: ['system.info']
   },
   {
+    id: 'calendar',
+    title: 'Calendar',
+    icon: 'CalendarIcon',
+    appModel: 'system',
+    type: 'system',
+    version: '1.0.0',
+    entry: 'calendar',
+    runtime: 'builtin',
+    singleton: true,
+    permissions: ['system.info']
+  },
+  {
     id: 'nexus-term',
     title: 'NexusTerm v1.3.0',
     icon: 'PanelsTopLeft',

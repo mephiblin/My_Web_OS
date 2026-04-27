@@ -61,7 +61,12 @@
     'host.file.rawTicket': 'host.file.read',
     'host.file.writePreflight': 'host.file.write',
     'host.file.write': 'host.file.write',
-    'service.request': 'service.bridge'
+    'service.request': 'service.bridge',
+    'calendar.events.list': 'calendar.read',
+    'calendar.events.month': 'calendar.read',
+    'calendar.events.create': 'calendar.write',
+    'calendar.events.update': 'calendar.write',
+    'calendar.events.delete': 'calendar.write'
   };
 
   const SENSITIVE_RISK_LEVELS = new Set(['medium', 'high']);
@@ -233,6 +238,56 @@
       case 'service.request': {
         const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/service/request`, params);
         return result.result;
+      }
+
+      case 'calendar.events.list': {
+        const query = new URLSearchParams();
+        if (params.from) query.set('from', String(params.from));
+        if (params.to) query.set('to', String(params.to));
+        const path = query.toString()
+          ? `/api/system/calendar/events?${query.toString()}`
+          : '/api/system/calendar/events';
+        return apiFetch(path);
+      }
+
+      case 'calendar.events.month': {
+        const year = Number.parseInt(String(params.year), 10);
+        const month = Number.parseInt(String(params.month), 10);
+        const safeYear = Number.isFinite(year) ? year : new Date().getFullYear();
+        const safeMonth = Number.isFinite(month) ? month : (new Date().getMonth() + 1);
+        return apiFetch(`/api/system/calendar/month?year=${encodeURIComponent(safeYear)}&month=${encodeURIComponent(safeMonth)}`);
+      }
+
+      case 'calendar.events.create': {
+        return apiFetch('/api/system/calendar/events', {
+          method: 'POST',
+          body: JSON.stringify(params || {})
+        });
+      }
+
+      case 'calendar.events.update': {
+        const eventId = String(params?.eventId || '').trim();
+        if (!eventId) {
+          const err = new Error('calendar event id is required.');
+          err.code = 'SANDBOX_CALENDAR_EVENT_ID_REQUIRED';
+          throw err;
+        }
+        return apiFetch(`/api/system/calendar/events/${encodeURIComponent(eventId)}`, {
+          method: 'PUT',
+          body: JSON.stringify(params?.patch && typeof params.patch === 'object' ? params.patch : {})
+        });
+      }
+
+      case 'calendar.events.delete': {
+        const eventId = String(params?.eventId || '').trim();
+        if (!eventId) {
+          const err = new Error('calendar event id is required.');
+          err.code = 'SANDBOX_CALENDAR_EVENT_ID_REQUIRED';
+          throw err;
+        }
+        return apiFetch(`/api/system/calendar/events/${encodeURIComponent(eventId)}`, {
+          method: 'DELETE'
+        });
       }
 
       default:
@@ -411,6 +466,12 @@
     }
     if (permission === 'service.bridge') {
       return `Call package service path "${String(params.path || '/').trim() || '/'}".`;
+    }
+    if (permission === 'calendar.read') {
+      return 'Read shared calendar events from the core Calendar system app.';
+    }
+    if (permission === 'calendar.write') {
+      return 'Create, update, or delete shared calendar events.';
     }
     return `Execute "${request?.method || 'unknown'}".`;
   }
