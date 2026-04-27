@@ -1,7 +1,7 @@
 <script>
   import { get } from 'svelte/store';
   import { onMount } from 'svelte';
-  import { LayoutGrid, Store, Link2, RefreshCw, Download, Upload, Play, Square, RotateCcw, Trash2 } from 'lucide-svelte';
+  import { LayoutGrid, Store, Link2, RefreshCw, Download, Upload, Play, Square, RotateCcw, Trash2, Plus, Search, Layers } from 'lucide-svelte';
   import { apiFetch } from '../../../utils/api.js';
   import {
     approvePackageDelete,
@@ -17,7 +17,6 @@
     fetchPackageFileEntries,
     fetchPackageManifest,
     preflightPackageRollback,
-    fetchDesktopApps,
     fetchInstalledPackages,
     fetchRegistryInstallPreflight,
     fetchPackageLifecycle,
@@ -41,6 +40,7 @@
     wizardPreflightPackage
   } from './api.js';
   import { openWindow, windows, closeWindow, focusWindow, updateWindowData, updateWindowTitle } from '../../../core/stores/windowStore.js';
+  import { widgets } from '../../../core/stores/widgetStore.js';
 
   const CATEGORY = {
     STORE: 'store',
@@ -65,13 +65,14 @@
   let activeCategory = $state(CATEGORY.STORE);
   let loadingStore = $state(true);
   let loadingInstalled = $state(true);
-  let loadingDesktopApps = $state(true);
   let savingSource = $state(false);
   let installingPackageId = $state('');
   let message = $state('');
   let error = $state('');
   let lastFailure = $state(null);
   let activeStoreSource = $state('all');
+  let packageQuery = $state('');
+  let selectedPackageKey = $state('');
 
   let registrySources = $state([]);
   let storePackages = $state([]);
@@ -83,13 +84,6 @@
   let runtimeEventsByApp = $state({});
   let lifecycleByApp = $state({});
   let healthByApp = $state({});
-  let desktopAppModelStats = $state({
-    system: 0,
-    standard: 0,
-    package: 0,
-    total: 0
-  });
-  let desktopAppInventory = $state([]);
   let consoleOpenByApp = $state({});
   let runtimeActioning = $state('');
   let runtimeLogsLoading = $state('');
@@ -110,6 +104,7 @@
   let selectedBackupByApp = $state({});
   let installReview = $state(null);
   let removingPackageId = $state('');
+  let packageUtilityPanel = $state('');
   let zipImportFile = $state(null);
   let zipImportInputKey = $state(0);
   let zipImportOverwrite = $state(false);
@@ -528,6 +523,95 @@
     return storePackages.filter((pkg) => pkg.source?.id === activeStoreSource);
   }
 
+  function setActiveCategory(category) {
+    activeCategory = category;
+    selectedPackageKey = '';
+    packageQuery = '';
+  }
+
+  function getPackageKey(pkg) {
+    if (!pkg?.id) return '';
+    const sourceId = pkg.source?.id || (activeCategory === CATEGORY.INSTALLED ? 'installed' : 'store');
+    return `${sourceId}:${pkg.id}`;
+  }
+
+  function getActivePackageList() {
+    return activeCategory === CATEGORY.INSTALLED ? installedPackages : getVisibleStorePackages();
+  }
+
+  function getFilteredActivePackageList() {
+    const query = packageQuery.trim().toLowerCase();
+    const rows = getActivePackageList();
+    if (!query) return rows;
+    return rows.filter((pkg) => [
+      pkg.id,
+      pkg.title,
+      pkg.description,
+      pkg.version,
+      pkg.source?.id,
+      pkg.appType,
+      pkg.type,
+      pkg.runtime,
+      pkg.runtimeProfile?.runtimeType
+    ].some((value) => String(value || '').toLowerCase().includes(query)));
+  }
+
+  function getSelectedPackage() {
+    const rows = getFilteredActivePackageList();
+    if (selectedPackageKey) {
+      const selected = rows.find((pkg) => getPackageKey(pkg) === selectedPackageKey);
+      if (selected) return selected;
+    }
+    return rows[0] || null;
+  }
+
+  function selectPackage(pkg) {
+    selectedPackageKey = getPackageKey(pkg);
+  }
+
+  function getSelectedPackageRows() {
+    const selected = getSelectedPackage();
+    return selected ? [selected] : [];
+  }
+
+  function reloadActivePackages() {
+    return activeCategory === CATEGORY.STORE ? loadStorePackages() : loadInstalledPackages();
+  }
+
+  function getPackageKindLabel(pkg) {
+    return pkg?.appType || pkg?.type || pkg?.runtimeProfile?.runtimeType || 'app';
+  }
+
+  function getPackageSourceLabel(pkg) {
+    if (activeCategory === CATEGORY.INSTALLED) return getWorkspaceBoundaryLabel(pkg);
+    return pkg?.source?.title || pkg?.source?.id || 'store';
+  }
+
+  function getPackageDependencies(pkg) {
+    const raw = pkg?.dependencies || pkg?.manifest?.dependencies || pkg?.runtimeProfile?.dependencies || null;
+    if (!raw) return [];
+    if (Array.isArray(raw)) {
+      return raw.map((item) => {
+        if (typeof item === 'string') return item;
+        if (!item || typeof item !== 'object') return '';
+        const name = item.id || item.name || item.package || item.appId || '';
+        const version = item.version || item.range || item.requiredVersion || '';
+        return [name, version].filter(Boolean).join(' ');
+      }).filter(Boolean);
+    }
+    if (typeof raw === 'object') {
+      return Object.entries(raw).map(([name, value]) => {
+        if (value === true || value == null) return name;
+        if (typeof value === 'string') return `${name} ${value}`;
+        if (typeof value === 'object') {
+          return [name, value.version || value.range || value.requiredVersion || ''].filter(Boolean).join(' ');
+        }
+        return `${name} ${String(value)}`;
+      }).filter(Boolean);
+    }
+    return [];
+  }
+
   function isServicePackage(pkg) {
     if (!pkg) return false;
     if (pkg.appType === 'service' || pkg.type === 'service') return true;
@@ -536,7 +620,32 @@
   }
 
   function canOpenPackage(pkg) {
-    return !pkg || (pkg.appType || pkg.type) !== 'service';
+    const appType = pkg?.appType || pkg?.type;
+    return !pkg || (appType !== 'service' && appType !== 'widget');
+  }
+
+  function getPackageWidgets(pkg) {
+    const rows = Array.isArray(pkg?.contributes?.widgets) ? pkg.contributes.widgets : [];
+    return rows.filter((item) => item?.id && item?.entry);
+  }
+
+  function addPackageWidget(pkg, contribution) {
+    if (!pkg?.id || !contribution?.entry) return;
+    const defaultSize = contribution.defaultSize && typeof contribution.defaultSize === 'object'
+      ? contribution.defaultSize
+      : {};
+    widgets.addWidget({
+      type: 'package',
+      packageId: pkg.id,
+      widgetId: contribution.id,
+      entry: contribution.entry,
+      title: contribution.title || contribution.label || pkg.title || 'Package Widget',
+      source: `${pkg.id}:${contribution.id}`,
+      w: Number.isFinite(Number(defaultSize.w)) ? Number(defaultSize.w) : 320,
+      h: Number.isFinite(Number(defaultSize.h)) ? Number(defaultSize.h) : 220
+    });
+    message = `Added "${contribution.title || contribution.label || pkg.title}" to the desktop.`;
+    error = '';
   }
 
   function getRuntimeState(pkg) {
@@ -587,6 +696,11 @@
 
   function getHealthStatus(pkg) {
     return String(getHealthReport(pkg)?.status || 'unknown').toLowerCase();
+  }
+
+  function getHealthStatusText(pkg) {
+    if (healthLoading === pkg.id) return 'CHECKING';
+    return String(getHealthStatus(pkg)).toUpperCase();
   }
 
   function isConsoleOpen(pkg) {
@@ -2245,7 +2359,6 @@
         [pkg.id]: response.report || null
       };
       await loadLifecycle(pkg.id);
-      message = `"${pkg.title}" health check completed.`;
     } catch (err) {
       error = err.message || 'Health check failed.';
     } finally {
@@ -2532,125 +2645,6 @@
     updateManifestEditorState(pkg.id, {
       lifecycleTypedInput: String(value || '')
     });
-  }
-
-  function normalizeAppModel(app) {
-    const rawModel = String(app?.appModel || app?.model || '').trim().toLowerCase();
-    if (rawModel === 'system') return 'system';
-    if (rawModel === 'package') return 'package';
-    if (rawModel === 'standard' || rawModel === 'app') return 'standard';
-
-    const source = String(app?.source || '').trim().toLowerCase();
-    const runtime = String(app?.runtimeType || app?.runtime || '').trim().toLowerCase();
-    if (source === 'system-registry' || runtime === 'builtin') return 'system';
-    if (source === 'inventory-package' || runtime === 'sandbox' || runtime.includes('process-')) return 'package';
-    return 'standard';
-  }
-
-  function normalizeOwnerTier(app) {
-    const raw = String(app?.ownerTier || '').trim().toLowerCase();
-    if (raw) return raw;
-    const model = normalizeAppModel(app);
-    if (model === 'system') return 'core-system';
-    if (model === 'package') return 'package-addon';
-    return 'core-addon';
-  }
-
-  function normalizeDataBoundary(app) {
-    const raw = String(app?.dataBoundary || '').trim().toLowerCase();
-    if (raw) return raw;
-    const model = normalizeAppModel(app);
-    return model === 'package' ? 'inventory-app-data' : 'host-shared';
-  }
-
-  function getAppAssociationSummary(app) {
-    const rows = Array.isArray(app?.fileAssociations) ? app.fileAssociations : [];
-    if (rows.length === 0) return '-';
-    const extensions = [];
-    for (const row of rows) {
-      const exts = Array.isArray(row?.extensions) ? row.extensions : [];
-      for (const ext of exts) {
-        if (!ext) continue;
-        extensions.push(`.${ext}`);
-        if (extensions.length >= 4) {
-          return `${extensions.join(', ')} +${Math.max(0, rows.length - 1)}`;
-        }
-      }
-    }
-    return extensions.length > 0 ? extensions.join(', ') : `${rows.length} association(s)`;
-  }
-
-  function getAppContributionSummary(app) {
-    const contributes = app?.contributes && typeof app.contributes === 'object' ? app.contributes : {};
-    const groups = [
-      ['menu', contributes.fileContextMenu],
-      ['templates', contributes.fileCreateTemplates],
-      ['preview', contributes.previewProviders],
-      ['thumbs', contributes.thumbnailProviders],
-      ['settings', contributes.settingsPanels],
-      ['services', contributes.backgroundServices]
-    ];
-    const parts = groups
-      .map(([label, rows]) => [label, Array.isArray(rows) ? rows.length : 0])
-      .filter(([, count]) => count > 0)
-      .map(([label, count]) => `${label}:${count}`);
-    return parts.length > 0 ? parts.join(', ') : '-';
-  }
-
-  async function loadDesktopAppModelStats() {
-    loadingDesktopApps = true;
-    try {
-      const response = await fetchDesktopApps();
-      const apps = Array.isArray(response) ? response : (Array.isArray(response?.apps) ? response.apps : []);
-      desktopAppInventory = [...apps]
-        .map((app) => ({
-          ...app,
-          appModel: normalizeAppModel(app),
-          ownerTier: normalizeOwnerTier(app),
-          dataBoundary: normalizeDataBoundary(app),
-          runtimeType: String(app?.runtimeType || app?.runtime || '').trim().toLowerCase() || 'builtin',
-          appType: String(app?.appType || app?.type || '').trim().toLowerCase() || 'app',
-          permissions: Array.isArray(app?.permissions) ? app.permissions : [],
-          fileAssociations: Array.isArray(app?.fileAssociations) ? app.fileAssociations : [],
-          contributes: app?.contributes && typeof app.contributes === 'object' && !Array.isArray(app.contributes)
-            ? app.contributes
-            : {
-              fileContextMenu: [],
-              fileCreateTemplates: [],
-              previewProviders: [],
-              thumbnailProviders: [],
-              settingsPanels: [],
-              backgroundServices: []
-            }
-        }))
-        .sort((a, b) => String(a.title || a.id || '').localeCompare(String(b.title || b.id || '')));
-      const next = {
-        system: 0,
-        standard: 0,
-        package: 0,
-        total: apps.length
-      };
-
-      for (const app of apps) {
-        const model = normalizeAppModel(app);
-        if (model === 'system') next.system += 1;
-        else if (model === 'package') next.package += 1;
-        else next.standard += 1;
-      }
-
-      desktopAppModelStats = next;
-    } catch (err) {
-      desktopAppInventory = [];
-      desktopAppModelStats = {
-        system: 0,
-        standard: 0,
-        package: 0,
-        total: 0
-      };
-      setFeedbackError(err, 'Failed to load desktop app contract.', 'Load desktop app contract', loadDesktopAppModelStats);
-    } finally {
-      loadingDesktopApps = false;
-    }
   }
 
   function setManifestMediaScopesAccepted(pkg, checked) {
@@ -3022,7 +3016,6 @@
       loadStorePackages(),
       loadEcosystemTemplates(),
       loadInstalledPackages(),
-      loadDesktopAppModelStats(),
       loadRuntimeStatuses()
     ]).catch(() => {});
     const timer = setInterval(() => {
@@ -3044,14 +3037,661 @@
 <div class="package-center">
   <aside class="category-panel glass-effect">
     <div class="panel-title">Package Center</div>
-    <button class="category {activeCategory === CATEGORY.STORE ? 'active' : ''}" onclick={() => activeCategory = CATEGORY.STORE}>
+    <div class="panel-kicker">Library</div>
+    <button class="category {activeCategory === CATEGORY.STORE ? 'active' : ''}" onclick={() => setActiveCategory(CATEGORY.STORE)}>
       <Store size={16} />
       <span>Store</span>
+      <small>{storePackages.length}</small>
     </button>
-    <button class="category {activeCategory === CATEGORY.INSTALLED ? 'active' : ''}" onclick={() => activeCategory = CATEGORY.INSTALLED}>
+    <button class="category {activeCategory === CATEGORY.INSTALLED ? 'active' : ''}" onclick={() => setActiveCategory(CATEGORY.INSTALLED)}>
       <LayoutGrid size={16} />
       <span>Installed</span>
+      <small>{installedPackages.length}</small>
     </button>
+
+    <div class="panel-divider"></div>
+    <section class="package-list-panel glass-effect">
+      <div class="package-list-head">
+        <div class="package-list-title">
+          <span>{activeCategory === CATEGORY.STORE ? 'Discover' : 'Installed'}</span>
+          <strong>{getFilteredActivePackageList().length} packages</strong>
+        </div>
+        <div class="package-list-actions">
+          {#if activeCategory === CATEGORY.STORE}
+            <button
+              class="btn icon {packageUtilityPanel === 'sources' ? 'active' : ''}"
+              onclick={() => { packageUtilityPanel = packageUtilityPanel === 'sources' ? '' : 'sources'; }}
+              title="Package sources"
+              aria-label="Package sources"
+              aria-pressed={packageUtilityPanel === 'sources'}
+            >
+              <Link2 size={15} />
+            </button>
+            <button
+              class="btn icon {packageUtilityPanel === 'zip' ? 'active' : ''}"
+              onclick={() => { packageUtilityPanel = packageUtilityPanel === 'zip' ? '' : 'zip'; }}
+              title="Import ZIP package"
+              aria-label="Import ZIP package"
+              aria-pressed={packageUtilityPanel === 'zip'}
+            >
+              <Upload size={15} />
+            </button>
+          {/if}
+          <button class="btn icon" onclick={reloadActivePackages} disabled={activeCategory === CATEGORY.STORE ? loadingStore : loadingInstalled} title="Reload" aria-label="Reload packages">
+            <RefreshCw size={15} />
+          </button>
+        </div>
+      </div>
+
+      <label class="library-search">
+        <Search size={15} />
+        <input type="search" bind:value={packageQuery} placeholder="Search packages" />
+      </label>
+
+      <div class="package-list-controls">
+        {#if activeCategory === CATEGORY.STORE}
+          <div class="package-create compact-create-panel">
+            <div class="compact-create-head">
+              <div>
+                <h3>Create Package</h3>
+                <div class="runtime-log-empty">Start from an app, widget, service, or hybrid package template.</div>
+              </div>
+            </div>
+
+            <div class="starter-apps compact">
+              <div class="section-title">Personal Starter Apps</div>
+              <div class="starter-apps-list">
+                {#each PERSONAL_STARTER_APPS as starter}
+                  {@const starterTemplate = getStarterTemplate(starter.templateId)}
+                  <button
+                    class="btn tiny"
+                    disabled={!starterTemplate || scaffoldingTemplateId === starter.templateId}
+                    onclick={() => scaffoldPersonalStarter(starter.templateId)}
+                  >
+                    {#if starterTemplate}
+                      {scaffoldingTemplateId === starter.templateId ? `Creating ${starter.title}...` : `Create ${starter.title}`}
+                    {:else}
+                      {starter.title} (template unavailable)
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            <div class="starter-apps compact">
+              <div class="section-title">Developer Tool Starters</div>
+              <div class="starter-apps-list">
+                {#each DEVELOPER_STARTER_APPS as starter}
+                  {@const starterTemplate = getStarterTemplate(starter.templateId)}
+                  <button
+                    class="btn tiny"
+                    disabled={!starterTemplate || scaffoldingTemplateId === starter.templateId}
+                    onclick={() => scaffoldPersonalStarter(starter.templateId)}
+                  >
+                    {#if starterTemplate}
+                      {scaffoldingTemplateId === starter.templateId ? `Creating ${starter.title}...` : `Create ${starter.title}`}
+                    {:else}
+                      {starter.title} (template unavailable)
+                    {/if}
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            {#if ecosystemTemplates.length > 0}
+              <div class="ecosystem-templates compact">
+                <div class="section-title">Official Ecosystem Templates</div>
+                <div class="template-list compact">
+                  {#each ecosystemTemplates as template}
+                    <article class="template-card compact">
+                      <div class="template-top">
+                        <strong>{template.title}</strong>
+                        <span>{template.category}</span>
+                      </div>
+                      <p>{template.description}</p>
+                      <button
+                        class="btn tiny"
+                        onclick={() => scaffoldTemplate(template)}
+                        disabled={scaffoldingTemplateId === template.id}
+                      >
+                        {scaffoldingTemplateId === template.id ? 'Creating...' : 'Create From Template'}
+                      </button>
+                    </article>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <div class="wizard-panel compact">
+              <div class="wizard-head">
+                <div>
+                  <div class="section-title">Package Creation Wizard</div>
+                  <div class="runtime-log-empty">Draft manifest, run preflight review, then create.</div>
+                </div>
+                <div class="wizard-steps">
+                  <span class="wizard-step {wizardPhase === 'draft' ? 'active' : ''}">1. Draft</span>
+                  <span class="wizard-step {wizardPhase === 'review' ? 'active' : ''}">2. Review</span>
+                </div>
+              </div>
+              <div class="wizard-form-grid compact">
+                <select value={wizardDraft.templateId} onchange={(event) => updateWizardDraft('templateId', event.currentTarget.value)}>
+                  <option value="">custom (no template)</option>
+                  {#each ecosystemTemplates as template}
+                    <option value={template.id}>{template.title}</option>
+                  {/each}
+                </select>
+                <input
+                  type="text"
+                  placeholder="id (e.g. demo-notes)"
+                  value={wizardDraft.id}
+                  oninput={(event) => updateWizardDraft('id', event.currentTarget.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="title"
+                  value={wizardDraft.title}
+                  oninput={(event) => updateWizardDraft('title', event.currentTarget.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="description"
+                  value={wizardDraft.description}
+                  oninput={(event) => updateWizardDraft('description', event.currentTarget.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="version"
+                  value={wizardDraft.version}
+                  oninput={(event) => updateWizardDraft('version', event.currentTarget.value)}
+                />
+                <select value={wizardDraft.appType} onchange={(event) => updateWizardDraft('appType', event.currentTarget.value)}>
+                  <option value="app">app</option>
+                  <option value="widget">widget</option>
+                  <option value="service">service</option>
+                  <option value="hybrid">hybrid</option>
+                  <option value="developer">developer</option>
+                </select>
+                <select value={wizardDraft.runtimeType} onchange={(event) => updateWizardDraft('runtimeType', event.currentTarget.value)}>
+                  <option value="sandbox-html">sandbox-html</option>
+                  <option value="process-node">process-node</option>
+                  <option value="process-python">process-python</option>
+                  <option value="binary">binary</option>
+                </select>
+                <input
+                  type="text"
+                  placeholder="entry (e.g. index.html)"
+                  value={wizardDraft.entry}
+                  oninput={(event) => updateWizardDraft('entry', event.currentTarget.value)}
+                />
+                {#if wizardDraft.appType === 'hybrid'}
+                  <input
+                    type="text"
+                    placeholder="ui entry (e.g. ui/index.html)"
+                    value={wizardDraft.uiEntry}
+                    oninput={(event) => updateWizardDraft('uiEntry', event.currentTarget.value)}
+                  />
+                {/if}
+                <input
+                  type="text"
+                  placeholder="permissions (comma-separated)"
+                  value={wizardDraft.permissions}
+                  oninput={(event) => updateWizardDraft('permissions', event.currentTarget.value)}
+                />
+              </div>
+              <div class="wizard-actions">
+                <button class="btn ghost" onclick={runWizardPreflight} disabled={wizardLoadingPreflight || wizardCreating}>
+                  {wizardLoadingPreflight ? 'Reviewing...' : 'Run Preflight'}
+                </button>
+                <button
+                  class="btn primary"
+                  onclick={createPackageFromWizard}
+                  disabled={wizardCreating || wizardLoadingPreflight || !wizardReview || wizardReview.blocked}
+                >
+                  {wizardCreating ? 'Creating...' : 'Create Package'}
+                </button>
+              </div>
+              {#if wizardReview}
+                <div class="preflight-panel">
+                  <div class="preflight-head">
+                    <div class="preflight-title">
+                      <strong>Wizard Preflight</strong>
+                      <span class="preflight-decision {wizardReview.blocked ? 'blocked' : wizardReview.decision}">
+                        {wizardReview.blocked ? 'BLOCKED' : String(wizardReview.decision || 'warn').toUpperCase()}
+                      </span>
+                    </div>
+                    <div class="runtime-log-empty">{wizardReview.source}</div>
+                  </div>
+                  <div class="preflight-summary-inline">{wizardReview.summary}</div>
+                  {#if wizardReview.blockers.length > 0}
+                    <div class="preflight-list">
+                      {#each wizardReview.blockers as blocker}
+                        <div class="preflight-item">
+                          <span class="preflight-item-status fail">FAIL</span>
+                          <strong>{blocker.label}</strong>
+                          {#if blocker.detail}
+                            <span class="preflight-item-detail">{blocker.detail}</span>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                  {#if wizardReview.lifecycleSafeguards?.checks?.length > 0}
+                    <div class="preflight-group">
+                      <div class="preflight-label">Lifecycle Safeguards</div>
+                      <div class="preflight-summary-inline">{wizardReview.lifecycleSafeguards.summary}</div>
+                      <div class="preflight-list">
+                        {#each wizardReview.lifecycleSafeguards.checks as item}
+                          <div class="preflight-item">
+                            <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                            <span>{item.label}</span>
+                            {#if item.detail}
+                              <span class="preflight-item-detail">{item.detail}</span>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                  <div class="preflight-group">
+                    <div class="preflight-label">Data Boundary</div>
+                    <div class="preflight-summary-inline">
+                      {wizardReview.localWorkspace?.status === 'inventory+local-workspace'
+                        ? 'inventory-app-data + local workspace bridge'
+                        : 'inventory-app-data only'}
+                    </div>
+                    {#if wizardReview.localWorkspace?.status === 'inventory+local-workspace'}
+                      <div class="ops-meta-list">
+                        <div>mode: {wizardReview.localWorkspace.mode || 'readwrite'}</div>
+                        <div>path: {wizardReview.localWorkspace.path || '-'}</div>
+                      </div>
+                    {:else}
+                      <div class="runtime-log-empty">No local workspace bridge requested.</div>
+                    {/if}
+                  </div>
+                  {#if wizardReview.toolPackageReview?.applies}
+                    <div class="preflight-group">
+                      <div class="preflight-label">Tool Package</div>
+                      <div class="preflight-summary-inline">{wizardReview.toolPackageReview.summary}</div>
+                      <div class="ops-meta-list">
+                        <div>runtime: {wizardReview.toolPackageReview.runtimeType || '-'}</div>
+                        <div>service: {wizardReview.toolPackageReview.serviceEntry || '-'}</div>
+                        <div>ui: {wizardReview.toolPackageReview.uiEntry || '-'}</div>
+                      </div>
+                      {#if wizardReview.toolPackageReview.checks.length > 0}
+                        <div class="preflight-list">
+                          {#each wizardReview.toolPackageReview.checks as item}
+                            <div class="preflight-item">
+                              <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                              <span>{item.label}</span>
+                              {#if item.detail}
+                                <span class="preflight-item-detail">{item.detail}</span>
+                              {/if}
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                  {#if wizardReview.onboarding?.steps?.length > 0 || wizardReview.onboarding?.commands?.length > 0}
+                    <div class="preflight-group">
+                      <div class="preflight-label">Third-Party Onboarding</div>
+                      <div class="preflight-summary-inline">{wizardReview.onboarding.summary}</div>
+                      {#if wizardReview.onboarding.steps.length > 0}
+                        <div class="preflight-list">
+                          {#each wizardReview.onboarding.steps as step}
+                            <div class="preflight-item">
+                              <span class="preflight-item-status {step.status}">{String(step.status || 'info').toUpperCase()}</span>
+                              <span>{step.label}</span>
+                              {#if step.detail}
+                                <span class="preflight-item-detail">{step.detail}</span>
+                              {/if}
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                      {#if wizardReview.onboarding.commands.length > 0}
+                        <div class="ops-meta-list">
+                          {#each wizardReview.onboarding.commands as command}
+                            <code>{command}</code>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        {#if activeCategory === CATEGORY.STORE && packageUtilityPanel === 'sources'}
+          <div class="package-utility-panel">
+            <div class="package-utility-head">
+              <h3>Package Sources</h3>
+              <button class="btn icon" onclick={loadStorePackages} disabled={loadingStore} title="Reload sources" aria-label="Reload sources">
+                <RefreshCw size={14} />
+              </button>
+            </div>
+
+            <div class="source-form">
+              <input type="text" bind:value={sourceForm.url} oninput={syncSourceId} placeholder="GitHub URL or raw JSON URL" />
+              <input type="text" bind:value={sourceForm.title} oninput={syncSourceId} placeholder="Store title" />
+              <input type="text" bind:value={sourceForm.id} placeholder="store-id" />
+              <button class="btn primary" onclick={saveStoreSource} disabled={savingSource}>
+                <Link2 size={14} />
+                {savingSource ? 'Saving...' : 'Add Source'}
+              </button>
+            </div>
+
+            <div class="source-hints">
+              <div>GitHub repository URL automatically resolves to `.../main/webos-store.json`.</div>
+              <div>GitHub blob URL is converted to raw content URL.</div>
+              <div>Direct raw JSON URL is also supported.</div>
+              {#if sourceForm.url.trim()}
+                <div class="source-preview">
+                  <span>Resolved URL</span>
+                  <code>{normalizeRegistryUrl(sourceForm.url)}</code>
+                </div>
+              {/if}
+            </div>
+
+            <div class="quick-install-profile">
+              <div class="quick-install-head">
+                <strong>Quick Install Profile</strong>
+                <span>Inventory remains canonical; local workspace bridge is optional.</span>
+              </div>
+              <label class="preflight-bypass">
+                <input
+                  type="checkbox"
+                  checked={installWorkspaceDraft.enabled}
+                  onchange={(event) => setInstallWorkspaceField('enabled', event.currentTarget.checked)}
+                />
+                Enable Local Workspace Bridge
+              </label>
+              <div class="quick-install-grid">
+                <input
+                  type="text"
+                  value={installWorkspaceDraft.path}
+                  oninput={(event) => setInstallWorkspaceField('path', event.currentTarget.value)}
+                  placeholder="/absolute/path/in/allowed-roots"
+                  disabled={!installWorkspaceDraft.enabled}
+                />
+                <select
+                  value={installWorkspaceDraft.mode}
+                  onchange={(event) => setInstallWorkspaceField('mode', event.currentTarget.value)}
+                  disabled={!installWorkspaceDraft.enabled}
+                >
+                  <option value="readwrite">readwrite</option>
+                  <option value="read">read</option>
+                </select>
+              </div>
+            </div>
+
+            {#if registrySources.length > 0}
+              <div class="sources">
+                {#each registrySources as source}
+                  <div class="source-pill">
+                    <span>{source.title} ({source.id})</span>
+                    <button class="btn tiny" onclick={() => removeStoreSource(source.id)}>Remove</button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else if activeCategory === CATEGORY.STORE && packageUtilityPanel === 'zip'}
+          <div class="package-utility-panel">
+            <div class="package-utility-head">
+              <div>
+                <h3>Import ZIP Package</h3>
+                <div class="runtime-log-empty">Upload a package ZIP directly when no registry source is available.</div>
+              </div>
+            </div>
+
+            <div class="zip-import-panel">
+              <div class="zip-import-grid">
+                {#key zipImportInputKey}
+                  <input
+                    type="file"
+                    accept=".zip,application/zip,application/x-zip-compressed"
+                    onchange={onZipImportFileChange}
+                    disabled={zipImportPreflighting || zipImporting}
+                  />
+                {/key}
+                <label class="preflight-bypass">
+                  <input
+                    type="checkbox"
+                    checked={zipImportOverwrite}
+                    onchange={(event) => setZipImportOverwrite(event.currentTarget.checked)}
+                    disabled={zipImportPreflighting || zipImporting}
+                  />
+                  Overwrite existing package if IDs match
+                </label>
+              </div>
+
+              {#if zipImportFile}
+                <div class="source-hints">
+                  <div>Selected: {zipImportFile.name} ({formatFileSize(zipImportFile.size)})</div>
+                  <div>{zipImportOverwrite ? 'Overwrite is enabled; backend should snapshot existing package data before replacement.' : 'Overwrite is off; matching installed package IDs should be rejected.'}</div>
+                </div>
+              {/if}
+
+              <div class="wizard-actions">
+                <button
+                  class="btn ghost"
+                  onclick={runZipImportPreflight}
+                  disabled={!zipImportFile || zipImportPreflighting || zipImporting}
+                >
+                  {zipImportPreflighting ? 'Reviewing...' : 'Review Import'}
+                </button>
+                <button
+                  class="btn primary"
+                  onclick={executeZipImport}
+                  disabled={
+                    !zipImportFile ||
+                    !zipImportReview ||
+                    zipImportReview.blocked ||
+                    zipImportPreflighting ||
+                    zipImporting ||
+                    zipImportLifecycleTypedInput.trim() !== getLifecycleTypedConfirmation(zipImportReview)
+                  }
+                >
+                  <Upload size={14} />
+                  {zipImporting ? 'Importing...' : 'Import ZIP'}
+                </button>
+              </div>
+
+              {#if zipImportReview}
+                <div class="preflight-panel">
+                  <div class="preflight-head">
+                    <div class="preflight-title">
+                      <strong>ZIP Import Review</strong>
+                      <span class="preflight-decision {zipImportReview.blocked ? 'blocked' : zipImportReview.decision}">
+                        {getInstallReviewDecisionLabel(zipImportReview)}
+                      </span>
+                    </div>
+                    <div class="runtime-log-empty">{zipImportReview.source === 'fallback' ? 'fallback review' : 'endpoint review'}</div>
+                  </div>
+                  {#if zipImportReview.loading}
+                    <div class="runtime-log-empty">Loading import checks...</div>
+                  {:else}
+                    <div class="preflight-summary">{zipImportReview.summary || 'Review the selected ZIP before importing.'}</div>
+                    {#if zipImportReview.blockedReason}
+                      <div class="preflight-blocked-reason">{zipImportReview.blockedReason}</div>
+                    {/if}
+                    <label class="approval-field">
+                      <span>Type {getLifecycleTypedConfirmation(zipImportReview)} to approve</span>
+                      <input
+                        bind:value={zipImportLifecycleTypedInput}
+                        disabled={zipImporting}
+                        autocomplete="off"
+                      />
+                    </label>
+                    <div class="preflight-grid">
+                      <div class="preflight-group">
+                        <div class="preflight-label">Selected File</div>
+                        <div class="ops-meta-list">
+                          <div>name: {zipImportReview.fileName || zipImportFile?.name || '-'}</div>
+                          <div>size: {formatFileSize(zipImportReview.fileSize || zipImportFile?.size)}</div>
+                          <div>overwrite: {zipImportReview.overwrite ? 'true' : 'false'}</div>
+                        </div>
+                      </div>
+
+                      <div class="preflight-group">
+                        <div class="preflight-label">Permissions</div>
+                        {#if zipImportReview.permissions.length === 0}
+                          <div class="runtime-log-empty">No permission data from preflight.</div>
+                        {:else}
+                          <div class="preflight-list">
+                            {#each zipImportReview.permissions as item}
+                              <div class="preflight-item">
+                                <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                <span>{item.label}</span>
+                                {#if item.detail}
+                                  <span class="preflight-item-detail">{item.detail}</span>
+                                {/if}
+                              </div>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+
+                      <div class="preflight-group">
+                        <div class="preflight-label">Backup / Rollback</div>
+                        <div class="preflight-summary-inline">{zipImportReview.backupSummary || (zipImportReview.overwrite ? 'Overwrite should create a backup snapshot.' : 'No backup required for first import.')}</div>
+                        {#if zipImportReview.backupChecks.length > 0}
+                          <div class="preflight-list">
+                            {#each zipImportReview.backupChecks as item}
+                              <div class="preflight-item">
+                                <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                <span>{item.label}</span>
+                                {#if item.detail}
+                                  <span class="preflight-item-detail">{item.detail}</span>
+                                {/if}
+                              </div>
+                            {/each}
+                          </div>
+                        {/if}
+                      </div>
+
+                      <div class="preflight-group">
+                        <div class="preflight-label">Data Boundary</div>
+                        <div class="preflight-summary-inline">
+                          {zipImportReview.localWorkspace?.status === 'inventory+local-workspace'
+                            ? 'inventory-app-data + local workspace bridge'
+                            : 'inventory-app-data only'}
+                        </div>
+                        {#if zipImportReview.localWorkspace?.status === 'inventory+local-workspace'}
+                          <div class="ops-meta-list">
+                            <div>mode: {zipImportReview.localWorkspace.mode || 'readwrite'}</div>
+                            <div>path: {zipImportReview.localWorkspace.path || '-'}</div>
+                          </div>
+                        {:else}
+                          <div class="runtime-log-empty">No local workspace bridge requested.</div>
+                        {/if}
+                      </div>
+
+                      {#if zipImportReview.toolPackageReview?.applies}
+                        <div class="preflight-group">
+                          <div class="preflight-label">Tool Package</div>
+                          <div class="preflight-summary-inline">{zipImportReview.toolPackageReview.summary}</div>
+                          <div class="ops-meta-list">
+                            <div>runtime: {zipImportReview.toolPackageReview.runtimeType || '-'}</div>
+                            <div>service: {zipImportReview.toolPackageReview.serviceEntry || '-'}</div>
+                            <div>ui: {zipImportReview.toolPackageReview.uiEntry || '-'}</div>
+                          </div>
+                          {#if zipImportReview.toolPackageReview.checks.length > 0}
+                            <div class="preflight-list">
+                              {#each zipImportReview.toolPackageReview.checks as item}
+                                <div class="preflight-item">
+                                  <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                  <span>{item.label}</span>
+                                  {#if item.detail}
+                                    <span class="preflight-item-detail">{item.detail}</span>
+                                  {/if}
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                      {/if}
+
+                      <div class="preflight-group">
+                        <div class="preflight-label">Lifecycle Safeguards</div>
+                        <div class="preflight-summary-inline">{zipImportReview.lifecycleSafeguards?.summary || 'No lifecycle safeguards from preflight.'}</div>
+                        {#if zipImportReview.lifecycleSafeguards?.checks?.length > 0}
+                          <div class="preflight-list">
+                            {#each zipImportReview.lifecycleSafeguards.checks as item}
+                              <div class="preflight-item">
+                                <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                <span>{item.label}</span>
+                                {#if item.detail}
+                                  <span class="preflight-item-detail">{item.detail}</span>
+                                {/if}
+                              </div>
+                            {/each}
+                          </div>
+                        {:else}
+                          <div class="runtime-log-empty">Import will rely on backend validation and audit logging.</div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        {#if activeCategory === CATEGORY.STORE && registrySources.length > 0}
+          <div class="compact-source-filter">
+            <button class="source-row {activeStoreSource === 'all' ? 'active' : ''}" onclick={() => { activeStoreSource = 'all'; selectedPackageKey = ''; }}>
+              <span>All Sources</span>
+              <small>{storePackages.length}</small>
+            </button>
+            {#each registrySources as source}
+              <button class="source-row {activeStoreSource === source.id ? 'active' : ''}" onclick={() => { activeStoreSource = source.id; selectedPackageKey = ''; }}>
+                <span>{source.title}</span>
+                <small>{storePackages.filter((pkg) => pkg.source?.id === source.id).length}</small>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="package-list">
+        {#if activeCategory === CATEGORY.STORE && loadingStore}
+          <div class="empty compact">Loading store packages...</div>
+        {:else if activeCategory === CATEGORY.INSTALLED && loadingInstalled}
+          <div class="empty compact">Loading installed packages...</div>
+        {:else if getFilteredActivePackageList().length === 0}
+          <div class="empty compact">No packages match this view.</div>
+        {:else}
+          {#each getFilteredActivePackageList() as pkg (getPackageKey(pkg))}
+            <button class="package-list-item {getPackageKey(pkg) === getPackageKey(getSelectedPackage()) ? 'active' : ''}" onclick={() => selectPackage(pkg)}>
+              <div class="list-icon">
+                {#if hasImageIcon(pkg)}
+                  <img class="icon-image" src={getIconUrl(pkg)} alt={pkg.title} loading="lazy" />
+                {:else}
+                  <Layers size={16} />
+                {/if}
+              </div>
+              <div class="list-copy">
+                <strong>{pkg.title || pkg.id}</strong>
+                <span>{pkg.id}</span>
+              </div>
+              <div class="list-meta">
+                <span>{getPackageKindLabel(pkg)}</span>
+                {#if activeCategory === CATEGORY.INSTALLED && isServicePackage(pkg)}
+                  <small class="{getRuntimeState(pkg)?.status || 'stopped'}">{getRuntimeStatusLabel(pkg)}</small>
+                {:else}
+                  <small>v{pkg.version || '-'}</small>
+                {/if}
+              </div>
+            </button>
+          {/each}
+        {/if}
+      </div>
+    </section>
   </aside>
 
   <section class="content">
@@ -3075,564 +3715,143 @@
       </div>
     {/if}
 
-    {#if activeCategory === CATEGORY.STORE}
-      <div class="block glass-effect">
-        <div class="block-head">
-          <h3>Add Store Source</h3>
-          <button class="btn ghost" onclick={loadStorePackages} disabled={loadingStore}>
-            <RefreshCw size={14} />
-            Reload
-          </button>
-        </div>
-
-        <div class="source-form">
-          <input type="text" bind:value={sourceForm.url} oninput={syncSourceId} placeholder="GitHub URL or raw JSON URL" />
-          <input type="text" bind:value={sourceForm.title} oninput={syncSourceId} placeholder="Store title" />
-          <input type="text" bind:value={sourceForm.id} placeholder="store-id" />
-          <button class="btn primary" onclick={saveStoreSource} disabled={savingSource}>
-            <Link2 size={14} />
-            {savingSource ? 'Saving...' : 'Add Source'}
-          </button>
-        </div>
-
-        <div class="source-hints">
-          <div>GitHub repository URL automatically resolves to `.../main/webos-store.json`.</div>
-          <div>GitHub blob URL is converted to raw content URL.</div>
-          <div>Direct raw JSON URL is also supported.</div>
-          {#if sourceForm.url.trim()}
-            <div class="source-preview">
-              <span>Resolved URL</span>
-              <code>{normalizeRegistryUrl(sourceForm.url)}</code>
-            </div>
-          {/if}
-        </div>
-
-        <div class="quick-install-profile">
-          <div class="quick-install-head">
-            <strong>Quick Install Profile</strong>
-            <span>Inventory remains canonical; local workspace bridge is optional.</span>
-          </div>
-          <label class="preflight-bypass">
-            <input
-              type="checkbox"
-              checked={installWorkspaceDraft.enabled}
-              onchange={(event) => setInstallWorkspaceField('enabled', event.currentTarget.checked)}
-            />
-            Enable Local Workspace Bridge
-          </label>
-          <div class="quick-install-grid">
-            <input
-              type="text"
-              value={installWorkspaceDraft.path}
-              oninput={(event) => setInstallWorkspaceField('path', event.currentTarget.value)}
-              placeholder="/absolute/path/in/allowed-roots"
-              disabled={!installWorkspaceDraft.enabled}
-            />
-            <select
-              value={installWorkspaceDraft.mode}
-              onchange={(event) => setInstallWorkspaceField('mode', event.currentTarget.value)}
-              disabled={!installWorkspaceDraft.enabled}
-            >
-              <option value="readwrite">readwrite</option>
-              <option value="read">read</option>
-            </select>
-          </div>
-        </div>
-
-        {#if registrySources.length > 0}
-          <div class="sources">
-            {#each registrySources as source}
-              <div class="source-pill">
-                <span>{source.title} ({source.id})</span>
-                <button class="btn tiny" onclick={() => removeStoreSource(source.id)}>Remove</button>
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
-
-      <div class="block glass-effect">
-        <div class="block-head">
-          <div>
-            <h3>Import ZIP Package</h3>
-            <div class="runtime-log-empty">Upload a package ZIP directly when no registry source is available.</div>
-          </div>
-        </div>
-
-        <div class="zip-import-panel">
-          <div class="zip-import-grid">
-            {#key zipImportInputKey}
-              <input
-                type="file"
-                accept=".zip,application/zip,application/x-zip-compressed"
-                onchange={onZipImportFileChange}
-                disabled={zipImportPreflighting || zipImporting}
-              />
-            {/key}
-            <label class="preflight-bypass">
-              <input
-                type="checkbox"
-                checked={zipImportOverwrite}
-                onchange={(event) => setZipImportOverwrite(event.currentTarget.checked)}
-                disabled={zipImportPreflighting || zipImporting}
-              />
-              Overwrite existing package if IDs match
-            </label>
-          </div>
-
-          {#if zipImportFile}
-            <div class="source-hints">
-              <div>Selected: {zipImportFile.name} ({formatFileSize(zipImportFile.size)})</div>
-              <div>{zipImportOverwrite ? 'Overwrite is enabled; backend should snapshot existing package data before replacement.' : 'Overwrite is off; matching installed package IDs should be rejected.'}</div>
-            </div>
-          {/if}
-
-          <div class="wizard-actions">
-            <button
-              class="btn ghost"
-              onclick={runZipImportPreflight}
-              disabled={!zipImportFile || zipImportPreflighting || zipImporting}
-            >
-              {zipImportPreflighting ? 'Reviewing...' : 'Review Import'}
-            </button>
-            <button
-              class="btn primary"
-              onclick={executeZipImport}
-              disabled={
-                !zipImportFile ||
-                !zipImportReview ||
-                zipImportReview.blocked ||
-                zipImportPreflighting ||
-                zipImporting ||
-                zipImportLifecycleTypedInput.trim() !== getLifecycleTypedConfirmation(zipImportReview)
-              }
-            >
-              <Upload size={14} />
-              {zipImporting ? 'Importing...' : 'Import ZIP'}
-            </button>
-          </div>
-
-          {#if zipImportReview}
-            <div class="preflight-panel">
-              <div class="preflight-head">
-                <div class="preflight-title">
-                  <strong>ZIP Import Review</strong>
-                  <span class="preflight-decision {zipImportReview.blocked ? 'blocked' : zipImportReview.decision}">
-                    {getInstallReviewDecisionLabel(zipImportReview)}
-                  </span>
-                </div>
-                <div class="runtime-log-empty">{zipImportReview.source === 'fallback' ? 'fallback review' : 'endpoint review'}</div>
-              </div>
-              {#if zipImportReview.loading}
-                <div class="runtime-log-empty">Loading import checks...</div>
+    {#if activeCategory === CATEGORY.STORE && getSelectedPackage()}
+      {@const selectedPackage = getSelectedPackage()}
+      {@const selectedDependencies = getPackageDependencies(selectedPackage)}
+      <div class="selected-package-detail glass-effect store-selected-detail">
+        <div class="installed-app-summary">
+          <div class="installed-app-icon">
+            <div class="icon-box">
+              {#if hasImageIcon(selectedPackage)}
+                <img class="icon-image" src={getIconUrl(selectedPackage)} alt={selectedPackage.title} loading="lazy" />
               {:else}
-                <div class="preflight-summary">{zipImportReview.summary || 'Review the selected ZIP before importing.'}</div>
-                {#if zipImportReview.blockedReason}
-                  <div class="preflight-blocked-reason">{zipImportReview.blockedReason}</div>
-                {/if}
-                <label class="approval-field">
-                  <span>Type {getLifecycleTypedConfirmation(zipImportReview)} to approve</span>
-                  <input
-                    bind:value={zipImportLifecycleTypedInput}
-                    disabled={zipImporting}
-                    autocomplete="off"
-                  />
-                </label>
-                <div class="preflight-grid">
-                  <div class="preflight-group">
-                    <div class="preflight-label">Selected File</div>
-                    <div class="ops-meta-list">
-                      <div>name: {zipImportReview.fileName || zipImportFile?.name || '-'}</div>
-                      <div>size: {formatFileSize(zipImportReview.fileSize || zipImportFile?.size)}</div>
-                      <div>overwrite: {zipImportReview.overwrite ? 'true' : 'false'}</div>
-                    </div>
-                  </div>
-
-                  <div class="preflight-group">
-                    <div class="preflight-label">Permissions</div>
-                    {#if zipImportReview.permissions.length === 0}
-                      <div class="runtime-log-empty">No permission data from preflight.</div>
-                    {:else}
-                      <div class="preflight-list">
-                        {#each zipImportReview.permissions as item}
-                          <div class="preflight-item">
-                            <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
-                            <span>{item.label}</span>
-                            {#if item.detail}
-                              <span class="preflight-item-detail">{item.detail}</span>
-                            {/if}
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-
-                  <div class="preflight-group">
-                    <div class="preflight-label">Backup / Rollback</div>
-                    <div class="preflight-summary-inline">{zipImportReview.backupSummary || (zipImportReview.overwrite ? 'Overwrite should create a backup snapshot.' : 'No backup required for first import.')}</div>
-                    {#if zipImportReview.backupChecks.length > 0}
-                      <div class="preflight-list">
-                        {#each zipImportReview.backupChecks as item}
-                          <div class="preflight-item">
-                            <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
-                            <span>{item.label}</span>
-                            {#if item.detail}
-                              <span class="preflight-item-detail">{item.detail}</span>
-                            {/if}
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-
-                  <div class="preflight-group">
-                    <div class="preflight-label">Data Boundary</div>
-                    <div class="preflight-summary-inline">
-                      {zipImportReview.localWorkspace?.status === 'inventory+local-workspace'
-                        ? 'inventory-app-data + local workspace bridge'
-                        : 'inventory-app-data only'}
-                    </div>
-                    {#if zipImportReview.localWorkspace?.status === 'inventory+local-workspace'}
-                      <div class="ops-meta-list">
-                        <div>mode: {zipImportReview.localWorkspace.mode || 'readwrite'}</div>
-                        <div>path: {zipImportReview.localWorkspace.path || '-'}</div>
-                      </div>
-                    {:else}
-                      <div class="runtime-log-empty">No local workspace bridge requested.</div>
-                    {/if}
-                  </div>
-
-                  {#if zipImportReview.toolPackageReview?.applies}
-                    <div class="preflight-group">
-                      <div class="preflight-label">Tool Package</div>
-                      <div class="preflight-summary-inline">{zipImportReview.toolPackageReview.summary}</div>
-                      <div class="ops-meta-list">
-                        <div>runtime: {zipImportReview.toolPackageReview.runtimeType || '-'}</div>
-                        <div>service: {zipImportReview.toolPackageReview.serviceEntry || '-'}</div>
-                        <div>ui: {zipImportReview.toolPackageReview.uiEntry || '-'}</div>
-                      </div>
-                      {#if zipImportReview.toolPackageReview.checks.length > 0}
-                        <div class="preflight-list">
-                          {#each zipImportReview.toolPackageReview.checks as item}
-                            <div class="preflight-item">
-                              <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
-                              <span>{item.label}</span>
-                              {#if item.detail}
-                                <span class="preflight-item-detail">{item.detail}</span>
-                              {/if}
-                            </div>
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
-                  {/if}
-
-                  <div class="preflight-group">
-                    <div class="preflight-label">Lifecycle Safeguards</div>
-                    <div class="preflight-summary-inline">{zipImportReview.lifecycleSafeguards?.summary || 'No lifecycle safeguards from preflight.'}</div>
-                    {#if zipImportReview.lifecycleSafeguards?.checks?.length > 0}
-                      <div class="preflight-list">
-                        {#each zipImportReview.lifecycleSafeguards.checks as item}
-                          <div class="preflight-item">
-                            <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
-                            <span>{item.label}</span>
-                            {#if item.detail}
-                              <span class="preflight-item-detail">{item.detail}</span>
-                            {/if}
-                          </div>
-                        {/each}
-                      </div>
-                    {:else}
-                      <div class="runtime-log-empty">Import will rely on backend validation and audit logging.</div>
-                    {/if}
-                  </div>
-                </div>
+                <LayoutGrid size={18} />
               {/if}
             </div>
-          {/if}
+          </div>
+          <div class="installed-app-main">
+            <div class="installed-app-title-row">
+              <div>
+                <h3>{selectedPackage.title || selectedPackage.id}</h3>
+                <span>{selectedPackage.id}</span>
+              </div>
+              <div class="installed-primary-actions">
+                {#if selectedPackage.installed}
+                  {#if selectedPackage.updatePolicy?.allowed}
+                    <button class="btn primary" onclick={() => quickInstallPackage(selectedPackage, { overwrite: true })} disabled={installingPackageId === selectedPackage.id || installReview?.loading}>
+                      <Download size={14} />
+                      {installingPackageId === selectedPackage.id ? 'Updating...' : 'Quick Update'}
+                    </button>
+                    <button class="btn ghost" onclick={() => openInstallReview(selectedPackage, { overwrite: true })} disabled={installingPackageId === selectedPackage.id || installReview?.loading}>
+                      Review
+                    </button>
+                  {:else}
+                    <button class="btn ghost" disabled>Installed</button>
+                  {/if}
+                {:else if !selectedPackage.zipUrl}
+                  <button class="btn ghost" disabled>No Zip</button>
+                {:else}
+                  <button class="btn primary" onclick={() => quickInstallPackage(selectedPackage)} disabled={installingPackageId === selectedPackage.id || installReview?.loading}>
+                    <Download size={14} />
+                    {installingPackageId === selectedPackage.id ? 'Installing...' : 'Quick Install'}
+                  </button>
+                  <button class="btn ghost" onclick={() => openInstallReview(selectedPackage)} disabled={installingPackageId === selectedPackage.id || installReview?.loading}>
+                    Review
+                  </button>
+                {/if}
+              </div>
+            </div>
+            <div class="installed-status-line">
+              <span>{selectedPackage.installed ? 'Installed' : 'Available'}</span>
+              <span>{getPackageKindLabel(selectedPackage)}</span>
+            </div>
+          </div>
+        </div>
+        <div class="installed-detail-layout">
+          <section class="installed-spec-panel installed-description-panel">
+            <div class="installed-spec-title">Description</div>
+            <p>{selectedPackage.description || 'No description provided.'}</p>
+          </section>
+          <section class="installed-spec-panel">
+            <div class="installed-spec-title">Information</div>
+            <div class="installed-spec-list">
+              <div>
+                <span>Identifier</span>
+                <strong>{selectedPackage.id}</strong>
+              </div>
+              <div>
+                <span>Type</span>
+                <strong>{selectedPackage.appType || selectedPackage.type || 'app'}</strong>
+              </div>
+              <div>
+                <span>Runtime</span>
+                <strong>{selectedPackage.runtime || selectedPackage.runtimeProfile?.runtimeType || '-'}</strong>
+              </div>
+              <div>
+                <span>Source</span>
+                <strong>{getPackageSourceLabel(selectedPackage)}</strong>
+              </div>
+            </div>
+          </section>
+          <section class="installed-spec-panel">
+            <div class="installed-spec-title">Version</div>
+            <div class="installed-spec-list">
+              <div>
+                <span>Version</span>
+                <strong>{selectedPackage.version || '-'}</strong>
+              </div>
+              <div>
+                <span>Channel</span>
+                <strong>{selectedPackage.channel || selectedPackage.releaseChannel || 'stable'}</strong>
+              </div>
+              <div>
+                <span>Store ID</span>
+                <strong>{selectedPackage.source?.id || 'store'}</strong>
+              </div>
+              <div>
+                <span>Zip</span>
+                <strong>{selectedPackage.zipUrl ? 'Ready' : 'Unavailable'}</strong>
+              </div>
+            </div>
+          </section>
+          <section class="installed-spec-panel">
+            <div class="installed-spec-title">Status</div>
+            <div class="installed-spec-list">
+              <div>
+                <span>Install State</span>
+                <strong>{selectedPackage.installed ? 'Installed' : 'Available'}</strong>
+              </div>
+              <div>
+                <span>Update</span>
+                <strong>{selectedPackage.installed ? (selectedPackage.updatePolicy?.allowed ? 'Available' : 'Blocked') : '-'}</strong>
+              </div>
+              <div>
+                <span>Policy</span>
+                <strong>{selectedPackage.updatePolicy?.blockedReason || '-'}</strong>
+              </div>
+              <div>
+                <span>Boundary</span>
+                <strong>{getWorkspaceBoundaryLabel(selectedPackage)}</strong>
+              </div>
+            </div>
+          </section>
+          <section class="installed-spec-panel">
+            <div class="installed-spec-title">Dependencies</div>
+            {#if selectedDependencies.length > 0}
+              <div class="installed-dependency-list">
+                {#each selectedDependencies as dependency}
+                  <span>{dependency}</span>
+                {/each}
+              </div>
+            {:else}
+              <div class="runtime-log-empty">No dependencies declared.</div>
+            {/if}
+          </section>
         </div>
       </div>
+    {/if}
 
-      <div class="block glass-effect">
-        <div class="block-head">
-          <h3>Store Packages</h3>
-        </div>
-
-        <div class="starter-apps">
-          <div class="section-title">Personal Starter Apps</div>
-          <div class="starter-apps-list">
-            {#each PERSONAL_STARTER_APPS as starter}
-              {@const starterTemplate = getStarterTemplate(starter.templateId)}
-              <button
-                class="btn tiny"
-                disabled={!starterTemplate || scaffoldingTemplateId === starter.templateId}
-                onclick={() => scaffoldPersonalStarter(starter.templateId)}
-              >
-                {#if starterTemplate}
-                  {scaffoldingTemplateId === starter.templateId ? `Creating ${starter.title}...` : `Create ${starter.title}`}
-                {:else}
-                  {starter.title} (template unavailable)
-                {/if}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="starter-apps">
-          <div class="section-title">Developer Tool Starters</div>
-          <div class="starter-apps-list">
-            {#each DEVELOPER_STARTER_APPS as starter}
-              {@const starterTemplate = getStarterTemplate(starter.templateId)}
-              <button
-                class="btn tiny"
-                disabled={!starterTemplate || scaffoldingTemplateId === starter.templateId}
-                onclick={() => scaffoldPersonalStarter(starter.templateId)}
-              >
-                {#if starterTemplate}
-                  {scaffoldingTemplateId === starter.templateId ? `Creating ${starter.title}...` : `Create ${starter.title}`}
-                {:else}
-                  {starter.title} (template unavailable)
-                {/if}
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        {#if ecosystemTemplates.length > 0}
-          <div class="ecosystem-templates">
-            <div class="section-title">Official Ecosystem Templates</div>
-            <div class="template-list">
-              {#each ecosystemTemplates as template}
-                <article class="template-card">
-                  <div class="template-top">
-                    <strong>{template.title}</strong>
-                    <span>{template.category}</span>
-                  </div>
-                  <p>{template.description}</p>
-                  <button
-                    class="btn tiny"
-                    onclick={() => scaffoldTemplate(template)}
-                    disabled={scaffoldingTemplateId === template.id}
-                  >
-                    {scaffoldingTemplateId === template.id ? 'Creating...' : 'Create From Template'}
-                  </button>
-                </article>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        <div class="wizard-panel">
-          <div class="wizard-head">
-            <div>
-              <div class="section-title">Package Creation Wizard</div>
-              <div class="runtime-log-empty">Draft manifest, run preflight review, then create.</div>
-            </div>
-            <div class="wizard-steps">
-              <span class="wizard-step {wizardPhase === 'draft' ? 'active' : ''}">1. Draft</span>
-              <span class="wizard-step {wizardPhase === 'review' ? 'active' : ''}">2. Review</span>
-            </div>
-          </div>
-          <div class="wizard-form-grid">
-            <select value={wizardDraft.templateId} onchange={(event) => updateWizardDraft('templateId', event.currentTarget.value)}>
-              <option value="">custom (no template)</option>
-              {#each ecosystemTemplates as template}
-                <option value={template.id}>{template.title}</option>
-              {/each}
-            </select>
-            <input
-              type="text"
-              placeholder="id (e.g. demo-notes)"
-              value={wizardDraft.id}
-              oninput={(event) => updateWizardDraft('id', event.currentTarget.value)}
-            />
-            <input
-              type="text"
-              placeholder="title"
-              value={wizardDraft.title}
-              oninput={(event) => updateWizardDraft('title', event.currentTarget.value)}
-            />
-            <input
-              type="text"
-              placeholder="description"
-              value={wizardDraft.description}
-              oninput={(event) => updateWizardDraft('description', event.currentTarget.value)}
-            />
-            <input
-              type="text"
-              placeholder="version"
-              value={wizardDraft.version}
-              oninput={(event) => updateWizardDraft('version', event.currentTarget.value)}
-            />
-            <select value={wizardDraft.appType} onchange={(event) => updateWizardDraft('appType', event.currentTarget.value)}>
-              <option value="app">app</option>
-              <option value="widget">widget</option>
-              <option value="service">service</option>
-              <option value="hybrid">hybrid</option>
-              <option value="developer">developer</option>
-            </select>
-            <select value={wizardDraft.runtimeType} onchange={(event) => updateWizardDraft('runtimeType', event.currentTarget.value)}>
-              <option value="sandbox-html">sandbox-html</option>
-              <option value="process-node">process-node</option>
-              <option value="process-python">process-python</option>
-              <option value="binary">binary</option>
-            </select>
-            <input
-              type="text"
-              placeholder="entry (e.g. index.html)"
-              value={wizardDraft.entry}
-              oninput={(event) => updateWizardDraft('entry', event.currentTarget.value)}
-            />
-            {#if wizardDraft.appType === 'hybrid'}
-              <input
-                type="text"
-                placeholder="ui entry (e.g. ui/index.html)"
-                value={wizardDraft.uiEntry}
-                oninput={(event) => updateWizardDraft('uiEntry', event.currentTarget.value)}
-              />
-            {/if}
-            <input
-              type="text"
-              placeholder="permissions (comma-separated)"
-              value={wizardDraft.permissions}
-              oninput={(event) => updateWizardDraft('permissions', event.currentTarget.value)}
-            />
-          </div>
-          <div class="wizard-actions">
-            <button class="btn ghost" onclick={runWizardPreflight} disabled={wizardLoadingPreflight || wizardCreating}>
-              {wizardLoadingPreflight ? 'Reviewing...' : 'Run Preflight'}
-            </button>
-            <button
-              class="btn primary"
-              onclick={createPackageFromWizard}
-              disabled={wizardCreating || wizardLoadingPreflight || !wizardReview || wizardReview.blocked}
-            >
-              {wizardCreating ? 'Creating...' : 'Create Package'}
-            </button>
-          </div>
-          {#if wizardReview}
-            <div class="preflight-panel">
-              <div class="preflight-head">
-                <div class="preflight-title">
-                  <strong>Wizard Preflight</strong>
-                  <span class="preflight-decision {wizardReview.blocked ? 'blocked' : wizardReview.decision}">
-                    {wizardReview.blocked ? 'BLOCKED' : String(wizardReview.decision || 'warn').toUpperCase()}
-                  </span>
-                </div>
-                <div class="runtime-log-empty">{wizardReview.source}</div>
-              </div>
-              <div class="preflight-summary-inline">{wizardReview.summary}</div>
-              {#if wizardReview.blockers.length > 0}
-                <div class="preflight-list">
-                  {#each wizardReview.blockers as blocker}
-                    <div class="preflight-item">
-                      <span class="preflight-item-status fail">FAIL</span>
-                      <strong>{blocker.label}</strong>
-                      {#if blocker.detail}
-                        <span class="preflight-item-detail">{blocker.detail}</span>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-              {#if wizardReview.lifecycleSafeguards?.checks?.length > 0}
-                <div class="preflight-group">
-                  <div class="preflight-label">Lifecycle Safeguards</div>
-                  <div class="preflight-summary-inline">{wizardReview.lifecycleSafeguards.summary}</div>
-                  <div class="preflight-list">
-                    {#each wizardReview.lifecycleSafeguards.checks as item}
-                      <div class="preflight-item">
-                        <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
-                        <span>{item.label}</span>
-                        {#if item.detail}
-                          <span class="preflight-item-detail">{item.detail}</span>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
-              <div class="preflight-group">
-                <div class="preflight-label">Data Boundary</div>
-                <div class="preflight-summary-inline">
-                  {wizardReview.localWorkspace?.status === 'inventory+local-workspace'
-                    ? 'inventory-app-data + local workspace bridge'
-                    : 'inventory-app-data only'}
-                </div>
-                {#if wizardReview.localWorkspace?.status === 'inventory+local-workspace'}
-                  <div class="ops-meta-list">
-                    <div>mode: {wizardReview.localWorkspace.mode || 'readwrite'}</div>
-                    <div>path: {wizardReview.localWorkspace.path || '-'}</div>
-                  </div>
-                {:else}
-                  <div class="runtime-log-empty">No local workspace bridge requested.</div>
-                {/if}
-              </div>
-              {#if wizardReview.toolPackageReview?.applies}
-                <div class="preflight-group">
-                  <div class="preflight-label">Tool Package</div>
-                  <div class="preflight-summary-inline">{wizardReview.toolPackageReview.summary}</div>
-                  <div class="ops-meta-list">
-                    <div>runtime: {wizardReview.toolPackageReview.runtimeType || '-'}</div>
-                    <div>service: {wizardReview.toolPackageReview.serviceEntry || '-'}</div>
-                    <div>ui: {wizardReview.toolPackageReview.uiEntry || '-'}</div>
-                  </div>
-                  {#if wizardReview.toolPackageReview.checks.length > 0}
-                    <div class="preflight-list">
-                      {#each wizardReview.toolPackageReview.checks as item}
-                        <div class="preflight-item">
-                          <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
-                          <span>{item.label}</span>
-                          {#if item.detail}
-                            <span class="preflight-item-detail">{item.detail}</span>
-                          {/if}
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-              {#if wizardReview.onboarding?.steps?.length > 0 || wizardReview.onboarding?.commands?.length > 0}
-                <div class="preflight-group">
-                  <div class="preflight-label">Third-Party Onboarding</div>
-                  <div class="preflight-summary-inline">{wizardReview.onboarding.summary}</div>
-                  {#if wizardReview.onboarding.steps.length > 0}
-                    <div class="preflight-list">
-                      {#each wizardReview.onboarding.steps as step}
-                        <div class="preflight-item">
-                          <span class="preflight-item-status {step.status}">{String(step.status || 'info').toUpperCase()}</span>
-                          <span>{step.label}</span>
-                          {#if step.detail}
-                            <span class="preflight-item-detail">{step.detail}</span>
-                          {/if}
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                  {#if wizardReview.onboarding.commands.length > 0}
-                    <div class="ops-meta-list">
-                      {#each wizardReview.onboarding.commands as command}
-                        <code>{command}</code>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-
-        <div class="store-categories">
-          <button class="store-filter {activeStoreSource === 'all' ? 'active' : ''}" onclick={() => activeStoreSource = 'all'}>
-            All ({storePackages.length})
-          </button>
-          {#each registrySources as source}
-            <button class="store-filter {activeStoreSource === source.id ? 'active' : ''}" onclick={() => activeStoreSource = source.id}>
-              {source.title} ({getSourcePackageCount(source.id)})
-            </button>
-          {/each}
-        </div>
-
+    {#if activeCategory === CATEGORY.STORE}
         {#if storeSourceErrors.length > 0}
           <div class="source-errors">
             {#each storeSourceErrors as sourceError}
@@ -3648,10 +3867,12 @@
           <div class="empty">Loading store packages...</div>
         {:else if getVisibleStorePackages().length === 0}
           <div class="empty">No packages found for the selected source.</div>
-        {:else}
-          <div class="grid">
-            {#each getVisibleStorePackages() as pkg}
-              <article class="card">
+        {:else if getFilteredActivePackageList().length === 0}
+          <div class="empty">No packages match the current search.</div>
+        {:else if installReview && getSelectedPackage() && installReview.packageId === getSelectedPackage().id}
+          <div class="grid selected-package-management">
+            {#each getSelectedPackageRows() as pkg}
+              <article class="card selected-management-card">
                 <div class="card-head">
                   <div class="icon-box">
                     {#if hasImageIcon(pkg)}
@@ -3949,119 +4170,200 @@
             {/each}
           </div>
         {/if}
-      </div>
     {/if}
 
     {#if activeCategory === CATEGORY.INSTALLED}
-      <div class="block glass-effect">
-        <div class="block-head">
-          <h3>Installed</h3>
-          <button
-            class="btn ghost"
-            onclick={() => Promise.all([loadInstalledPackages(), loadDesktopAppModelStats(), loadRuntimeStatuses()])}
-            disabled={loadingInstalled || loadingDesktopApps}
-          >
-            <RefreshCw size={14} />
-            Refresh
-          </button>
-        </div>
-        <div class="app-model-summary">
-          <span class="model-chip system">SYS {desktopAppModelStats.system}</span>
-          <span class="model-chip standard">APP {desktopAppModelStats.standard}</span>
-          <span class="model-chip package">PKG {desktopAppModelStats.package}</span>
-          <span class="model-chip total">TOTAL {desktopAppModelStats.total}</span>
-        </div>
-        <div class="desktop-app-inventory">
-          <div class="desktop-app-head">
-            <h4>Desktop App Contract</h4>
-            <span>{desktopAppInventory.length} apps</span>
-          </div>
-          {#if loadingDesktopApps}
-            <div class="runtime-log-empty">Loading desktop app contract...</div>
-          {:else if desktopAppInventory.length === 0}
-            <div class="runtime-log-empty">No desktop apps.</div>
-          {:else}
-            <div class="desktop-app-list">
-              {#each desktopAppInventory as app}
-                <div class="desktop-app-row">
-                  <div class="desktop-app-main">
-                    <span class="desktop-app-title">{app.title || app.id}</span>
-                    <span class="desktop-app-id">{app.id}</span>
-                  </div>
-                  <div class="desktop-app-meta">
-                    <span>{app.appModel}</span>
-                    <span>{app.ownerTier}</span>
-                    <span>{app.runtimeType}</span>
-                    <span>{app.appType}</span>
-                    <span>{app.dataBoundary}</span>
-                    <span>perm:{app.permissions.length}</span>
-                    <span>assoc:{getAppAssociationSummary(app)}</span>
-                    <span>contrib:{getAppContributionSummary(app)}</span>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
+      <div class="block glass-effect installed-management">
         {#if loadingInstalled}
           <div class="empty">Loading installed packages...</div>
         {:else if installedPackages.length === 0}
           <div class="empty">No installed packages.</div>
+        {:else if getFilteredActivePackageList().length === 0}
+          <div class="empty">No installed packages match the current search.</div>
         {:else}
-          <div class="grid">
-            {#each installedPackages as pkg}
-              <article class="card">
-                <div class="card-head">
-                  <div class="icon-box">
-                    {#if hasImageIcon(pkg)}
-                      <img class="icon-image" src={getIconUrl(pkg)} alt={pkg.title} loading="lazy" />
+          <div class="grid selected-package-management">
+            {#each getSelectedPackageRows() as pkg}
+              {@const packageWidgets = getPackageWidgets(pkg)}
+              {@const dependencyItems = getPackageDependencies(pkg)}
+              <article class="card selected-management-card">
+                <div class="installed-app-summary">
+                  <div class="installed-app-icon">
+                    <div class="icon-box">
+                      {#if hasImageIcon(pkg)}
+                        <img class="icon-image" src={getIconUrl(pkg)} alt={pkg.title} loading="lazy" />
+                      {:else}
+                        <LayoutGrid size={18} />
+                      {/if}
+                    </div>
+                  </div>
+                  <div class="installed-app-main">
+                    <div class="installed-app-title-row">
+                      <div>
+                        <h3>{pkg.title || pkg.id}</h3>
+                        <span>{pkg.id}</span>
+                      </div>
+                      <div class="installed-primary-actions">
+                        {#if canOpenPackage(pkg)}
+                          <button class="btn primary" onclick={() => openInstalledPackage(pkg)}>
+                            <Play size={14} />
+                            Open
+                          </button>
+                        {/if}
+                        {#if isServicePackage(pkg)}
+                          <button class="btn ghost" onclick={() => controlRuntime(pkg, 'start')} disabled={runtimeActioning === `${pkg.id}:start` || isRuntimeRunning(pkg)}>
+                            <Play size={14} />
+                            Start
+                          </button>
+                          <button class="btn ghost" onclick={() => controlRuntime(pkg, 'stop')} disabled={runtimeActioning === `${pkg.id}:stop` || !isRuntimeRunning(pkg)}>
+                            <Square size={14} />
+                            Stop
+                          </button>
+                        {/if}
+                        <button
+                          class="btn ghost"
+                          onclick={() => Promise.all([loadInstalledPackages(), loadRuntimeStatuses()])}
+                          disabled={loadingInstalled}
+                        >
+                          <RefreshCw size={14} />
+                          Refresh
+                        </button>
+                      </div>
+                    </div>
+                    <div class="installed-status-line">
+                      <span>{isServicePackage(pkg) ? getRuntimeStatusLabel(pkg) : 'Installed'}</span>
+                      <span>{getPackageKindLabel(pkg)}</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="installed-detail-layout">
+                  <section class="installed-spec-panel installed-description-panel">
+                    <div class="installed-spec-title">Description</div>
+                    <p>{pkg.description || 'No description provided.'}</p>
+                  </section>
+                  <section class="installed-spec-panel">
+                    <div class="installed-spec-title">Information</div>
+                    <div class="installed-spec-list">
+                      <div>
+                        <span>Identifier</span>
+                        <strong>{pkg.id}</strong>
+                      </div>
+                      <div>
+                        <span>Type</span>
+                        <strong>{pkg.appType || pkg.type || 'app'}</strong>
+                      </div>
+                      <div>
+                        <span>Runtime</span>
+                        <strong>{pkg.runtime || pkg.runtimeProfile?.runtimeType || '-'}</strong>
+                      </div>
+                      <div>
+                        <span>Boundary</span>
+                        <strong>{getWorkspaceBoundaryLabel(pkg)}</strong>
+                      </div>
+                    </div>
+                  </section>
+                  <section class="installed-spec-panel">
+                    <div class="installed-spec-title">Version</div>
+                    <div class="installed-spec-list">
+                      <div>
+                        <span>Version</span>
+                        <strong>{pkg.version || '-'}</strong>
+                      </div>
+                      <div>
+                        <span>Channel</span>
+                        <strong>{getLifecycleCurrentChannel(pkg)}</strong>
+                      </div>
+                      <div>
+                        <span>Installed</span>
+                        <strong>{formatDateTime(getLifecycle(pkg)?.current?.installedAt)}</strong>
+                      </div>
+                      <div>
+                        <span>Source</span>
+                        <strong>{getLifecycle(pkg)?.current?.source || pkg.source?.id || '-'}</strong>
+                      </div>
+                    </div>
+                  </section>
+                  <section class="installed-spec-panel">
+                    <div class="installed-spec-title">Status</div>
+                    <div class="installed-spec-list">
+                      <div>
+                        <span>Runtime</span>
+                        <strong>{isServicePackage(pkg) ? getRuntimeStatusLabel(pkg) : 'Installed'}</strong>
+                      </div>
+                      <div class="installed-health-field">
+                        <span>Health</span>
+                        <strong class="health {getHealthStatus(pkg)}">{getHealthStatusText(pkg)}</strong>
+                        <button class="btn tiny ghost" onclick={() => runHealthCheck(pkg)} disabled={healthLoading === pkg.id}>
+                          {healthLoading === pkg.id ? 'Checking...' : 'Run Check'}
+                        </button>
+                      </div>
+                      <div>
+                        <span>Last Check</span>
+                        <strong>{formatDateTime(getHealthReport(pkg)?.checkedAt)}</strong>
+                      </div>
+                      <div>
+                        <span>Summary</span>
+                        <strong>{getHealthReport(pkg)?.summary || '-'}</strong>
+                      </div>
+                    </div>
+                  </section>
+                  <section class="installed-spec-panel">
+                    <div class="installed-spec-title">Dependencies</div>
+                    {#if dependencyItems.length > 0}
+                      <div class="installed-dependency-list">
+                        {#each dependencyItems as dependency}
+                          <span>{dependency}</span>
+                        {/each}
+                      </div>
                     {:else}
-                      <LayoutGrid size={18} />
+                      <div class="runtime-log-empty">No dependencies declared.</div>
                     {/if}
-                  </div>
-                  <div class="meta">
-                    <h4>{pkg.title}</h4>
-                    <p>{pkg.description || 'No description'}</p>
-                  </div>
-                </div>
-                <div class="chips">
-                  <span>v{pkg.version}</span>
-                  <span>{pkg.runtime}</span>
-                  <span>cap:{pkg.appType || pkg.type || 'app'}</span>
+                  </section>
                   {#if (pkg.appType || pkg.type) === 'hybrid'}
-                    <span>ui:{pkg.ui?.entry || pkg.runtimeProfile?.ui?.entry || pkg.entry || '-'}</span>
-                    <span>svc:{pkg.service?.entry || pkg.runtimeProfile?.entry || '-'}</span>
+                    <section class="installed-spec-panel">
+                      <div class="installed-spec-title">Entrypoints</div>
+                      <div class="installed-spec-list">
+                        <div>
+                          <span>UI</span>
+                          <strong>{pkg.ui?.entry || pkg.runtimeProfile?.ui?.entry || pkg.entry || '-'}</strong>
+                        </div>
+                        <div>
+                          <span>Service</span>
+                          <strong>{pkg.service?.entry || pkg.runtimeProfile?.entry || '-'}</strong>
+                        </div>
+                      </div>
+                    </section>
                   {/if}
-                  <span class="boundary-chip {getWorkspaceBridge(pkg).status === 'inventory+local-workspace' ? 'local' : 'inventory'}">
-                    boundary:{getWorkspaceBoundaryLabel(pkg)}
-                  </span>
-                  <span>channel:{getLifecycleCurrentChannel(pkg)}</span>
-                  <span class="health {getHealthStatus(pkg)}">health:{String(getHealthStatus(pkg)).toUpperCase()}</span>
-                  {#if isServicePackage(pkg)}
-                    <span class="runtime {getRuntimeState(pkg)?.status || 'stopped'}">{getRuntimeStatusLabel(pkg)}</span>
+                  {#if packageWidgets.length > 0}
+                    <section class="installed-spec-panel">
+                      <div class="installed-spec-title">Widgets</div>
+                      <strong>{packageWidgets.length}</strong>
+                    </section>
                   {/if}
                 </div>
-                <div class="actions">
+                {#if packageWidgets.length > 0}
+                  <div class="package-widgets">
+                    {#each packageWidgets as contribution}
+                      <div class="package-widget-row">
+                        <div>
+                          <strong>{contribution.title || contribution.label}</strong>
+                          <span>{contribution.entry}</span>
+                        </div>
+                        <button class="btn ghost" onclick={() => addPackageWidget(pkg, contribution)}>
+                          <Plus size={14} />
+                          Add Widget
+                        </button>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+                <div class="actions installed-management-actions">
                   {#if canOpenPackage(pkg)}
-                    <button class="btn primary" onclick={() => openInstalledPackage(pkg)}>
-                      <Play size={14} />
-                      Open
-                    </button>
                     <button class="btn ghost" onclick={() => stopInstalledPackage(pkg)}>
                       <Square size={14} />
                       Close Windows
                     </button>
                   {/if}
                   {#if isServicePackage(pkg)}
-                    <button class="btn ghost" onclick={() => controlRuntime(pkg, 'start')} disabled={runtimeActioning === `${pkg.id}:start` || isRuntimeRunning(pkg)}>
-                      <Play size={14} />
-                      Start
-                    </button>
-                    <button class="btn ghost" onclick={() => controlRuntime(pkg, 'stop')} disabled={runtimeActioning === `${pkg.id}:stop` || !isRuntimeRunning(pkg)}>
-                      <Square size={14} />
-                      Stop Service
-                    </button>
                     <button class="btn ghost" onclick={() => controlRuntime(pkg, 'restart')} disabled={runtimeActioning === `${pkg.id}:restart`}>
                       <RotateCcw size={14} />
                       Restart
@@ -4070,9 +4372,6 @@
                       {runtimeLogsByApp[pkg.id] ? 'Hide Logs' : (runtimeLogsLoading === pkg.id ? 'Loading Logs...' : 'Logs')}
                     </button>
                   {/if}
-                  <button class="btn ghost" onclick={() => runHealthCheck(pkg)} disabled={healthLoading === pkg.id}>
-                    {healthLoading === pkg.id ? 'Health...' : 'Health'}
-                  </button>
                   <button class="btn ghost" onclick={() => toggleOpsConsole(pkg)} disabled={lifecycleLoading === pkg.id || runtimeEventsLoading === pkg.id}>
                     {isConsoleOpen(pkg) ? 'Ops Close' : 'Ops Console'}
                   </button>
@@ -4688,57 +4987,386 @@
 <style>
   .package-center {
     height: 100%;
-    padding: 20px;
+    min-height: 0;
+    padding: 14px;
     display: grid;
-    grid-template-columns: 220px 1fr;
-    gap: 16px;
+    grid-template-columns: minmax(360px, 440px) minmax(0, 1fr);
+    gap: 10px;
     color: var(--text-main);
-    background:
-      radial-gradient(circle at top right, rgba(56, 189, 248, 0.1), transparent 30%),
-      linear-gradient(180deg, rgba(7, 14, 26, 0.88) 0%, rgba(5, 9, 18, 0.92) 100%);
-    overflow: auto;
+    background: linear-gradient(180deg, #111827 0%, #0b1120 42%, #070b12 100%);
+    overflow: hidden;
   }
 
   .category-panel {
-    border: 1px solid var(--glass-border);
-    border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 8px;
     padding: 14px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    height: fit-content;
-    background: rgba(15, 23, 36, 0.7);
+    min-height: 0;
+    background: rgba(8, 13, 22, 0.92);
   }
 
   .panel-title {
-    font-size: 13px;
-    color: #7dd3fc;
-    letter-spacing: 0.06em;
+    font-size: 12px;
+    color: #93c5fd;
+    letter-spacing: 0;
     text-transform: uppercase;
     margin-bottom: 6px;
   }
 
+  .panel-kicker {
+    color: #f8fafc;
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
   .category {
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 10px;
+    border: 1px solid transparent;
+    border-radius: 6px;
     background: transparent;
-    color: var(--text-main);
-    padding: 10px 12px;
+    color: #cbd5e1;
+    padding: 9px 10px;
     display: flex;
     align-items: center;
     gap: 8px;
     cursor: pointer;
+    text-align: left;
+  }
+
+  .category span {
+    flex: 1;
+  }
+
+  .category small {
+    color: #94a3b8;
+    font-size: 11px;
   }
 
   .category.active {
-    border-color: rgba(14, 165, 233, 0.45);
-    background: rgba(14, 165, 233, 0.15);
-    color: #dbeafe;
+    border-color: rgba(96, 165, 250, 0.38);
+    background: linear-gradient(90deg, rgba(37, 99, 235, 0.42), rgba(14, 165, 233, 0.12));
+    color: #f8fafc;
+  }
+
+  .panel-divider {
+    height: 1px;
+    background: rgba(148, 163, 184, 0.16);
+    margin: 8px 0;
   }
 
   .content {
+    min-height: 0;
     display: grid;
     gap: 12px;
+    align-content: start;
+    overflow: auto;
+    padding-right: 4px;
+  }
+
+  .package-list-panel {
+    flex: 1;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .package-list-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  }
+
+  .package-list-title {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .package-list-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .package-list-actions .btn.icon.active {
+    border-color: rgba(56, 189, 248, 0.36);
+    background: rgba(14, 165, 233, 0.18);
+    color: #e0f2fe;
+  }
+
+  .package-list-head span {
+    color: #93c5fd;
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+
+  .package-list-head strong {
+    color: #f8fafc;
+    font-size: 15px;
+  }
+
+  .library-search {
+    margin: 10px 12px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 0;
+    background: rgba(2, 6, 23, 0.62);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    color: #94a3b8;
+  }
+
+  .library-search input {
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: #e2e8f0;
+    width: 100%;
+    min-width: 0;
+    font-size: 13px;
+  }
+
+  .package-list-controls {
+    min-height: 0;
+    max-height: 44vh;
+    overflow: auto;
+    display: grid;
+    gap: 8px;
+    padding: 0 12px 10px;
+  }
+
+  .compact-create-panel {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.38);
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .compact-create-head {
+    display: grid;
+    gap: 3px;
+  }
+
+  .compact-create-head h3 {
+    font-size: 13px;
+  }
+
+  .compact-create-panel .starter-apps,
+  .compact-create-panel .ecosystem-templates,
+  .compact-create-panel .wizard-panel {
+    border-radius: 8px;
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .compact-create-panel .starter-apps-list {
+    gap: 6px;
+  }
+
+  .compact-create-panel .template-list {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .compact-create-panel .template-card {
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .compact-create-panel .wizard-form-grid {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .compact-create-panel .wizard-form-grid input,
+  .compact-create-panel .wizard-form-grid select {
+    padding: 8px 9px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+
+  .compact-create-panel .wizard-actions {
+    gap: 6px;
+  }
+
+  .compact-create-panel .preflight-panel {
+    max-height: 260px;
+    overflow: auto;
+  }
+
+  .package-utility-panel {
+    border: 1px solid rgba(56, 189, 248, 0.2);
+    border-radius: 8px;
+    background: rgba(2, 6, 23, 0.5);
+    padding: 10px;
+    display: grid;
+    gap: 10px;
+  }
+
+  .package-utility-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 8px;
+  }
+
+  .package-utility-head h3 {
+    font-size: 13px;
+  }
+
+  .package-utility-panel .source-form,
+  .package-utility-panel .quick-install-grid,
+  .package-utility-panel .zip-import-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .package-utility-panel .source-hints,
+  .package-utility-panel .quick-install-profile,
+  .package-utility-panel .zip-import-panel {
+    border-radius: 8px;
+  }
+
+  .package-utility-panel .preflight-panel {
+    max-height: 320px;
+    overflow: auto;
+  }
+
+  .compact-source-filter {
+    display: grid;
+    gap: 4px;
+    padding: 0;
+  }
+
+  .source-row {
+    border: 1px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    color: #cbd5e1;
+    padding: 7px 9px;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .source-row.active {
+    border-color: rgba(56, 189, 248, 0.24);
+    background: rgba(14, 165, 233, 0.12);
+    color: #f8fafc;
+  }
+
+  .source-row small {
+    color: #94a3b8;
+  }
+
+  .package-list {
+    min-height: 0;
+    overflow: auto;
+    padding: 0 0 6px;
+    display: grid;
+    align-content: start;
+    gap: 0;
+  }
+
+  .package-list-item {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+    border-radius: 0;
+    background: transparent;
+    color: #e2e8f0;
+    padding: 8px;
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .package-list-item:hover {
+    background: rgba(51, 65, 85, 0.45);
+  }
+
+  .package-list-item.active {
+    border-left: 3px solid rgba(96, 165, 250, 0.8);
+    background: linear-gradient(90deg, rgba(37, 99, 235, 0.34), rgba(15, 23, 42, 0.3));
+  }
+
+  .list-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #bfdbfe;
+    background: rgba(30, 41, 59, 0.86);
+  }
+
+  .list-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .list-copy strong,
+  .list-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .list-copy strong {
+    font-size: 13px;
+  }
+
+  .list-copy span,
+  .list-meta small {
+    color: #94a3b8;
+    font-size: 11px;
+  }
+
+  .list-meta {
+    display: grid;
+    justify-items: end;
+    gap: 3px;
+    font-size: 11px;
+    color: #cbd5e1;
+    text-transform: uppercase;
+  }
+
+  .list-meta small.running,
+  .list-meta small.degraded,
+  .list-meta small.starting {
+    color: #bbf7d0;
+  }
+
+  .selected-package-detail {
+    border: 1px solid rgba(96, 165, 250, 0.2);
+    border-radius: 8px;
+    padding: 16px;
+    background:
+      linear-gradient(180deg, rgba(30, 41, 59, 0.94), rgba(10, 15, 25, 0.9)),
+      rgba(15, 23, 42, 0.9);
+    display: grid;
+    gap: 14px;
   }
 
   .feedback {
@@ -4783,10 +5411,10 @@
   }
 
   .block {
-    border: 1px solid var(--glass-border);
-    border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 8px;
     padding: 14px;
-    background: rgba(15, 23, 36, 0.7);
+    background: rgba(12, 18, 30, 0.82);
     display: grid;
     gap: 12px;
   }
@@ -4798,113 +5426,160 @@
     gap: 10px;
   }
 
-  .app-model-summary {
+  .installed-management .selected-package-management {
+    order: 1;
+  }
+
+  .selected-package-management {
+    grid-template-columns: 1fr;
+  }
+
+  .installed-app-summary {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+  }
+
+  .installed-app-icon .icon-box {
+    width: 52px;
+    height: 52px;
+  }
+
+  .installed-app-main {
+    min-width: 0;
+    display: grid;
+    gap: 10px;
+  }
+
+  .installed-app-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 12px;
+  }
+
+  .installed-app-title-row h3 {
+    margin: 0;
+    color: #f8fafc;
+    font-size: 20px;
+    line-height: 1.15;
+  }
+
+  .installed-app-title-row span {
+    display: block;
+    margin-top: 3px;
+    color: #94a3b8;
+    font-size: 12px;
+  }
+
+  .installed-primary-actions,
+  .installed-status-line,
+  .installed-management-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
   }
 
-  .model-chip {
-    font-size: 11px;
-    letter-spacing: 0.03em;
+  .installed-primary-actions {
+    justify-content: flex-end;
+  }
+
+  .installed-status-line {
+    color: #cbd5e1;
+    font-size: 12px;
     text-transform: uppercase;
-    border-radius: 999px;
-    padding: 4px 10px;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    background: rgba(2, 6, 23, 0.5);
+  }
+
+  .installed-detail-layout {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+  }
+
+  .installed-spec-panel {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 8px;
+    padding: 10px;
+    background: rgba(15, 23, 42, 0.38);
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .installed-description-panel {
+    grid-column: 1 / -1;
+  }
+
+  .installed-description-panel p {
+    margin: 0;
+    color: #cbd5e1;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .installed-spec-title {
+    color: #93c5fd;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .installed-spec-list {
+    display: grid;
+    gap: 7px;
+  }
+
+  .installed-spec-list div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .installed-spec-list span {
+    color: #94a3b8;
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+
+  .installed-spec-list strong,
+  .installed-spec-panel > strong {
     color: #e2e8f0;
+    font-size: 13px;
+    overflow-wrap: anywhere;
   }
 
-  .model-chip.system {
-    border-color: rgba(56, 189, 248, 0.4);
-    color: #bae6fd;
+  .installed-health-field {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
   }
 
-  .model-chip.standard {
-    border-color: rgba(129, 140, 248, 0.4);
-    color: #c7d2fe;
+  .installed-health-field > span {
+    grid-column: 1 / -1;
   }
 
-  .model-chip.package {
-    border-color: rgba(52, 211, 153, 0.4);
+  .installed-health-field .health.pass {
     color: #bbf7d0;
   }
 
-  .desktop-app-inventory {
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 12px;
-    background: rgba(2, 6, 23, 0.35);
-    padding: 10px;
+  .installed-health-field .health.warn {
+    color: #fde68a;
+  }
+
+  .installed-health-field .health.fail,
+  .installed-health-field .health.error {
+    color: #fecaca;
+  }
+
+  .installed-health-field .health.unknown {
+    color: #cbd5e1;
+  }
+
+  .installed-dependency-list {
     display: grid;
-    gap: 8px;
-  }
-
-  .desktop-app-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .desktop-app-head h4 {
-    margin: 0;
+    gap: 6px;
+    color: #e2e8f0;
     font-size: 13px;
-    font-weight: 600;
-  }
-
-  .desktop-app-head span {
-    font-size: 11px;
-    color: #93a7c0;
-  }
-
-  .desktop-app-list {
-    display: grid;
-    gap: 6px;
-    max-height: 220px;
-    overflow: auto;
-    padding-right: 2px;
-  }
-
-  .desktop-app-row {
-    border: 1px solid rgba(148, 163, 184, 0.16);
-    border-radius: 10px;
-    padding: 8px;
-    background: rgba(15, 23, 36, 0.45);
-    display: grid;
-    gap: 6px;
-  }
-
-  .desktop-app-main {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .desktop-app-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: #dbeafe;
-  }
-
-  .desktop-app-id {
-    font-size: 11px;
-    color: #8ba3c5;
-  }
-
-  .desktop-app-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .desktop-app-meta span {
-    font-size: 11px;
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 999px;
-    padding: 2px 8px;
-    color: #d1deef;
-    background: rgba(15, 23, 42, 0.5);
   }
 
   h3 {
@@ -5031,8 +5706,8 @@
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 12px;
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
 
   .ecosystem-templates {
@@ -5206,11 +5881,11 @@
 
   .card {
     border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 14px;
+    border-radius: 8px;
     padding: 12px;
     display: grid;
     gap: 10px;
-    background: rgba(2, 6, 23, 0.45);
+    background: rgba(2, 6, 23, 0.36);
   }
 
   .card-head {
@@ -5263,60 +5938,39 @@
     background: rgba(148, 163, 184, 0.08);
   }
 
-  .chips .boundary-chip.inventory {
-    color: #dbeafe;
-    background: rgba(56, 189, 248, 0.15);
+  .package-widgets {
+    display: grid;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid rgba(125, 211, 252, 0.18);
+    border-radius: 10px;
+    background: rgba(14, 165, 233, 0.06);
   }
 
-  .chips .boundary-chip.local {
-    color: #bbf7d0;
-    background: rgba(16, 185, 129, 0.2);
+  .package-widget-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
   }
 
-  .chips .runtime {
-    font-weight: 600;
+  .package-widget-row div {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
   }
 
-  .chips .runtime.running {
-    color: #bbf7d0;
-    background: rgba(22, 163, 74, 0.18);
+  .package-widget-row strong {
+    font-size: 12px;
+    color: #e0f2fe;
   }
 
-  .chips .runtime.starting,
-  .chips .runtime.degraded {
-    color: #fde68a;
-    background: rgba(202, 138, 4, 0.18);
-  }
-
-  .chips .runtime.error {
-    color: #fecaca;
-    background: rgba(185, 28, 28, 0.2);
-  }
-
-  .chips .runtime.stopped {
-    color: #cbd5e1;
-    background: rgba(51, 65, 85, 0.25);
-  }
-
-  .chips .health.pass {
-    color: #bbf7d0;
-    background: rgba(22, 163, 74, 0.18);
-  }
-
-  .chips .health.warn {
-    color: #fde68a;
-    background: rgba(202, 138, 4, 0.18);
-  }
-
-  .chips .health.fail,
-  .chips .health.error {
-    color: #fecaca;
-    background: rgba(185, 28, 28, 0.2);
-  }
-
-  .chips .health.unknown {
-    color: #cbd5e1;
-    background: rgba(51, 65, 85, 0.25);
+  .package-widget-row span {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .actions {
@@ -5374,6 +6028,15 @@
     place-items: center;
     color: var(--text-dim);
     font-size: 13px;
+  }
+
+  .empty.compact {
+    min-height: 112px;
+    margin: 8px 0;
+    border: 0;
+    border-radius: 0;
+    padding: 12px;
+    text-align: center;
   }
 
   .ops-console {
@@ -5989,9 +6652,23 @@
     cursor: not-allowed;
   }
 
+  @media (max-width: 1280px) {
+    .package-center {
+      grid-template-columns: minmax(330px, 390px) minmax(0, 1fr);
+    }
+  }
+
   @media (max-width: 1000px) {
     .package-center {
       grid-template-columns: 1fr;
+      overflow: auto;
+    }
+
+    .category-panel,
+    .package-list-panel,
+    .content {
+      min-height: auto;
+      overflow: visible;
     }
 
     .source-form {

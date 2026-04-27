@@ -160,3 +160,75 @@ test('wizard preflight exposes blocking hybrid tool package review', async () =>
     await server.close();
   }
 });
+
+test('widget packages register package widgets without desktop launcher entry', async () => {
+  const server = await createServer();
+  const token = signToken();
+  const appId = `it-widget-package-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  try {
+    const created = await requestJson(server.baseUrl, '/api/packages/wizard/create', token, {
+      method: 'POST',
+      body: {
+        manifest: {
+          id: appId,
+          title: 'Widget Package',
+          version: '0.1.0',
+          type: 'widget',
+          runtime: {
+            type: 'sandbox-html',
+            entry: 'widget.html'
+          },
+          permissions: ['system.info']
+        }
+      }
+    });
+    assert.equal(created.status, 201, JSON.stringify(created.json));
+
+    const registered = await packageRegistryService.getSandboxApp(appId);
+    assert.equal(registered?.appType, 'widget');
+    assert.equal(registered?.contributes?.widgets?.length, 1);
+    assert.equal(registered.contributes.widgets[0].entry, 'widget.html');
+
+    const health = await requestJson(server.baseUrl, `/api/packages/${appId}/health`, token);
+    assert.equal(health.status, 200, JSON.stringify(health.json));
+    assert.equal(health.json?.report?.checks?.some((item) => item.id === 'package.widget.main.entry' && item.level === 'pass'), true);
+
+    const badPreflight = await requestJson(server.baseUrl, `/api/packages/${appId}/manifest/preflight`, token, {
+      method: 'POST',
+      body: {
+        manifest: {
+          id: appId,
+          title: 'Widget Package',
+          version: '0.1.0',
+          type: 'widget',
+          runtime: {
+            type: 'sandbox-html',
+            entry: 'widget.html'
+          },
+          permissions: ['system.info'],
+          contributes: {
+            widgets: [
+              {
+                id: 'missing',
+                label: 'Missing Widget',
+                entry: 'missing-widget.html'
+              }
+            ]
+          }
+        }
+      }
+    });
+    assert.equal(badPreflight.status, 200, JSON.stringify(badPreflight.json));
+    assert.equal(
+      badPreflight.json?.preflight?.executionReadiness?.blockers?.some((item) => item.code === 'PACKAGE_WIDGET_ENTRY_NOT_FOUND'),
+      true
+    );
+
+    const desktopApps = await packageRegistryService.listDesktopApps();
+    assert.equal(desktopApps.some((app) => app.id === appId), false);
+  } finally {
+    await cleanupAppArtifacts(appId);
+    await server.close();
+  }
+});

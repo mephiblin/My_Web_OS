@@ -552,6 +552,42 @@ async function resolvePackagePath(appId, relativePath = '') {
   return appPaths.ensureWithinRoot(appRoot, path.join(appRoot, safeRelativePath));
 }
 
+function getManifestWidgetContributions(manifest = {}, runtimeProfile = null) {
+  const widgets = Array.isArray(manifest?.contributes?.widgets)
+    ? manifest.contributes.widgets
+        .map((item) => ({
+          id: String(item?.id || '').trim(),
+          label: String(item?.label || item?.title || item?.id || '').trim(),
+          entry: normalizeRelativePath(item?.entry || item?.path || '')
+        }))
+        .filter((item) => item.id && item.entry)
+    : [];
+
+  if (runtimeProfile?.appType === 'widget' && widgets.length === 0 && runtimeProfile.entry) {
+    widgets.push({
+      id: 'main',
+      label: String(manifest?.title || 'Widget').trim() || 'Widget',
+      entry: normalizeRelativePath(runtimeProfile.entry)
+    });
+  }
+
+  return widgets;
+}
+
+async function findMissingWidgetEntries(appId, manifest = {}, runtimeProfile = null) {
+  const widgets = getManifestWidgetContributions(manifest, runtimeProfile);
+  const missing = [];
+
+  for (const widget of widgets) {
+    const entryPath = await resolvePackagePath(appId, widget.entry).catch(() => '');
+    if (!entryPath || !(await fs.pathExists(entryPath))) {
+      missing.push(widget);
+    }
+  }
+
+  return missing;
+}
+
 async function addDirectoryToZip(zip, rootPath, relativePath = '') {
   const targetDir = path.join(rootPath, relativePath);
   const entries = await fs.readdir(targetDir, { withFileTypes: true });
@@ -3120,6 +3156,32 @@ function normalizeManifestInput(input, fallbackAppId) {
     fileAssociations,
     { strict: true, permissions }
   );
+  if (runtimeProfile.appType === 'widget' && contributes.widgets.length === 0) {
+    contributes.widgets = [
+      {
+        id: 'main',
+        label: title,
+        title,
+        entry: runtimeProfile.entry || entry,
+        defaultSize: {
+          w: Number.isFinite(Number(input?.widget?.defaultSize?.w ?? input?.widget?.defaultSize?.width))
+            ? Math.max(120, Number(input.widget.defaultSize.w ?? input.widget.defaultSize.width))
+            : 320,
+          h: Number.isFinite(Number(input?.widget?.defaultSize?.h ?? input?.widget?.defaultSize?.height))
+            ? Math.max(80, Number(input.widget.defaultSize.h ?? input.widget.defaultSize.height))
+            : 220
+        },
+        minSize: {
+          w: Number.isFinite(Number(input?.widget?.minSize?.w ?? input?.widget?.minSize?.width))
+            ? Math.max(120, Number(input.widget.minSize.w ?? input.widget.minSize.width))
+            : 180,
+          h: Number.isFinite(Number(input?.widget?.minSize?.h ?? input?.widget?.minSize?.height))
+            ? Math.max(80, Number(input.widget.minSize.h ?? input.widget.minSize.height))
+            : 120
+        }
+      }
+    ];
+  }
   const release = {
     channel: normalizeManifestChannel(input?.release?.channel || input?.channel || 'stable')
   };
@@ -3235,6 +3297,25 @@ async function computePackageHealthReport(appId, options = {}) {
         level: 'fail',
         code: 'PACKAGE_ENTRY_NOT_FOUND',
         message: `Entry file "${uiEntry || manifest.entry || DEFAULT_ENTRY}" was not found.`
+      });
+    }
+  }
+
+  const widgetContributions = getManifestWidgetContributions(manifest, runtimeProfile);
+  for (const widget of widgetContributions) {
+    const entryPath = await resolvePackagePath(safeAppId, widget.entry).catch(() => '');
+    if (entryPath && (await fs.pathExists(entryPath))) {
+      checks.push({
+        id: `package.widget.${widget.id}.entry`,
+        level: 'pass',
+        message: `Widget entry "${widget.entry}" exists.`
+      });
+    } else {
+      checks.push({
+        id: `package.widget.${widget.id}.entry`,
+        level: 'fail',
+        code: 'PACKAGE_WIDGET_ENTRY_NOT_FOUND',
+        message: `Widget entry "${widget.entry}" was not found.`
       });
     }
   }
@@ -7171,6 +7252,19 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
       }
     }
 
+    const missingWidgetEntries = await findMissingWidgetEntries(routeAppId, manifest, runtimeProfile);
+    for (const widget of missingWidgetEntries) {
+      blockers.push({
+        code: 'PACKAGE_WIDGET_ENTRY_NOT_FOUND',
+        message: `Widget entry "${widget.entry}" does not exist.`,
+        area: 'widgets',
+        details: {
+          widgetId: widget.id,
+          entry: widget.entry
+        }
+      });
+    }
+
     const compatibilityFailures = Array.isArray(dependencyCompatibility?.checks)
       ? dependencyCompatibility.checks.filter((check) => check.level === 'fail')
       : [];
@@ -7302,6 +7396,17 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
         error: true,
         code: 'PACKAGE_ENTRY_NOT_FOUND',
         message: `Entry file "${uiEntry || manifest.entry}" does not exist.`
+      });
+    }
+    const missingWidgetEntries = await findMissingWidgetEntries(routeAppId, manifest, runtimeProfile);
+    if (missingWidgetEntries.length > 0) {
+      return res.status(400).json({
+        error: true,
+        code: 'PACKAGE_WIDGET_ENTRY_NOT_FOUND',
+        message: `Widget entry "${missingWidgetEntries[0].entry}" does not exist.`,
+        details: {
+          missing: missingWidgetEntries
+        }
       });
     }
     let dependencyCompatibility = null;

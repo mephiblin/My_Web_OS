@@ -21,6 +21,7 @@ test('primary viewer addons resolve to sandbox package apps when inventory packa
     assert.ok(Array.isArray(app.contributes?.fileCreateTemplates), `${appId} should expose file template contribution contract`);
     assert.ok(Array.isArray(app.contributes?.previewProviders), `${appId} should expose preview provider contribution contract`);
     assert.ok(Array.isArray(app.contributes?.thumbnailProviders), `${appId} should expose thumbnail provider contribution contract`);
+    assert.ok(Array.isArray(app.contributes?.widgets), `${appId} should expose widget contribution contract`);
   }
 });
 
@@ -60,6 +61,7 @@ test('manifest contributes are normalized into file context menu contract', asyn
   assert.deepEqual(normalized.thumbnailProviders, []);
   assert.deepEqual(normalized.settingsPanels, []);
   assert.deepEqual(normalized.backgroundServices, []);
+  assert.deepEqual(normalized.widgets, []);
 });
 
 test('manifest contributes normalize native extension point contract v2', async () => {
@@ -84,6 +86,9 @@ test('manifest contributes normalize native extension point contract v2', async 
       ],
       backgroundServices: [
         { id: 'sample-indexer', label: 'Sample Indexer', entry: 'service.js', autoStart: true }
+      ],
+      widgets: [
+        { id: 'sample-widget', label: 'Sample Widget', entry: 'widget.html', defaultSize: { w: 360, h: 240 } }
       ]
     },
     [
@@ -113,6 +118,16 @@ test('manifest contributes normalize native extension point contract v2', async 
   assert.deepEqual(normalized.backgroundServices, [
     { id: 'sample-indexer', label: 'Sample Indexer', entry: 'service.js', autoStart: false, requestedAutoStart: true }
   ]);
+  assert.deepEqual(normalized.widgets, [
+    {
+      id: 'sample-widget',
+      label: 'Sample Widget',
+      title: 'Sample Widget',
+      entry: 'widget.html',
+      defaultSize: { w: 360, h: 240 },
+      minSize: { w: 180, h: 120 }
+    }
+  ]);
 });
 
 test('manifest contribution strict validation rejects unsafe template shapes', async () => {
@@ -141,6 +156,43 @@ test('manifest contribution strict validation rejects unsafe template shapes', a
     ),
     /extensions must be an array/
   );
+
+  assert.throws(
+    () => packageRegistryService.normalizeManifestContributes(
+      {
+        widgets: [
+          { id: 'bad-widget', label: 'Bad Widget', entry: '../widget.html' }
+        ]
+      },
+      [],
+      { strict: true }
+    ),
+    /safe relative entry path/
+  );
+});
+
+test('package doctor accepts widget package contribution contract', () => {
+  const report = packageDoctor.runChecks({
+    id: 'desktop-calendar',
+    title: 'Desktop Calendar',
+    type: 'widget',
+    runtime: { type: 'sandbox-html', entry: 'widget.html' },
+    permissions: ['calendar.read'],
+    contributes: {
+      widgets: [
+        {
+          id: 'glass-calendar',
+          label: 'Glass Calendar',
+          entry: 'widget.html',
+          defaultSize: { w: 900, h: 520 },
+          minSize: { w: 320, h: 220 }
+        }
+      ]
+    }
+  });
+
+  assert.equal(report.failCount, 0);
+  assert.equal(report.checks.some((check) => check.id === 'manifest.contributes.widgets[0].entry' && check.status === 'fail'), false);
 });
 
 test('preview and thumbnail provider contracts require host.file.read during strict validation and doctor checks', async () => {

@@ -38,7 +38,7 @@ Status: `[ACTIVE]`
 | Type | 의미 | Launcher |
 | --- | --- | --- |
 | `app` | 일반 windowed sandbox app | 표시 |
-| `widget` | widget package | widget 영역/스토어 대상 |
+| `widget` | desktop widget package | Package Center widget 영역 대상, Launcher 숨김 |
 | `service` | UI 없는 background package | 숨김 |
 | `hybrid` | sandbox UI + managed service | `ui.entry`가 있으면 표시 |
 | `developer` | 개발/테스트 도구 | 구현 정책에 따름 |
@@ -55,6 +55,12 @@ Status: `[ACTIVE]`
 일반 UI 애드온은 `type: "app"` + `runtime.type: "sandbox-html"`을 사용한다.
 
 Plex/Immich/downloader급 툴은 `type: "hybrid"`를 사용한다.
+
+앱과 위젯은 같은 package manifest와 sandbox SDK를 쓴다. 개발자는 다음 중 하나를 선택한다.
+
+- 창으로 열리는 앱: `type: "app"`
+- 바탕화면에 붙는 위젯: `type: "widget"`
+- 둘 다 제공하는 패키지: `type: "app"` + `contributes.widgets`
 
 ## 4. Hybrid manifest contract
 
@@ -201,6 +207,57 @@ UI가 없는 background package:
 ```
 
 File Station은 앱을 launch하면서 `context.app.launchData`에 path/grant 정보를 넣는다. Addon은 직접 host path를 신뢰하지 말고 SDK의 file API를 사용한다.
+
+## 8.1 Desktop widgets
+
+위젯은 별도 배포 단위가 아니라 Package Center가 설치/삭제/권한을 관리하는 package surface다.
+
+위젯 전용 패키지:
+
+```json
+{
+  "id": "desktop-calendar",
+  "title": "Desktop Calendar",
+  "version": "0.1.0",
+  "type": "widget",
+  "runtime": {
+    "type": "sandbox-html",
+    "entry": "widget.html"
+  },
+  "permissions": ["calendar.read"]
+}
+```
+
+`type: "widget"`은 `runtime.entry`를 기본 위젯 entry로 자동 노출한다.
+
+앱과 위젯을 같이 제공하는 패키지:
+
+```json
+{
+  "id": "calendar-suite",
+  "title": "Calendar Suite",
+  "version": "0.1.0",
+  "type": "app",
+  "runtime": {
+    "type": "sandbox-html",
+    "entry": "index.html"
+  },
+  "permissions": ["calendar.read", "calendar.write"],
+  "contributes": {
+    "widgets": [
+      {
+        "id": "glass-calendar",
+        "label": "Glass Calendar",
+        "entry": "widget.html",
+        "defaultSize": { "w": 900, "h": 520 },
+        "minSize": { "w": 320, "h": 220 }
+      }
+    ]
+  }
+}
+```
+
+위젯 entry도 `/api/sandbox/sdk.js`를 로드하고 `window.WebOS.ready()`를 기다린다. 권한은 일반 sandbox app과 동일하게 manifest의 `permissions`를 따른다.
 
 ## 9. Healthcheck
 

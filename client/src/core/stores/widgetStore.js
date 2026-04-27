@@ -59,6 +59,7 @@ const createWidgetStore = () => {
       update(items => {
         const newId = `widget-${Date.now()}`;
         return [...items, { 
+          ...widget,
           id: newId, 
           type: widget.type || 'preset',
           source: widget.source || 'clock',

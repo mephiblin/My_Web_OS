@@ -337,6 +337,45 @@ function validateBackgroundServiceContributions(checks, manifest) {
   });
 }
 
+function validateWidgetContributions(checks, manifest) {
+  const rows = manifest?.contributes?.widgets;
+  if (rows === undefined || rows === null) return;
+  if (!Array.isArray(rows)) {
+    checks.push(makeResult('fail', 'manifest.contributes.widgets', 'widgets must be an array.'));
+    return;
+  }
+
+  rows.forEach((row, index) => {
+    const id = `manifest.contributes.widgets[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      checks.push(makeResult('fail', id, 'Widget contribution must be an object.'));
+      return;
+    }
+    const widgetId = String(row.id || '').trim();
+    if (!CONTRIBUTION_ID_RE.test(widgetId)) {
+      checks.push(makeResult('fail', `${id}.id`, 'Widget id is invalid.', widgetId));
+    }
+    validateContributionLabel(checks, id, row.label || row.title || widgetId);
+    validateSafeRelativeEntry(checks, `${id}.entry`, row.entry || row.path);
+
+    for (const field of ['defaultSize', 'minSize']) {
+      if (row[field] === undefined || row[field] === null) continue;
+      if (!row[field] || typeof row[field] !== 'object' || Array.isArray(row[field])) {
+        checks.push(makeResult('fail', `${id}.${field}`, `${field} must be an object.`));
+        continue;
+      }
+      const width = Number(row[field].w ?? row[field].width);
+      const height = Number(row[field].h ?? row[field].height);
+      if (!Number.isFinite(width) || width < 120) {
+        checks.push(makeResult('fail', `${id}.${field}.w`, `${field} width must be at least 120.`));
+      }
+      if (!Number.isFinite(height) || height < 80) {
+        checks.push(makeResult('fail', `${id}.${field}.h`, `${field} height must be at least 80.`));
+      }
+    }
+  });
+}
+
 function getDeclaredRuntimeType(manifest) {
   if (typeof manifest?.runtime === 'string') {
     return String(manifest.runtime || '').trim().toLowerCase();
@@ -556,6 +595,7 @@ function runChecks(manifest) {
   validateFileProviderContributions(checks, manifest, fileAssociations, 'thumbnailProviders');
   validateSettingsPanelContributions(checks, manifest);
   validateBackgroundServiceContributions(checks, manifest);
+  validateWidgetContributions(checks, manifest);
 
   const failCount = checks.filter((item) => item.status === 'fail').length;
   const warnCount = checks.filter((item) => item.status === 'warn').length;

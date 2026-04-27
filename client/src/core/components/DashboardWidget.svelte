@@ -1,5 +1,7 @@
 <script>
   import { Clock, Activity, GripVertical, Lock, Unlock, X, Cpu, Wifi, HardDrive, CalendarDays } from 'lucide-svelte';
+  import { apiFetch } from '../../utils/api.js';
+  import SandboxAppFrame from './SandboxAppFrame.svelte';
   import { widgets } from '../stores/widgetStore.js';
 
   let { widget } = $props();
@@ -15,6 +17,8 @@
   // System API state (for type=system widgets)
   let sysData = $state(null);
   let calendarData = $state([]);
+  let packageWidgetApp = $state(null);
+  let packageWidgetError = $state('');
 
   $effect(() => {
     if (widget.source === 'clock') {
@@ -45,6 +49,68 @@
     }
   });
 
+  $effect(() => {
+    if (widget.type !== 'package') return;
+
+    const packageId = String(widget.packageId || '').trim();
+    const contributionId = String(widget.widgetId || '').trim();
+    const entry = String(widget.entry || '').trim();
+    let canceled = false;
+
+    packageWidgetApp = null;
+    packageWidgetError = '';
+
+    if (!packageId || !entry) {
+      packageWidgetError = 'Package widget is missing its package id or entry.';
+      return;
+    }
+
+    apiFetch(`/api/packages/${encodeURIComponent(packageId)}`)
+      .then((payload) => {
+        if (canceled) return;
+        const pkg = payload?.package;
+        if (!pkg) {
+          packageWidgetError = 'Package widget was not found.';
+          return;
+        }
+        const contribution = (pkg.contributes?.widgets || []).find((item) => item.id === contributionId || item.entry === entry);
+        const resolvedEntry = String(contribution?.entry || entry).replace(/^[/\\]+/, '');
+        packageWidgetApp = {
+          ...pkg,
+          appId: pkg.id,
+          id: `${pkg.id}:widget:${contribution?.id || contributionId || resolvedEntry}:${widget.id}`,
+          title: widget.title || contribution?.title || contribution?.label || pkg.title,
+          entry: resolvedEntry,
+          data: {
+            surface: 'widget',
+            widgetId: widget.id,
+            packageWidgetId: contribution?.id || contributionId || '',
+            entry: resolvedEntry
+          },
+          launch: {
+            ...(pkg.launch || {}),
+            mode: 'sandbox',
+            singleton: false,
+            entryUrl: `/api/sandbox/${encodeURIComponent(pkg.id)}/${resolvedEntry}`
+          },
+          sandbox: {
+            ...(pkg.sandbox || {}),
+            routeBase: `/api/sandbox/${encodeURIComponent(pkg.id)}/`,
+            entryUrl: `/api/sandbox/${encodeURIComponent(pkg.id)}/${resolvedEntry}`
+          }
+        };
+      })
+      .catch((err) => {
+        if (!canceled) {
+          packageWidgetError = err?.message || 'Failed to load package widget.';
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  });
+
   // --- Lock Toggle ---
   function handleToggleLock(e) {
     e.stopPropagation();
@@ -53,8 +119,13 @@
   }
 
   // --- Drag ---
+  function isInteractiveTarget(target) {
+    return Boolean(target?.closest?.('button, input, textarea, select, a, iframe, [role="button"], .no-widget-drag'));
+  }
+
   function startDrag(e) {
     if (widget.locked) return;
+    if (isInteractiveTarget(e.target)) return;
     e.preventDefault();
     isDragging = true;
     dragStart = { x: e.clientX, y: e.clientY, wx: widget.x, wy: widget.y };
@@ -209,6 +280,17 @@
         class="widget-iframe"
       ></iframe>
 
+    {:else if widget.type === 'package'}
+      <div class="package-widget-shell">
+        {#if packageWidgetApp}
+          <SandboxAppFrame app={packageWidgetApp} />
+        {:else}
+          <div class="preset fallback">
+            <span>{packageWidgetError || 'Loading package widget...'}</span>
+          </div>
+        {/if}
+      </div>
+
     {:else}
       <div class="preset fallback">
         <span>{widget.title || 'Unknown Widget'}</span>
@@ -287,6 +369,21 @@
     border: none;
     background: transparent;
     border-radius: 14px;
+  }
+
+  .package-widget-shell {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    border-radius: 14px;
+  }
+
+  .package-widget-shell :global(.sandbox-shell) {
+    background: transparent;
+  }
+
+  .package-widget-shell :global(iframe) {
+    background: transparent;
   }
 
   /* Presets */

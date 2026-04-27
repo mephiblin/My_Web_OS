@@ -782,6 +782,74 @@ function normalizeBackgroundServiceContributions(input, options = {}) {
   return normalized;
 }
 
+function normalizeWidgetSize(value, fallback = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const fallbackSource = fallback && typeof fallback === 'object' ? fallback : {};
+  return {
+    w: Number.isFinite(Number(source.w ?? source.width))
+      ? Math.max(120, Number(source.w ?? source.width))
+      : (Number.isFinite(Number(fallbackSource.w ?? fallbackSource.width)) ? Number(fallbackSource.w ?? fallbackSource.width) : 320),
+    h: Number.isFinite(Number(source.h ?? source.height))
+      ? Math.max(80, Number(source.h ?? source.height))
+      : (Number.isFinite(Number(fallbackSource.h ?? fallbackSource.height)) ? Number(fallbackSource.h ?? fallbackSource.height) : 220)
+  };
+}
+
+function normalizeWidgetContributions(input, options = {}) {
+  const strict = Boolean(options.strict);
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) {
+    if (strict) {
+      throw contributionError(
+        'contributes.widgets must be an array.',
+        'PACKAGE_CONTRIBUTES_WIDGETS_INVALID'
+      );
+    }
+    return [];
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  for (let index = 0; index < input.length; index += 1) {
+    const row = input[index];
+    const pathLabel = `contributes.widgets[${index}]`;
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      if (strict) {
+        throw contributionError(`${pathLabel} must be an object.`, 'PACKAGE_CONTRIBUTION_INVALID');
+      }
+      continue;
+    }
+
+    const id = String(row.id || '').trim().toLowerCase();
+    if (!CONTRIBUTION_ID_RE.test(id)) {
+      if (strict) {
+        throw contributionError(`${pathLabel} id is invalid.`, 'PACKAGE_CONTRIBUTION_ID_INVALID');
+      }
+      continue;
+    }
+    const label = normalizeContributionLabel(row.label || row.title || id, pathLabel, strict);
+    if (!label) continue;
+    const entry = normalizeRelativeContributionEntry(row.entry || row.path || '', pathLabel, strict);
+    if (!entry) continue;
+    const defaultSize = normalizeWidgetSize(row.defaultSize || row.size, { w: 320, h: 220 });
+    const minSize = normalizeWidgetSize(row.minSize, { w: 180, h: 120 });
+    const item = {
+      id,
+      label,
+      title: label,
+      entry,
+      defaultSize,
+      minSize
+    };
+    const key = JSON.stringify({ id, entry });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(item);
+  }
+
+  return normalized;
+}
+
 function normalizePermissionList(value) {
   return Array.isArray(value) ? value.map((permission) => String(permission || '').trim()).filter(Boolean) : [];
 }
@@ -806,7 +874,8 @@ function normalizeContributes(input, fileAssociations = [], options = {}) {
       previewProviders: [],
       thumbnailProviders: [],
       settingsPanels: [],
-      backgroundServices: []
+      backgroundServices: [],
+      widgets: []
     };
   }
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
@@ -821,7 +890,8 @@ function normalizeContributes(input, fileAssociations = [], options = {}) {
       previewProviders: [],
       thumbnailProviders: [],
       settingsPanels: [],
-      backgroundServices: []
+      backgroundServices: [],
+      widgets: []
     };
   }
 
@@ -831,7 +901,8 @@ function normalizeContributes(input, fileAssociations = [], options = {}) {
     previewProviders: normalizeFileProviderContributions('previewProviders', input.previewProviders, fileAssociations, options),
     thumbnailProviders: normalizeFileProviderContributions('thumbnailProviders', input.thumbnailProviders, fileAssociations, options),
     settingsPanels: normalizeSettingsPanelContributions(input.settingsPanels, options),
-    backgroundServices: normalizeBackgroundServiceContributions(input.backgroundServices, options)
+    backgroundServices: normalizeBackgroundServiceContributions(input.backgroundServices, options),
+    widgets: normalizeWidgetContributions(input.widgets, options)
   };
 
   assertContributionPermission('previewProviders', normalized.previewProviders, options);
@@ -1063,6 +1134,18 @@ function normalizeSandboxManifest(manifest) {
   }
 
   const iconMeta = normalizeSandboxIcon(manifest.icon, manifest.id);
+  if (runtimeProfile.appType === 'widget' && contributes.widgets.length === 0 && resolvedEntry) {
+    contributes.widgets = [
+      {
+        id: 'main',
+        label: manifest.title,
+        title: manifest.title,
+        entry: resolvedEntry,
+        defaultSize: normalizeWidgetSize(manifest.widget?.defaultSize || manifest.window, { w: 320, h: 220 }),
+        minSize: normalizeWidgetSize(manifest.widget?.minSize, { w: 180, h: 120 })
+      }
+    ];
+  }
 
   return {
     id: manifest.id,
@@ -1229,7 +1312,7 @@ const packageRegistryService = {
     }
 
     for (const sandboxApp of sandboxApps) {
-      if (sandboxApp.appType === 'service') {
+      if (sandboxApp.appType === 'service' || sandboxApp.appType === 'widget') {
         continue;
       }
       if (seen.has(sandboxApp.id)) {
