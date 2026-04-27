@@ -141,6 +141,7 @@
     appType: 'app',
     runtimeType: 'sandbox-html',
     entry: 'index.html',
+    uiEntry: 'ui/index.html',
     permissions: '',
     templateId: ''
   });
@@ -153,6 +154,7 @@
       appType: String(defaults.appType || 'app').trim(),
       runtimeType: String(defaults.runtimeType || 'sandbox-html').trim(),
       entry: String(defaults.entry || 'index.html').trim(),
+      uiEntry: String(defaults.uiEntry || defaults.ui?.entry || '').trim(),
       permissions: Array.isArray(defaults.permissions) ? defaults.permissions.join(', ') : ''
     };
   }
@@ -168,6 +170,10 @@
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean);
+  }
+
+  function formatPermissionList(values) {
+    return [...new Set((values || []).map((item) => String(item || '').trim()).filter(Boolean))].join(', ');
   }
 
   function setInstallWorkspaceField(field, value) {
@@ -233,6 +239,7 @@
           appType: normalized.appType,
           runtimeType: normalized.runtimeType,
           entry: normalized.entry,
+          uiEntry: normalized.uiEntry || (normalized.appType === 'hybrid' ? 'ui/index.html' : wizardDraft.uiEntry),
           permissions: normalized.permissions
         };
       } else {
@@ -241,6 +248,28 @@
           templateId: String(value || '').trim()
         };
       }
+      if (wizardPhase === 'review') {
+        wizardPhase = 'draft';
+        wizardReview = null;
+      }
+      return;
+    }
+
+    if (field === 'appType' && String(value || '').trim() === 'hybrid') {
+      wizardDraft = {
+        ...wizardDraft,
+        appType: 'hybrid',
+        runtimeType: wizardDraft.runtimeType === 'sandbox-html' ? 'process-node' : wizardDraft.runtimeType,
+        entry: wizardDraft.entry && wizardDraft.entry !== 'index.html' ? wizardDraft.entry : 'service/index.js',
+        uiEntry: wizardDraft.uiEntry || 'ui/index.html',
+        permissions: formatPermissionList([
+          ...normalizePermissionList(wizardDraft.permissions),
+          'runtime.process',
+          'service.bridge',
+          'app.data.read',
+          'app.data.write'
+        ])
+      };
       if (wizardPhase === 'review') {
         wizardPhase = 'draft';
         wizardReview = null;
@@ -259,16 +288,38 @@
   }
 
   function buildWizardManifest() {
+    const appType = String(wizardDraft.appType || 'app');
     return {
       id: String(wizardDraft.id || '').trim(),
       title: String(wizardDraft.title || '').trim(),
       description: String(wizardDraft.description || '').trim(),
       version: String(wizardDraft.version || '').trim() || '0.1.0',
-      appType: String(wizardDraft.appType || 'app'),
+      appType,
       runtime: {
         runtimeType: String(wizardDraft.runtimeType || 'sandbox-html'),
         entry: String(wizardDraft.entry || '').trim()
       },
+      ...(appType === 'hybrid'
+        ? {
+            ui: {
+              type: 'sandbox-html',
+              entry: String(wizardDraft.uiEntry || 'ui/index.html').trim()
+            },
+            service: {
+              autoStart: false,
+              restartPolicy: 'on-failure',
+              maxRetries: 3,
+              restartDelayMs: 1000,
+              http: { enabled: true }
+            },
+            healthcheck: {
+              type: 'http',
+              path: '/health',
+              intervalMs: 10000,
+              timeoutMs: 2000
+            }
+          }
+        : {}),
       permissions: normalizePermissionList(wizardDraft.permissions)
     };
   }
@@ -317,6 +368,7 @@
         ),
         blockers,
         onboarding: normalizeOnboardingReview(readPreflightField(raw, ['onboarding'], null)),
+        toolPackageReview: normalizeToolPackageReview(readPreflightField(raw, ['toolPackageReview'], null)),
         lifecycleSafeguards: normalizeSafeguardReview(readPreflightField(raw, ['lifecycleSafeguards'], null)),
         localWorkspace: normalizeLocalWorkspaceBridge(
           readPreflightField(raw, [
@@ -335,6 +387,7 @@
         summary: err.message || 'Package preflight failed.',
         blockers: [],
         onboarding: normalizeOnboardingReview(null),
+        toolPackageReview: normalizeToolPackageReview(null),
         lifecycleSafeguards: normalizeSafeguardReview(null),
         source: 'preflight-endpoint'
       };
@@ -1003,6 +1056,30 @@
     };
   }
 
+  function normalizeToolPackageReview(value) {
+    if (!value || typeof value !== 'object') {
+      return {
+        applies: false,
+        status: 'pass',
+        summary: '',
+        runtimeType: '',
+        serviceEntry: '',
+        uiEntry: '',
+        checks: []
+      };
+    }
+
+    return {
+      applies: value.applies === true,
+      status: normalizeReviewDecision(value.status || 'warn'),
+      summary: normalizeReviewText(value.summary, ''),
+      runtimeType: normalizeReviewText(value.runtimeType, ''),
+      serviceEntry: normalizeReviewText(value.serviceEntry, ''),
+      uiEntry: normalizeReviewText(value.uiEntry, ''),
+      checks: normalizeReviewItems(value.checks, 'tool package')
+    };
+  }
+
   function dedupeReviewItems(items, excludedKeys = new Set()) {
     const seen = new Set(excludedKeys);
     const result = [];
@@ -1176,6 +1253,7 @@
       backupChecks,
       blockerItems,
       onboarding: normalizeOnboardingReview(readPreflightField(raw, ['onboarding'], null)),
+      toolPackageReview: normalizeToolPackageReview(readPreflightField(raw, ['toolPackageReview'], null)),
       lifecycleSafeguards: normalizeSafeguardReview(readPreflightField(raw, ['lifecycleSafeguards'], null)),
       localWorkspace,
       rawPreflight: raw,
@@ -1373,6 +1451,7 @@
       backupChecks: [],
       blockerItems: [],
       onboarding: normalizeOnboardingReview(null),
+      toolPackageReview: normalizeToolPackageReview(null),
       lifecycleSafeguards: normalizeSafeguardReview(null),
       localWorkspace: normalizeLocalWorkspaceBridge(null, localWorkspace),
       source: 'loading'
@@ -1628,6 +1707,7 @@
       backupChecks: [],
       blockerItems: [],
       onboarding: normalizeOnboardingReview(null),
+      toolPackageReview: normalizeToolPackageReview(null),
       lifecycleSafeguards: normalizeSafeguardReview(null),
       localWorkspace: normalizeLocalWorkspaceBridge(null, localWorkspace),
       source: 'loading',
@@ -3222,6 +3302,31 @@
                     {/if}
                   </div>
 
+                  {#if zipImportReview.toolPackageReview?.applies}
+                    <div class="preflight-group">
+                      <div class="preflight-label">Tool Package</div>
+                      <div class="preflight-summary-inline">{zipImportReview.toolPackageReview.summary}</div>
+                      <div class="ops-meta-list">
+                        <div>runtime: {zipImportReview.toolPackageReview.runtimeType || '-'}</div>
+                        <div>service: {zipImportReview.toolPackageReview.serviceEntry || '-'}</div>
+                        <div>ui: {zipImportReview.toolPackageReview.uiEntry || '-'}</div>
+                      </div>
+                      {#if zipImportReview.toolPackageReview.checks.length > 0}
+                        <div class="preflight-list">
+                          {#each zipImportReview.toolPackageReview.checks as item}
+                            <div class="preflight-item">
+                              <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                              <span>{item.label}</span>
+                              {#if item.detail}
+                                <span class="preflight-item-detail">{item.detail}</span>
+                              {/if}
+                            </div>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+
                   <div class="preflight-group">
                     <div class="preflight-label">Lifecycle Safeguards</div>
                     <div class="preflight-summary-inline">{zipImportReview.lifecycleSafeguards?.summary || 'No lifecycle safeguards from preflight.'}</div>
@@ -3378,6 +3483,14 @@
               value={wizardDraft.entry}
               oninput={(event) => updateWizardDraft('entry', event.currentTarget.value)}
             />
+            {#if wizardDraft.appType === 'hybrid'}
+              <input
+                type="text"
+                placeholder="ui entry (e.g. ui/index.html)"
+                value={wizardDraft.uiEntry}
+                oninput={(event) => updateWizardDraft('uiEntry', event.currentTarget.value)}
+              />
+            {/if}
             <input
               type="text"
               placeholder="permissions (comma-separated)"
@@ -3455,6 +3568,30 @@
                   <div class="runtime-log-empty">No local workspace bridge requested.</div>
                 {/if}
               </div>
+              {#if wizardReview.toolPackageReview?.applies}
+                <div class="preflight-group">
+                  <div class="preflight-label">Tool Package</div>
+                  <div class="preflight-summary-inline">{wizardReview.toolPackageReview.summary}</div>
+                  <div class="ops-meta-list">
+                    <div>runtime: {wizardReview.toolPackageReview.runtimeType || '-'}</div>
+                    <div>service: {wizardReview.toolPackageReview.serviceEntry || '-'}</div>
+                    <div>ui: {wizardReview.toolPackageReview.uiEntry || '-'}</div>
+                  </div>
+                  {#if wizardReview.toolPackageReview.checks.length > 0}
+                    <div class="preflight-list">
+                      {#each wizardReview.toolPackageReview.checks as item}
+                        <div class="preflight-item">
+                          <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                          <span>{item.label}</span>
+                          {#if item.detail}
+                            <span class="preflight-item-detail">{item.detail}</span>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
               {#if wizardReview.onboarding?.steps?.length > 0 || wizardReview.onboarding?.commands?.length > 0}
                 <div class="preflight-group">
                   <div class="preflight-label">Third-Party Onboarding</div>
@@ -3681,6 +3818,31 @@
                           {/if}
                         </div>
 
+                        {#if installReview.toolPackageReview?.applies}
+                          <div class="preflight-group">
+                            <div class="preflight-label">Tool Package</div>
+                            <div class="preflight-summary-inline">{installReview.toolPackageReview.summary}</div>
+                            <div class="ops-meta-list">
+                              <div>runtime: {installReview.toolPackageReview.runtimeType || '-'}</div>
+                              <div>service: {installReview.toolPackageReview.serviceEntry || '-'}</div>
+                              <div>ui: {installReview.toolPackageReview.uiEntry || '-'}</div>
+                            </div>
+                            {#if installReview.toolPackageReview.checks.length > 0}
+                              <div class="preflight-list">
+                                {#each installReview.toolPackageReview.checks as item}
+                                  <div class="preflight-item">
+                                    <span class="preflight-item-status {item.status}">{String(item.status || 'info').toUpperCase()}</span>
+                                    <span>{item.label}</span>
+                                    {#if item.detail}
+                                      <span class="preflight-item-detail">{item.detail}</span>
+                                    {/if}
+                                  </div>
+                                {/each}
+                              </div>
+                            {/if}
+                          </div>
+                        {/if}
+
                         <div class="preflight-group">
                           <div class="preflight-label">Lifecycle Safeguards</div>
                           <div class="preflight-summary-inline">{installReview.lifecycleSafeguards?.summary || 'No lifecycle safeguards.'}</div>
@@ -3867,6 +4029,10 @@
                   <span>v{pkg.version}</span>
                   <span>{pkg.runtime}</span>
                   <span>cap:{pkg.appType || pkg.type || 'app'}</span>
+                  {#if (pkg.appType || pkg.type) === 'hybrid'}
+                    <span>ui:{pkg.ui?.entry || pkg.runtimeProfile?.ui?.entry || pkg.entry || '-'}</span>
+                    <span>svc:{pkg.service?.entry || pkg.runtimeProfile?.entry || '-'}</span>
+                  {/if}
                   <span class="boundary-chip {getWorkspaceBridge(pkg).status === 'inventory+local-workspace' ? 'local' : 'inventory'}">
                     boundary:{getWorkspaceBoundaryLabel(pkg)}
                   </span>

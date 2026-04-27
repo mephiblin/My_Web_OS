@@ -193,6 +193,58 @@
         "entry": "service.py",
         "permissions": []
       }
+    },
+    {
+      "id": "node-hybrid-tool",
+      "title": "Node Hybrid Tool",
+      "category": "runtime",
+      "description": "Sandbox UI plus managed Node.js service for trusted local tool packages.",
+      "defaults": {
+        "runtimeType": "process-node",
+        "appType": "hybrid",
+        "entry": "service/index.js",
+        "uiEntry": "ui/index.html",
+        "permissions": ["runtime.process", "service.bridge", "app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "python-hybrid-tool",
+      "title": "Python Hybrid Tool",
+      "category": "runtime",
+      "description": "Sandbox UI plus managed Python service for trusted local tool packages.",
+      "defaults": {
+        "runtimeType": "process-python",
+        "appType": "hybrid",
+        "entry": "service.py",
+        "uiEntry": "ui/index.html",
+        "permissions": ["runtime.process", "service.bridge", "app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "media-library-service-stub",
+      "title": "Media Library Service Stub",
+      "category": "media",
+      "description": "Hybrid starter for Plex or Immich class media-library services.",
+      "defaults": {
+        "runtimeType": "process-node",
+        "appType": "hybrid",
+        "entry": "service/index.js",
+        "uiEntry": "ui/index.html",
+        "permissions": ["runtime.process", "service.bridge", "host.allowedRoots.read", "app.data.read", "app.data.write"]
+      }
+    },
+    {
+      "id": "download-worker-stub",
+      "title": "Download Worker Stub",
+      "category": "network",
+      "description": "Hybrid starter for trusted downloader services with outbound network access.",
+      "defaults": {
+        "runtimeType": "process-node",
+        "appType": "hybrid",
+        "entry": "service/index.js",
+        "uiEntry": "ui/index.html",
+        "permissions": ["runtime.process", "service.bridge", "host.allowedRoots.write", "network.outbound", "app.data.read", "app.data.write"]
+      }
     }
   ]
 }

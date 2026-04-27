@@ -1,19 +1,28 @@
-# 첫 애드온 Quickstart
+﻿# 첫 Sandbox UI 애드온 Quickstart
 
-상태: `[ACTIVE]`
+Status: `[ACTIVE]`
 
-이 문서는 빈 폴더에서 시작해서 launcher에서 실행되는 가장 작은 애드온을
-만드는 절차다. 파일 연동, 배포, 권한 승인은 뒤 문서를 보고 붙인다.
+이 문서는 가장 작은 `sandbox-html` 애드온을 만든다. 목표는 launcher에 표시되고, WebOS SDK를 통해 알림과 app-owned data를 사용하는 것이다.
 
-## 1. 폴더 만들기
+## 1. 패키지 폴더 만들기
 
-```bash
-mkdir -p server/storage/inventory/apps/hello-addon
+독립 개발 기준 패키지 루트:
+
+```text
+hello-addon/
+  manifest.json
+  index.html
 ```
 
-## 2. manifest.json 작성
+repo 안에서 직접 테스트한다면 위치는 다음과 같다.
 
-`server/storage/inventory/apps/hello-addon/manifest.json`:
+```text
+server/storage/inventory/apps/hello-addon/
+  manifest.json
+  index.html
+```
+
+## 2. manifest.json
 
 ```json
 {
@@ -35,76 +44,39 @@ mkdir -p server/storage/inventory/apps/hello-addon
 }
 ```
 
-일반 UI 애드온은 `type: "app"`과 `runtime.type: "sandbox-html"`을 기본값으로
-쓴다. `service`, `hybrid`, `process-node`, `process-python`, `binary`는
-ordinary UI addon 계약이 아니며 별도 lifecycle/approval 설계가 필요하다.
+핵심:
 
-## 3. index.html 작성
+- `type: "app"`: launcher에 표시되는 일반 앱
+- `runtime.type: "sandbox-html"`: iframe sandbox에서 실행
+- `runtime.entry`: 패키지 루트 기준 상대 HTML 경로
+- `permissions`: SDK로 사용할 기능을 명시
 
-`server/storage/inventory/apps/hello-addon/index.html`:
+## 3. index.html
 
 ```html
 <!doctype html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hello Addon</title>
   <style>
-    :root {
-      color-scheme: dark;
-      font-family: system-ui, sans-serif;
-      background: #111827;
-      color: #e5e7eb;
-    }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-    }
-    header, footer {
-      padding: 12px 16px;
-      background: #0f172a;
-      border-bottom: 1px solid #243244;
-    }
-    main {
-      display: grid;
-      gap: 12px;
-      align-content: start;
-      padding: 16px;
-    }
-    button {
-      width: fit-content;
-      border: 1px solid #38bdf8;
-      background: #075985;
-      color: white;
-      border-radius: 6px;
-      padding: 8px 10px;
-      cursor: pointer;
-    }
-    pre {
-      white-space: pre-wrap;
-      background: #020617;
-      border: 1px solid #243244;
-      border-radius: 6px;
-      padding: 12px;
-    }
-    .error {
-      color: #fecaca;
-    }
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 16px; background: #0f172a; color: #e5e7eb; }
+    main { display: grid; gap: 12px; align-content: start; }
+    button { width: fit-content; border: 1px solid #38bdf8; background: #075985; color: white; border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+    pre { white-space: pre-wrap; background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 12px; }
+    .error { color: #fecaca; }
   </style>
 </head>
 <body>
-  <header>
-    <strong>Hello Addon</strong>
-  </header>
   <main>
+    <h1>Hello Addon</h1>
     <button id="notifyButton" type="button">Send Notification</button>
     <button id="saveButton" type="button">Save App Data</button>
     <pre id="output">Starting...</pre>
+    <div id="status">Waiting for WebOS context...</div>
   </main>
-  <footer id="status">Waiting for WebOS context...</footer>
 
   <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
   <script>
@@ -119,73 +91,64 @@ ordinary UI addon 계약이 아니며 별도 lifecycle/approval 설계가 필요
     }
 
     function show(value) {
-      outputEl.textContent = typeof value === 'string'
-        ? value
-        : JSON.stringify(value, null, 2);
+      outputEl.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
     }
 
     async function main() {
       const context = await window.WebOS.ready();
-      const app = context?.app || {};
-      setStatus(`Ready: ${app.id || 'unknown app'}`);
-      show({
-        appId: app.id,
-        permissions: app.permissions || [],
-        launchData: app.launchData || null
-      });
+      show(context);
+      setStatus(`Ready: ${context.app.id}`);
 
       notifyButton.addEventListener('click', async () => {
         await window.WebOS.ui.notification({
-          title: app.title || 'Hello Addon',
-          message: 'Hello from sandbox addon.',
-          type: 'success'
+          title: 'Hello Addon',
+          message: 'Notification from sandbox addon.'
         });
       });
 
       saveButton.addEventListener('click', async () => {
         await window.WebOS.app.data.write({
-          path: 'settings.json',
+          path: 'hello.json',
           content: JSON.stringify({ savedAt: new Date().toISOString() }, null, 2)
         });
-        const files = await window.WebOS.app.data.list({ path: '' });
-        const saved = await window.WebOS.app.data.read({ path: 'settings.json' });
-        show({ files, saved });
+        const saved = await window.WebOS.app.data.read({ path: 'hello.json' });
+        show(saved);
       });
     }
 
     main().catch((err) => {
-      setStatus(err?.message || 'Addon failed to start.', true);
-      show({
-        code: err?.code || 'ADDON_START_FAILED',
-        message: err?.message || String(err)
-      });
+      setStatus(err.message || String(err), true);
+      show({ code: err.code || 'ERROR', message: err.message || String(err) });
     });
   </script>
 </body>
 </html>
 ```
 
-## 4. 검증
+## 4. ZIP 설치
 
-```bash
-npm run package:doctor -- --manifest=server/storage/inventory/apps/hello-addon/manifest.json
-git diff --check
+```text
+hello-addon.zip
+  manifest.json
+  index.html
 ```
 
-## 5. 실행
+Package Center에서 ZIP import를 실행하면 preflight가 manifest, permissions, backup/rollback 영향을 확인한다.
 
-1. Web OS를 실행한다.
-2. browser를 새로고침해서 app registry cache를 갱신한다.
-3. launcher에서 `Hello Addon`을 연다.
-4. `Ready: hello-addon`이 보이고 버튼 동작이 성공하면 최소 실행 계약은 통과다.
+## 5. 개발 smoke checklist
 
-서버가 이미 켜져 있다면 inventory 파일을 추가해도 보통 서버 재시작은 필요하지
-않다. 다만 client app registry는 한 번 로드되면 cache되므로 browser reload가
-가장 확실하다.
+- launcher에 앱이 표시된다.
+- 앱을 열면 `WebOS.ready()`가 성공한다.
+- notification 버튼이 동작한다.
+- app data write/read가 동작한다.
+- browser console에 permission denied가 없다.
+- ZIP import 후에도 동일하게 동작한다.
 
-## 6. 다음 단계
+## 6. 흔한 실패
 
-- File Station에서 파일을 열어야 하면 `CORE_INTEGRATION_MAP.md`를 본다.
-- 권한, manifest, extension point는 `MANIFEST_PERMISSIONS_AND_EXTENSION_POINTS.md`를 본다.
-- ZIP import, registry, update, rollback은 `PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md`를 본다.
-- host 파일 overwrite와 승인 UX는 `SECURITY_LIMITS_AND_APPROVALS.md`를 본다.
+| 증상 | 원인 | 해결 |
+| --- | --- | --- |
+| `APP_PERMISSION_DENIED` | manifest permissions 누락 | 사용하는 SDK 권한 추가 |
+| `WEBOS_SDK_READY_TIMEOUT` | sandbox context를 못 받음 | `/api/sandbox/sdk.js` 로드, iframe launch 확인 |
+| app data write 실패 | `app.data.write` 누락 | permission 추가 |
+| launcher에 안 보임 | `type`/`runtime.entry`/파일 누락 | manifest와 entry 파일 확인 |

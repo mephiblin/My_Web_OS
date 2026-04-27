@@ -1,278 +1,163 @@
-# Packaging, Installation, And Testing
+﻿# Packaging, Installation, And Testing
 
 Status: `[ACTIVE]`
 
-## Development Modes
+이 문서는 개발자가 패키지를 만들고 검증하는 실전 체크리스트다.
 
-### Direct Inventory Development
+## 1. 독립 패키지 루트
 
-Best for quick local work.
-
-```text
-server/storage/inventory/apps/<app-id>/
-  manifest.json
-  index.html
-```
-
-Run:
-
-```bash
-npm run package:doctor -- --manifest=server/storage/inventory/apps/<app-id>/manifest.json
-```
-
-Then open the app from the Web OS launcher or File Station if file associations
-apply.
-
-Notes:
-
-- Inventory remains the canonical runtime source.
-- The backend reads package manifests from disk.
-- The client app registry caches `/api/system/apps`; reload the browser after
-  adding a new inventory package directly.
-- Direct inventory editing bypasses Package Center install/update approval,
-  backup, and rollback paths. Use ZIP or registry when testing lifecycle.
-
-### Built-In Addon Package Source
-
-For built-in addon replacements, keep both source and runtime copy aligned:
+일반 sandbox app:
 
 ```text
-client/src/apps/addons/<addon>/package/
-server/storage/inventory/apps/<app-id>/
-```
-
-This is currently used by package-first addon replacements such as:
-
-- `doc-viewer`
-- `model-viewer`
-- `editor`
-
-### ZIP Import
-
-The zip should contain either a root manifest:
-
-```text
-manifest.json
-index.html
-assets/
-vendor/
-```
-
-or a single package folder:
-
-```text
-my-addon/
+hello-addon/
   manifest.json
   index.html
   assets/
   vendor/
 ```
 
-Package Center import should:
-
-- read manifest during preflight
-- show lifecycle risks
-- require lifecycle approval for install/import/update
-- create backup before replacing installed package files
-- preserve rollback evidence
-
-Direct upload limit is 50 MB. Avoid archives with multiple manifests or
-multiple package roots.
-
-### Registry Distribution
-
-Recommended for distributable addons.
-
-Repository or HTTP contents:
+Hybrid tool package:
 
 ```text
-webos-store.json
-releases/<addon>.zip
+media-tool/
+  manifest.json
+  ui/index.html
+  service/index.js
+  assets/
 ```
 
-The store index points to HTTP(S) package zip artifacts. Package Center may
-convert GitHub repository URLs to
-`https://raw.githubusercontent.com/<owner>/<repo>/main/webos-store.json`, but
-the backend install path downloads JSON/ZIP over HTTP(S); it does not `git clone`.
+## 2. ZIP 만들기
 
-Registry package ZIP download limit is 80 MB and 15 seconds.
-
-See:
+패키지 루트 안의 파일들이 ZIP 루트에 들어가게 만든다.
 
 ```text
-doc/Addon_Dev_Ref/PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md
-doc/reference/community-registry-and-presets.md
-doc/presets/webos-store.preset.json
-doc/presets/package-manifest.preset.json
+manifest.json
+ui/index.html
+service/index.js
 ```
 
-### Package Lifecycle Approval
-
-Install, import, update, rollback, and manifest update use the lifecycle
-approval contract:
+나쁜 예:
 
 ```text
-preflight -> user typed confirmation -> approve -> execute with scoped nonce
+media-tool.zip
+  dist/
+    media-tool/
+      manifest.json
 ```
 
-`{ approved: true }` is rejected. See
-`PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md`.
+Package Center가 단일 package root를 찾을 수 없으면 import가 실패할 수 있다.
 
-### Local Workspace Bridge
+## 3. 직접 inventory 테스트
 
-Package Center may record an optional local workspace bridge:
+repo 안에서 개발 중이면 빠르게 아래 경로에 둘 수 있다.
 
-```json
-{
-  "localWorkspace": {
-    "enabled": true,
-    "path": "/allowed/root/my-addon",
-    "mode": "readwrite"
-  }
-}
+```text
+server/storage/inventory/apps/<app-id>/
 ```
 
-The path must be inside configured allowed roots, and inventory remains
-canonical. This bridge is not sandbox host filesystem permission.
+주의:
 
-## Verification Commands
+- 이 방식은 Package Center install/update approval을 우회한다.
+- backup/rollback 테스트는 ZIP import나 registry install로 해야 한다.
+- browser app registry cache 때문에 새 앱 추가 후 reload가 필요할 수 있다.
 
-Narrow addon manifest check:
+## 4. Doctor
+
+단일 manifest 검사:
 
 ```bash
 npm run package:doctor -- --manifest=server/storage/inventory/apps/<app-id>/manifest.json
 ```
 
-Sandbox contract:
+전체 built-in registry 검사:
 
 ```bash
-node --test --test-concurrency=1 server/tests/sandbox-sdk-contract.test.js
+npm run verify:packages
 ```
 
-Package template/lifecycle checks when changing templates or install flows:
+Doctor가 확인하는 대표 항목:
+
+- app type/runtime type 유효성
+- unsupported runtime fallback 차단
+- hybrid/service managed runtime 요구
+- `runtime.process`, `service.bridge` 누락
+- permission catalog drift
+- file association shape
+
+## 5. Syntax/build checks
+
+서버 route/service를 수정했다면:
 
 ```bash
-node --test --test-concurrency=1 server/tests/package-personal-templates.integration.test.js
-node --test --test-concurrency=1 server/tests/package-lifecycle-approval-contract.test.js
+node --check server/routes/packages.js
+node --check server/routes/sandbox.js
+node --check server/services/runtimeManager.js
+node --check server/services/runtimeProfiles.js
 ```
 
-UI smoke:
-
-```bash
-npm run verify:ui-smoke
-```
-
-Client build:
+클라이언트 UI를 수정했다면:
 
 ```bash
 npm --prefix client run build
 ```
 
-Full release gate:
+## 6. Sandbox app smoke
 
-```bash
-npm run verify
-git diff --check
-```
+- Package Center 또는 direct inventory로 설치
+- launcher에 앱 표시 확인
+- 앱 열기
+- `WebOS.ready()` 성공
+- 필요한 SDK API 호출 성공
+- permission denied가 있으면 manifest 수정
+- ZIP import로도 동일하게 동작 확인
 
-## Manual Addon Smoke
+## 7. Hybrid tool smoke
 
-Use this checklist for any non-trivial addon:
+- Package Center template 또는 ZIP import로 설치
+- preflight에서 Tool Package review 확인
+- service start
+- logs/events 확인
+- `/health` healthcheck healthy 확인
+- UI open
+- `WebOS.service.request({ path: '/library/status' })` 성공
+- service stop
+- UI에서 recoverable service unavailable 표시
+- service restart
+- rollback backup 생성/복원 확인
 
-1. Launch from desktop/start/launcher.
-2. Confirm app shows ready state, not blank iframe.
-3. Open without launch data and confirm clear missing-context message.
-4. Open from File Station with matching file association.
-5. Confirm host file read works only with grant.
-6. Confirm raw preview uses ticket URL when needed.
-7. Confirm host write works only with write grant.
-8. Confirm overwrite triggers parent-owned approval.
-9. Deny approval and confirm addon handles failure.
-10. Approve overwrite and confirm file content changes as expected.
-11. Close and reopen addon.
-12. Remove/reinstall or update through Package Center.
+## 8. Manual test matrix
 
-## Packaging Acceptance Checklist
+| 항목 | Sandbox app | Hybrid tool |
+| --- | --- | --- |
+| manifest doctor | 필요 | 필요 |
+| Package Center preflight | 권장 | 필수 |
+| launcher open | 필요 | UI가 있으면 필요 |
+| SDK ready | 필요 | 필요 |
+| app data read/write | 권한 사용 시 | 권한 사용 시 |
+| service start/stop | 해당 없음 | 필수 |
+| service bridge | 해당 없음 | 필수 |
+| healthcheck | 해당 없음 | 필수 권장 |
+| backup/rollback | update 테스트 시 | update 테스트 시 필수 |
 
-Manifest:
+## 9. 흔한 오류
 
-- `id` stable
-- `title` clear
-- `version` set
-- `runtime.type` is `sandbox-html`
-- `runtime.entry` exists
-- permissions minimal
-- file associations match real behavior
+| Code/Symptom | 원인 | 해결 |
+| --- | --- | --- |
+| `APP_PERMISSION_DENIED` | manifest permission 누락 | permission 추가 |
+| `RUNTIME_PROFILE_INVALID` | runtime/type/entry 계약 위반 | manifest runtime 확인 |
+| `RUNTIME_COMMAND_NOT_ALLOWED` | binary/command allowlist 밖 | runtime config 또는 command 변경 |
+| `RUNTIME_ENTRY_NOT_FOUND` | service entry 파일 없음 | ZIP 구조/entry 경로 수정 |
+| `RUNTIME_SERVICE_UNAVAILABLE` | service stopped/degraded | Package Center에서 start/restart |
+| `SANDBOX_SERVICE_PATH_INVALID` | service bridge path 부적합 | `/health` 같은 상대 path 사용 |
+| launcher 미표시 | `service` type이거나 UI entry 누락 | `app`/`hybrid`와 entry 확인 |
 
-Runtime:
+## 10. 배포 전 최종 체크리스트
 
-- `index.html` includes `/api/sandbox/sdk.js`
-- waits for `WebOS.ready()`
-- visible loading/ready/error states
-- no native risky `confirm()` / `prompt()`
-- no direct backend approval calls
-
-Host access:
-
-- handles missing grant
-- uses `WebOS.files.read()` for reads
-- uses `rawTicket()` and `rawUrl(ticket)` for raw preview
-- uses `WebOS.files.write({ overwrite: true })` for overwrite writes
-- never calls `approveWrite()`
-
-Package lifecycle:
-
-- package doctor passes
-- ZIP import preflight passes
-- install/import/update lifecycle approval is user-entered and scoped
-- update/overwrite creates backup when required
-- rollback path is visible
-- uninstall removes stale file associations
-
-## Troubleshooting
-
-Blank iframe:
-
-- Check manifest `runtime.entry`.
-- Check SDK script path.
-- Check browser console.
-- Check that startup catches errors and renders them.
-
-Permission denied:
-
-- Add missing manifest permission only if truly needed.
-- Confirm File Station provided grant.
-- Confirm grant path matches file path.
-
-Overwrite failed:
-
-- Confirm `overwrite: true`.
-- Confirm user typed parent approval.
-- Retry after stale target/expired approval.
-
-Raw preview failed:
-
-- Confirm `rawTicket()` succeeded.
-- Confirm `rawUrl(ticket)` received ticket object.
-- Confirm ticket did not expire.
-
-Package install failed:
-
-- Run package doctor.
-- Check manifest shape.
-- Check accepted zip layout and upload size.
-- Check Package Center preflight details.
-- Check lifecycle approval target hash if execution says approval invalid.
-
-Registry install failed:
-
-- Confirm source URL is HTTP(S).
-- Confirm store index exposes `zipUrl` or `downloadUrl`.
-- Confirm ZIP is below 80 MB and reachable within 15 seconds.
-- Confirm channel update policy is not blocking the candidate.
-
-Local workspace bridge failed:
-
-- Confirm path is inside configured allowed roots.
-- Confirm path is not a protected inventory system path.
-- Confirm mode is `read` or `readwrite`.
+- ZIP에 `manifest.json`이 있다.
+- entry 파일이 실제로 존재한다.
+- 불필요한 source/build cache가 없다.
+- secrets가 없다.
+- manifest permissions가 최소 권한이다.
+- Package Center preflight가 위험을 정확히 보여준다.
+- update/rollback이 깨지지 않는다.
+- docs/README에 사용법과 위험 권한 설명이 있다.

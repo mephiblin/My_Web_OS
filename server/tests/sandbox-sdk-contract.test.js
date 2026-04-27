@@ -140,6 +140,42 @@ test('sandbox SDK host file helpers request host.file permissions', async () => 
   });
 });
 
+test('sandbox SDK exposes service bridge requests for hybrid tool packages', async () => {
+  const { WebOS, requestAndRespond } = loadSdkHarness(['service.bridge']);
+
+  const serviceRequest = await requestAndRespond(() => WebOS.service.request({
+    method: 'GET',
+    path: '/library/status'
+  }));
+
+  assert.equal(serviceRequest.method, 'service.request');
+  assert.deepEqual(plain(serviceRequest.params), {
+    method: 'GET',
+    path: '/library/status'
+  });
+
+  await assert.rejects(() => loadSdkHarness([]).WebOS.service.request({ path: '/health' }), {
+    code: 'APP_PERMISSION_DENIED'
+  });
+});
+
+test('sandbox service bridge is parent-mediated and permission-gated', () => {
+  const bridgeSource = fs.readFileSync(
+    path.join(__dirname, '../../client/src/core/components/SandboxAppFrame.svelte'),
+    'utf8'
+  );
+  const sandboxRouteSource = fs.readFileSync(
+    path.join(__dirname, '../routes/sandbox.js'),
+    'utf8'
+  );
+
+  assert.match(bridgeSource, /'service\.request': 'service\.bridge'/);
+  assert.match(bridgeSource, /\/service\/request/);
+  assert.match(sandboxRouteSource, /decodeURIComponent\(pathname\)/);
+  assert.match(sandboxRouteSource, /requestPath\.startsWith\('\/\/'\)/);
+  assert.match(sandboxRouteSource, /127\.0\.0\.1/);
+});
+
 test('built-in sandbox package entries use raw tickets and parent-owned overwrite approval', () => {
   const packageEntries = [
     'client/src/apps/addons/document-viewer/package/index.html',

@@ -162,6 +162,16 @@ Answer before implementation:
 ## Operating Rules
 
 - Treat terminal and Host file operations as real operations.
+- Treat Plex, Immich, downloader, and media-library class packages as
+  `hybrid` tool packages: managed local service plus sandbox UI.
+- Hybrid services may use `process-node`, `process-python`, or `binary` and
+  receive `WEBOS_APP_ID`, `WEBOS_PACKAGE_DIR`, `WEBOS_APP_DATA_DIR`,
+  `WEBOS_ALLOWED_ROOTS_JSON`, `WEBOS_SERVICE_PORT`, and
+  `WEBOS_RUNTIME_MODE`.
+- Hybrid UIs call their paired service through `WebOS.service.request()` and
+  must declare `service.bridge`.
+- Native process packages are trusted local tools, not OS-isolated untrusted
+  addons. Docker isolation and per-package folder grants are later layers.
 - Approval is a backend contract, not a browser-only confirmation.
 - Typed confirmation must be user-entered in trusted UI code.
 - Do not copy `preflight.approval.typedConfirmation` or any expected

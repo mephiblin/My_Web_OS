@@ -21,7 +21,12 @@ const { APP_API_POLICY, checkCompatibility } = require('../services/appApiPolicy
 const appPaths = require('../utils/appPaths');
 const inventoryPaths = require('../utils/inventoryPaths');
 const { resolveSafePath, isWithinAllowedRoots, isProtectedSystemPath } = require('../utils/pathPolicy');
-const { normalizeRuntimeProfile, assertValidRuntimeProfile, toManifestRuntimeFields } = require('../services/runtimeProfiles');
+const {
+  normalizeRuntimeProfile,
+  assertValidRuntimeProfile,
+  toManifestRuntimeFields,
+  isManagedRuntime
+} = require('../services/runtimeProfiles');
 
 const router = express.Router();
 
@@ -801,6 +806,27 @@ function buildTemplateManifestInput(template, requestBody = {}) {
       type: template.defaults.runtimeType,
       entry: template.defaults.entry
     },
+    ...(template.defaults.appType === 'hybrid'
+      ? {
+          ui: {
+            type: 'sandbox-html',
+            entry: template.defaults.uiEntry || 'ui/index.html'
+          },
+          service: {
+            autoStart: false,
+            restartPolicy: 'on-failure',
+            maxRetries: 3,
+            restartDelayMs: 1000,
+            http: { enabled: true }
+          },
+          healthcheck: {
+            type: 'http',
+            path: '/health',
+            intervalMs: 10000,
+            timeoutMs: 2000
+          }
+        }
+      : {}),
     permissions: Array.isArray(body.permissions)
       ? body.permissions
       : (Array.isArray(manifestPatch.permissions) ? manifestPatch.permissions : template.defaults.permissions)
@@ -970,12 +996,41 @@ function createDefaultHtmlTemplate({ appId, title }) {
 function createDefaultServiceTemplate({ appId, runtimeType }) {
   if (runtimeType === 'process-python') {
     return `#!/usr/bin/env python3
-import time
+import json
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-print("Service ${appId} started", flush=True)
-while True:
-    print("heartbeat", flush=True)
-    time.sleep(5)
+APP_ID = os.environ.get("WEBOS_APP_ID", "${appId}")
+PORT = int(os.environ.get("WEBOS_SERVICE_PORT", "0") or "0")
+
+class Handler(BaseHTTPRequestHandler):
+    def _json(self, payload, status=200):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/health":
+            self._json({"ok": True, "appId": APP_ID})
+            return
+        if self.path == "/library/status":
+            roots = json.loads(os.environ.get("WEBOS_ALLOWED_ROOTS_JSON", "[]"))
+            self._json({
+                "appId": APP_ID,
+                "dataDir": os.environ.get("WEBOS_APP_DATA_DIR", ""),
+                "allowedRoots": roots
+            })
+            return
+        self._json({"error": True, "code": "NOT_FOUND", "message": "Not found"}, 404)
+
+if not PORT:
+    raise SystemExit("WEBOS_SERVICE_PORT is required")
+
+print(f"Service {APP_ID} listening on {PORT}", flush=True)
+HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 `;
   }
 
@@ -991,10 +1046,99 @@ done
 
   return `'use strict';
 
-  console.log('Service ${appId} started');
-setInterval(() => {
-  console.log('heartbeat');
-}, 5000);
+const http = require('http');
+
+const appId = process.env.WEBOS_APP_ID || '${appId}';
+const port = Number(process.env.WEBOS_SERVICE_PORT || 0);
+const allowedRoots = (() => {
+  try {
+    return JSON.parse(process.env.WEBOS_ALLOWED_ROOTS_JSON || '[]');
+  } catch (_err) {
+    return [];
+  }
+})();
+
+if (!port) {
+  throw new Error('WEBOS_SERVICE_PORT is required.');
+}
+
+const server = http.createServer((req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  if (req.url === '/health') {
+    res.end(JSON.stringify({ ok: true, appId }));
+    return;
+  }
+  if (req.url === '/library/status') {
+    res.end(JSON.stringify({
+      appId,
+      dataDir: process.env.WEBOS_APP_DATA_DIR || '',
+      allowedRoots
+    }));
+    return;
+  }
+  res.statusCode = 404;
+  res.end(JSON.stringify({ error: true, code: 'NOT_FOUND', message: 'Not found' }));
+});
+
+server.listen(port, '127.0.0.1', () => {
+  console.log(\`Service \${appId} listening on \${port}\`);
+});
+`;
+}
+
+function createHybridUiTemplate({ appId, title }) {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${title}</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+      header, footer { padding: 12px 16px; border-bottom: 1px solid #334155; background: #111827; }
+      main { padding: 16px; display: grid; gap: 12px; align-content: start; }
+      button { width: fit-content; border: 1px solid #38bdf8; background: #075985; color: white; border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+      pre { white-space: pre-wrap; background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 12px; }
+      .error { color: #fecaca; }
+    </style>
+  </head>
+  <body>
+    <header><strong>${title}</strong></header>
+    <main>
+      <button id="statusButton" type="button">Load Service Status</button>
+      <pre id="output">Waiting for WebOS context...</pre>
+    </main>
+    <footer id="status">Starting...</footer>
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
+    <script>
+      const statusEl = document.getElementById('status');
+      const outputEl = document.getElementById('output');
+      const button = document.getElementById('statusButton');
+      function show(value) {
+        outputEl.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+      }
+      async function loadStatus() {
+        statusEl.textContent = 'Requesting service...';
+        const result = await window.WebOS.service.request({ method: 'GET', path: '/library/status' });
+        statusEl.textContent = 'Service ready';
+        show(result);
+      }
+      window.WebOS.ready()
+        .then(() => {
+          statusEl.textContent = 'Ready: ${appId}';
+          button.addEventListener('click', () => loadStatus().catch((err) => {
+            statusEl.textContent = err.message || 'Service request failed';
+            statusEl.className = 'error';
+            show({ code: err.code || 'SERVICE_REQUEST_FAILED', message: err.message || String(err) });
+          }));
+        })
+        .catch((err) => {
+          statusEl.textContent = err.message || 'Startup failed';
+          statusEl.className = 'error';
+        });
+    </script>
+  </body>
+</html>
 `;
 }
 
@@ -2987,6 +3131,7 @@ function normalizeManifestInput(input, fallbackAppId) {
     version: String(input?.version || '1.0.0').trim() || '1.0.0',
     type: runtimeFields.type,
     runtime: runtimeFields.runtime,
+    ...(runtimeFields.ui ? { ui: runtimeFields.ui } : {}),
     service: runtimeFields.service,
     healthcheck: runtimeFields.healthcheck,
     resources: runtimeFields.resources,
@@ -2994,7 +3139,9 @@ function normalizeManifestInput(input, fallbackAppId) {
     author: String(input?.author || '').trim(),
     repository: String(input?.repository || '').trim(),
     singleton: Boolean(input?.singleton),
-    entry: runtimeProfile.entry || entry,
+    entry: runtimeProfile.appType === 'hybrid'
+      ? (runtimeProfile.ui?.entry || entry)
+      : (runtimeProfile.entry || entry),
     permissions,
     capabilities: Array.isArray(input?.capabilities)
       ? input.capabilities.map((capability) => String(capability)).filter(Boolean)
@@ -3072,7 +3219,10 @@ async function computePackageHealthReport(appId, options = {}) {
   }
 
   if (runtimeProfile && runtimeProfile.appType !== 'service') {
-    const entryPath = await resolvePackagePath(safeAppId, runtimeProfile.entry || manifest.entry || DEFAULT_ENTRY).catch(() => '');
+    const uiEntry = runtimeProfile.appType === 'hybrid'
+      ? runtimeProfile.ui?.entry
+      : runtimeProfile.entry;
+    const entryPath = await resolvePackagePath(safeAppId, uiEntry || manifest.entry || DEFAULT_ENTRY).catch(() => '');
     if (entryPath && (await fs.pathExists(entryPath))) {
       checks.push({
         id: 'package.entry',
@@ -3084,7 +3234,7 @@ async function computePackageHealthReport(appId, options = {}) {
         id: 'package.entry',
         level: 'fail',
         code: 'PACKAGE_ENTRY_NOT_FOUND',
-        message: `Entry file "${runtimeProfile.entry || manifest.entry || DEFAULT_ENTRY}" was not found.`
+        message: `Entry file "${uiEntry || manifest.entry || DEFAULT_ENTRY}" was not found.`
       });
     }
   }
@@ -3511,6 +3661,144 @@ function buildPermissionReview(manifest = {}) {
       byRisk: riskCounts,
       highestRisk
     }
+  };
+}
+
+function buildToolPackageReview(manifest = {}) {
+  const runtimeProfile = normalizeRuntimeProfile(manifest);
+  const permissionIds = new Set(
+    Array.isArray(manifest.permissions)
+      ? manifest.permissions.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+  );
+  const isService = runtimeProfile.appType === 'service';
+  const isHybrid = runtimeProfile.appType === 'hybrid';
+  const isToolPackage = isService || isHybrid;
+  const checks = [];
+
+  if (!isToolPackage) {
+    return {
+      applies: false,
+      status: 'pass',
+      summary: 'Not a service or hybrid tool package.',
+      checks
+    };
+  }
+
+  checks.push({
+    id: 'tool.runtime.type',
+    status: isManagedRuntime(runtimeProfile) ? 'pass' : 'fail',
+    label: 'Runtime type',
+    detail: `${runtimeProfile.runtimeType} (${runtimeProfile.appType})`
+  });
+  checks.push({
+    id: 'tool.runtime.command',
+    status: runtimeProfile.command || runtimeProfile.runtimeType !== 'binary' ? 'pass' : 'warn',
+    label: 'Runtime command',
+    detail: runtimeProfile.command || (runtimeProfile.runtimeType === 'process-node'
+      ? 'node (allowlisted default)'
+      : runtimeProfile.runtimeType === 'process-python'
+        ? 'python3 (allowlisted default)'
+        : 'Binary runtime should declare an allowlisted command or executable entry.')
+  });
+  checks.push({
+    id: 'tool.service.entry',
+    status: runtimeProfile.entry || runtimeProfile.command ? 'pass' : 'fail',
+    label: 'Managed service entry',
+    detail: runtimeProfile.entry || runtimeProfile.command || 'Tool packages must declare runtime.entry or runtime.command for the managed service.'
+  });
+  if (isHybrid) {
+    checks.push({
+      id: 'tool.ui.entry',
+      status: runtimeProfile.ui?.entry ? 'pass' : 'fail',
+      label: 'Sandbox UI entry',
+      detail: runtimeProfile.ui?.entry || 'Hybrid tool packages must declare ui.entry for the sandbox launch surface.'
+    });
+  }
+  checks.push({
+    id: 'tool.permission.runtime.process',
+    status: permissionIds.has('runtime.process') ? 'pass' : 'fail',
+    label: 'runtime.process permission',
+    detail: permissionIds.has('runtime.process')
+      ? 'Managed runtime permission is declared.'
+      : 'Tool packages need runtime.process so the backend can start the local service.'
+  });
+  if (isHybrid) {
+    checks.push({
+      id: 'tool.permission.service.bridge',
+      status: permissionIds.has('service.bridge') ? 'pass' : 'fail',
+      label: 'service.bridge permission',
+      detail: permissionIds.has('service.bridge')
+        ? 'Sandbox UI can request its paired service through the bridge.'
+        : 'Hybrid tool UIs need service.bridge to call the paired local service.'
+    });
+  }
+  checks.push({
+    id: 'tool.service.http',
+    status: runtimeProfile.service?.http?.enabled ? 'pass' : 'warn',
+    label: 'HTTP service bridge',
+    detail: runtimeProfile.service?.http?.enabled
+      ? 'service.http.enabled is true.'
+      : 'Enable service.http.enabled when the sandbox UI talks to an HTTP service.'
+  });
+  checks.push({
+    id: 'tool.service.lifecycle',
+    status: 'pass',
+    label: 'Service lifecycle',
+    detail: `autoStart=${Boolean(runtimeProfile.service?.autoStart)}, restartPolicy=${runtimeProfile.service?.restartPolicy || 'never'}, maxRetries=${Number(runtimeProfile.service?.maxRetries || 0)}, restartDelayMs=${Number(runtimeProfile.service?.restartDelayMs || 0)}`
+  });
+  checks.push({
+    id: 'tool.healthcheck',
+    status: runtimeProfile.healthcheck?.type === 'none' ? 'warn' : 'pass',
+    label: 'Healthcheck',
+    detail: runtimeProfile.healthcheck?.type === 'http'
+      ? `http ${runtimeProfile.healthcheck.path || '/'} every ${runtimeProfile.healthcheck.intervalMs}ms`
+      : `${runtimeProfile.healthcheck?.type || 'none'}`
+  });
+  checks.push({
+    id: 'tool.permission.network',
+    status: permissionIds.has('network.outbound') ? 'warn' : 'pass',
+    label: 'Network access',
+    detail: permissionIds.has('network.outbound')
+      ? 'Package declares outbound network access.'
+      : 'No outbound network permission declared.'
+  });
+  checks.push({
+    id: 'tool.permission.allowedRoots',
+    status: permissionIds.has('host.allowedRoots.write')
+      ? 'warn'
+      : (permissionIds.has('host.allowedRoots.read') ? 'warn' : 'pass'),
+    label: 'Allowed roots access',
+    detail: permissionIds.has('host.allowedRoots.write')
+      ? 'Package can request read/write awareness of configured allowedRoots.'
+      : (permissionIds.has('host.allowedRoots.read')
+          ? 'Package can request read awareness of configured allowedRoots.'
+          : 'No allowedRoots host access permission declared.')
+  });
+  checks.push({
+    id: 'tool.permission.appData',
+    status: permissionIds.has('app.data.write') || permissionIds.has('app.data.read') ? 'pass' : 'warn',
+    label: 'App data access',
+    detail: permissionIds.has('app.data.write')
+      ? 'Package can read/write its app-owned data directory.'
+      : (permissionIds.has('app.data.read')
+          ? 'Package can read its app-owned data directory.'
+          : 'No explicit app data permission declared.')
+  });
+
+  const failCount = checks.filter((item) => item.status === 'fail').length;
+  const warnCount = checks.filter((item) => item.status === 'warn').length;
+
+  return {
+    applies: true,
+    status: failCount > 0 ? 'fail' : (warnCount > 0 ? 'warn' : 'pass'),
+    summary: failCount > 0
+      ? 'Tool package contract has blocking gaps.'
+      : (warnCount > 0 ? 'Tool package contract needs review.' : 'Tool package contract is ready.'),
+    runtimeType: runtimeProfile.runtimeType,
+    serviceEntry: runtimeProfile.entry || '',
+    uiEntry: runtimeProfile.ui?.entry || '',
+    checks
   };
 }
 
@@ -4063,8 +4351,28 @@ async function createLocalPackageFromManifest(manifestInput, options = {}) {
   await fs.ensureDir(appRoot);
   await fs.writeJson(path.join(appRoot, 'manifest.json'), manifest, { spaces: 2 });
   const runtimeProfile = normalizeRuntimeProfile(manifest);
-  const shouldCreateEntryFile = Boolean(manifest.entry);
-  if (shouldCreateEntryFile) {
+  if (runtimeProfile.appType === 'hybrid') {
+    const serviceEntry = runtimeProfile.entry;
+    const uiEntry = runtimeProfile.ui?.entry;
+    if (serviceEntry) {
+      const servicePath = await resolvePackagePath(manifest.id, serviceEntry);
+      await fs.ensureDir(path.dirname(servicePath));
+      await fs.writeFile(
+        servicePath,
+        createDefaultServiceTemplate({ appId: manifest.id, runtimeType: runtimeProfile.runtimeType }),
+        'utf8'
+      );
+    }
+    if (uiEntry) {
+      const uiPath = await resolvePackagePath(manifest.id, uiEntry);
+      await fs.ensureDir(path.dirname(uiPath));
+      await fs.writeFile(
+        uiPath,
+        createHybridUiTemplate({ appId: manifest.id, title: manifest.title }),
+        'utf8'
+      );
+    }
+  } else if (manifest.entry) {
     const entryPath = await resolvePackagePath(manifest.id, manifest.entry);
     await fs.ensureDir(path.dirname(entryPath));
     if (runtimeProfile.appType === 'service') {
@@ -4118,6 +4426,7 @@ async function buildWizardPreflight(manifestInput, options = {}) {
   const lifecycle = existing ? await packageLifecycleService.getLifecycle(appId).catch(() => null) : null;
   const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
   const permissionsReview = buildPermissionReview(manifest);
+  const toolPackageReview = buildToolPackageReview(manifest);
 
   let qualityGate = null;
   try {
@@ -4180,6 +4489,13 @@ async function buildWizardPreflight(manifestInput, options = {}) {
       area: 'qualityGate'
     });
   }
+  if (toolPackageReview.status === 'fail') {
+    blockers.push({
+      code: 'HYBRID_TOOL_PACKAGE_CONTRACT_FAILED',
+      message: toolPackageReview.summary,
+      area: 'toolPackage'
+    });
+  }
 
   blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
 
@@ -4201,6 +4517,7 @@ async function buildWizardPreflight(manifestInput, options = {}) {
           }
     },
     permissionsReview,
+    toolPackageReview,
     qualityGate,
     dependencyCompatibility,
     backupPlan,
@@ -4230,6 +4547,7 @@ async function buildZipImportPreflight(filePath, options = {}) {
   const runtimeManager = options.runtimeManager || null;
   const runtimeStatus = runtimeManager?.getRuntimeStatusMap?.()[appId] || null;
   const permissionsReview = buildPermissionReview(incomingManifest);
+  const toolPackageReview = buildToolPackageReview(incomingManifest);
 
   let qualityGateReport = null;
   try {
@@ -4294,6 +4612,13 @@ async function buildZipImportPreflight(filePath, options = {}) {
       area: 'qualityGate'
     });
   }
+  if (toolPackageReview.status === 'fail') {
+    blockers.push({
+      code: 'HYBRID_TOOL_PACKAGE_CONTRACT_FAILED',
+      message: toolPackageReview.summary,
+      area: 'toolPackage'
+    });
+  }
 
   blockers.push(...toSafeguardBlockers(lifecycleSafeguards));
 
@@ -4323,6 +4648,7 @@ async function buildZipImportPreflight(filePath, options = {}) {
           }
     },
     permissionsReview,
+    toolPackageReview,
     qualityGate: qualityGateReport,
     dependencyCompatibility,
     backupPlan,
@@ -5426,6 +5752,7 @@ router.post('/registry/preflight', async (req, res) => {
     const lifecycle = existing ? await packageLifecycleService.getLifecycle(appId).catch(() => null) : null;
 
     const permissionsReview = buildPermissionReview(incomingManifest);
+    const toolPackageReview = buildToolPackageReview(incomingManifest);
 
     let qualityGateReport = null;
     try {
@@ -5509,6 +5836,13 @@ router.post('/registry/preflight', async (req, res) => {
         area: 'qualityGate'
       });
     }
+    if (toolPackageReview.status === 'fail') {
+      blockers.push({
+        code: 'HYBRID_TOOL_PACKAGE_CONTRACT_FAILED',
+        message: toolPackageReview.summary,
+        area: 'toolPackage'
+      });
+    }
 
     if (updatePolicy?.evaluated && updatePolicy.policy && !updatePolicy.policy.allowed) {
       if (!target.forcePolicyBypass) {
@@ -5560,6 +5894,7 @@ router.post('/registry/preflight', async (req, res) => {
               }
         },
         permissionsReview,
+        toolPackageReview,
         qualityGate: qualityGateReport,
         dependencyCompatibility,
         backupPlan,
@@ -5728,7 +6063,15 @@ router.post('/registry/install', async (req, res) => {
       }
     }
     const operationType = existing ? 'update' : 'install';
+    const toolPackageReview = buildToolPackageReview(incomingManifest);
     const blockers = toSafeguardBlockers(lifecycleSafeguards);
+    if (toolPackageReview.status === 'fail') {
+      blockers.push({
+        code: 'HYBRID_TOOL_PACKAGE_CONTRACT_FAILED',
+        message: toolPackageReview.summary,
+        area: 'toolPackage'
+      });
+    }
     const preflight = attachLifecycleApproval({
       operation: {
         type: operationType,
@@ -5749,6 +6092,7 @@ router.post('/registry/install', async (req, res) => {
           : { installed: false }
       },
       permissionsReview: buildPermissionReview(incomingManifest),
+      toolPackageReview,
       dependencyCompatibility,
       backupPlan,
       lifecycleSafeguards,
@@ -6014,20 +6358,43 @@ router.post('/ecosystem/templates/:templateId/scaffold', async (req, res) => {
     await fs.writeJson(path.join(appRoot, 'manifest.json'), manifest, { spaces: 2 });
 
     const runtimeProfile = normalizeRuntimeProfile(manifest);
-    const entryPath = await resolvePackagePath(manifest.id, manifest.entry);
-    await fs.ensureDir(path.dirname(entryPath));
-    if (runtimeProfile.appType === 'service') {
-      await fs.writeFile(
-        entryPath,
-        createDefaultServiceTemplate({ appId: manifest.id, runtimeType: runtimeProfile.runtimeType }),
-        'utf8'
-      );
+    if (runtimeProfile.appType === 'hybrid') {
+      const serviceEntry = runtimeProfile.entry;
+      const uiEntry = runtimeProfile.ui?.entry;
+      if (serviceEntry) {
+        const servicePath = await resolvePackagePath(manifest.id, serviceEntry);
+        await fs.ensureDir(path.dirname(servicePath));
+        await fs.writeFile(
+          servicePath,
+          createDefaultServiceTemplate({ appId: manifest.id, runtimeType: runtimeProfile.runtimeType }),
+          'utf8'
+        );
+      }
+      if (uiEntry) {
+        const uiPath = await resolvePackagePath(manifest.id, uiEntry);
+        await fs.ensureDir(path.dirname(uiPath));
+        await fs.writeFile(
+          uiPath,
+          createHybridUiTemplate({ appId: manifest.id, title: manifest.title }),
+          'utf8'
+        );
+      }
     } else {
-      await fs.writeFile(
-        entryPath,
-        createTemplateEntryContent(template.id, { appId: manifest.id, title: manifest.title }),
-        'utf8'
-      );
+      const entryPath = await resolvePackagePath(manifest.id, manifest.entry);
+      await fs.ensureDir(path.dirname(entryPath));
+      if (runtimeProfile.appType === 'service') {
+        await fs.writeFile(
+          entryPath,
+          createDefaultServiceTemplate({ appId: manifest.id, runtimeType: runtimeProfile.runtimeType }),
+          'utf8'
+        );
+      } else {
+        await fs.writeFile(
+          entryPath,
+          createTemplateEntryContent(template.id, { appId: manifest.id, title: manifest.title }),
+          'utf8'
+        );
+      }
     }
 
     const readmePath = await resolvePackagePath(manifest.id, 'README.md');
@@ -6748,6 +7115,7 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
     }
 
     const permissionsReview = buildPermissionReview(manifest);
+    const toolPackageReview = buildToolPackageReview(manifest);
     const previousManifest = await readManifestRaw(routeAppId);
     const lifecycle = await packageLifecycleService.getLifecycle(routeAppId).catch(() => null);
     const runtimeManager = req.app.get('runtimeManager');
@@ -6769,6 +7137,13 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
 
     const blockers = [];
     blockers.push(...mediaScopeReview.blockers);
+    if (toolPackageReview.status === 'fail') {
+      blockers.push({
+        code: 'HYBRID_TOOL_PACKAGE_CONTRACT_FAILED',
+        message: toolPackageReview.summary,
+        area: 'toolPackage'
+      });
+    }
     let runtimeProfile = null;
     try {
       runtimeProfile = normalizeRuntimeProfile(manifest);
@@ -6781,13 +7156,16 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
       });
     }
 
+    const uiEntry = runtimeProfile?.appType === 'hybrid'
+      ? runtimeProfile.ui?.entry
+      : runtimeProfile?.entry;
     const shouldValidateUiEntry = runtimeProfile && runtimeProfile.appType !== 'service';
     if (shouldValidateUiEntry) {
-      const entryPath = await resolvePackagePath(routeAppId, manifest.entry);
+      const entryPath = await resolvePackagePath(routeAppId, uiEntry || manifest.entry);
       if (!(await fs.pathExists(entryPath))) {
         blockers.push({
           code: 'PACKAGE_ENTRY_NOT_FOUND',
-          message: `Entry file "${manifest.entry}" does not exist.`,
+          message: `Entry file "${uiEntry || manifest.entry}" does not exist.`,
           area: 'entry'
         });
       }
@@ -6820,6 +7198,7 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
           appId: routeAppId
         },
         permissionsReview,
+        toolPackageReview,
         mediaScopeReview,
         dependencyCompatibility,
         lifecycleSafeguards,
@@ -6838,6 +7217,7 @@ router.post(`/${APP_ID_ROUTE}/manifest/preflight`, async (req, res) => {
       previousManifestHash: previousManifest ? computeObjectHash('package-manifest-previous-v1', previousManifest) : null,
       incomingManifestHash: computeObjectHash('package-manifest-incoming-v1', manifest),
       permissionsReview,
+      toolPackageReview,
       mediaScopeReview,
       dependencyCompatibility,
       runtimeProfile,
@@ -6912,13 +7292,16 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
     }
     const runtimeProfile = normalizeRuntimeProfile(manifest);
     assertValidRuntimeProfile(manifest, runtimeProfile);
+    const uiEntry = runtimeProfile.appType === 'hybrid'
+      ? runtimeProfile.ui?.entry
+      : runtimeProfile.entry;
     const shouldValidateUiEntry = runtimeProfile.appType !== 'service';
-    const entryPath = await resolvePackagePath(routeAppId, manifest.entry);
+    const entryPath = await resolvePackagePath(routeAppId, uiEntry || manifest.entry);
     if (shouldValidateUiEntry && !(await fs.pathExists(entryPath))) {
       return res.status(400).json({
         error: true,
         code: 'PACKAGE_ENTRY_NOT_FOUND',
-        message: `Entry file "${manifest.entry}" does not exist.`
+        message: `Entry file "${uiEntry || manifest.entry}" does not exist.`
       });
     }
     let dependencyCompatibility = null;
@@ -6941,16 +7324,26 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
       dependencyCompatibility,
       backupPlan: { required: true, reason: 'manifest-update' }
     });
+    const permissionsReview = buildPermissionReview(manifest);
+    const toolPackageReview = buildToolPackageReview(manifest);
     const blockers = [
       ...mediaScopeReview.blockers,
       ...toSafeguardBlockers(lifecycleSafeguards)
     ];
+    if (toolPackageReview.status === 'fail') {
+      blockers.push({
+        code: 'HYBRID_TOOL_PACKAGE_CONTRACT_FAILED',
+        message: toolPackageReview.summary,
+        area: 'toolPackage'
+      });
+    }
     const preflight = attachLifecycleApproval({
       operation: {
         type: 'manifest-update',
         appId: routeAppId
       },
-      permissionsReview: buildPermissionReview(manifest),
+      permissionsReview,
+      toolPackageReview,
       mediaScopeReview,
       dependencyCompatibility,
       lifecycleSafeguards,
@@ -6971,7 +7364,8 @@ router.put(`/${APP_ID_ROUTE}/manifest`, async (req, res) => {
         appId: routeAppId,
         previousManifestHash: previousManifest ? computeObjectHash('package-manifest-previous-v1', previousManifest) : null,
         incomingManifestHash: computeObjectHash('package-manifest-incoming-v1', manifest),
-        permissionsReview: buildPermissionReview(manifest),
+        permissionsReview,
+        toolPackageReview,
         mediaScopeReview,
         dependencyCompatibility,
         runtimeProfile,

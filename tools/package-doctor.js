@@ -4,7 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 const builtinAppsSeed = require('../server/config/builtinAppsSeed');
-const { normalizeRuntimeProfile } = require('../server/services/runtimeProfiles');
+const { CAPABILITY_CATALOG } = require('../server/services/capabilityCatalog');
+const { isManagedRuntime, normalizeRuntimeProfile } = require('../server/services/runtimeProfiles');
 
 const SUPPORTED_RUNTIME_TYPES = new Set(['sandbox-html', 'process-node', 'process-python', 'binary']);
 const SUPPORTED_APP_TYPES = new Set(['app', 'widget', 'service', 'hybrid', 'developer']);
@@ -21,16 +22,7 @@ function collectBuiltinSystemAppIds(seed = builtinAppsSeed) {
 }
 
 const BUILTIN_SYSTEM_APP_IDS = collectBuiltinSystemAppIds();
-const KNOWN_PERMISSIONS = new Set([
-  'app.data.list',
-  'app.data.read',
-  'app.data.write',
-  'host.file.read',
-  'host.file.write',
-  'ui.notification',
-  'window.open',
-  'system.info'
-]);
+const KNOWN_PERMISSIONS = new Set(CAPABILITY_CATALOG.map((item) => item.id));
 const FILE_ASSOC_ACTIONS = new Set(['preview', 'open', 'edit', 'import', 'export']);
 const FILE_EXTENSION_RE = /^[a-z0-9][a-z0-9._+-]{0,31}$/i;
 const MIME_TYPE_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/i;
@@ -345,6 +337,16 @@ function validateBackgroundServiceContributions(checks, manifest) {
   });
 }
 
+function getDeclaredRuntimeType(manifest) {
+  if (typeof manifest?.runtime === 'string') {
+    return String(manifest.runtime || '').trim().toLowerCase();
+  }
+  if (manifest?.runtime && typeof manifest.runtime === 'object') {
+    return String(manifest.runtime.type || manifest.runtime.runtimeType || '').trim().toLowerCase();
+  }
+  return '';
+}
+
 function runChecks(manifest) {
   const checks = [];
 
@@ -353,7 +355,10 @@ function runChecks(manifest) {
   const appType = String(manifest?.type || '').trim();
   const runtimeProfile = normalizeRuntimeProfile(manifest);
   const runtimeType = String(runtimeProfile?.runtimeType || '').trim();
+  const declaredRuntimeType = getDeclaredRuntimeType(manifest);
   const entry = String(runtimeProfile?.entry || manifest?.entry || '').trim();
+  const uiEntry = String(runtimeProfile?.ui?.entry || manifest?.ui?.entry || '').trim();
+  const runtimeCommand = String(runtimeProfile?.command || manifest?.runtime?.command || '').trim();
   const permissions = Array.isArray(manifest?.permissions) ? manifest.permissions.map(String) : [];
   const fileAssociations = manifest?.fileAssociations;
 
@@ -375,15 +380,15 @@ function runChecks(manifest) {
       : makeResult('fail', 'manifest.type', 'App type is invalid.', appType || '(empty)')
   );
 
-  checks.push(
-    SUPPORTED_RUNTIME_TYPES.has(runtimeType)
-      ? makeResult('pass', 'manifest.runtime.type', 'Runtime type is supported.', runtimeType)
-      : makeResult('fail', 'manifest.runtime.type', 'Runtime type is invalid.', runtimeType || '(empty)')
-  );
-
   const runtimeDeclared = Boolean(
     (typeof manifest?.runtime === 'string' && String(manifest.runtime || '').trim()) ||
-    (manifest?.runtime && typeof manifest.runtime === 'object' && String(manifest.runtime.type || '').trim())
+    (manifest?.runtime && typeof manifest.runtime === 'object' && String(manifest.runtime.type || manifest.runtime.runtimeType || '').trim())
+  );
+  const runtimeTypeForValidation = declaredRuntimeType || runtimeType;
+  checks.push(
+    SUPPORTED_RUNTIME_TYPES.has(runtimeTypeForValidation)
+      ? makeResult('pass', 'manifest.runtime.type', 'Runtime type is supported.', runtimeTypeForValidation)
+      : makeResult('fail', 'manifest.runtime.type', 'Runtime type is invalid.', runtimeTypeForValidation || '(empty)')
   );
   if (!runtimeDeclared) {
     checks.push(
@@ -396,14 +401,52 @@ function runChecks(manifest) {
     );
   }
 
-  if (appType !== 'service') {
+  if (appType === 'hybrid') {
+    if (!isManagedRuntime(runtimeProfile)) {
+      checks.push(
+        makeResult(
+          'fail',
+          'manifest.runtime.type',
+          'Hybrid package runtime must be process-node, process-python, or binary.',
+          runtimeTypeForValidation || '(empty)'
+        )
+      );
+    }
+    checks.push(
+      entry || runtimeCommand
+        ? makeResult('pass', 'manifest.runtime.entry', 'Hybrid service runtime entry or command exists.', entry || runtimeCommand)
+        : makeResult('fail', 'manifest.runtime.entry', 'Hybrid package requires a service runtime entry or command.')
+    );
+    checks.push(
+      uiEntry
+        ? makeResult('pass', 'manifest.ui.entry', 'Hybrid sandbox UI entry exists.', uiEntry)
+        : makeResult('fail', 'manifest.ui.entry', 'Hybrid package requires ui.entry.')
+    );
+    if (runtimeProfile?.ui?.runtimeType !== 'sandbox-html') {
+      checks.push(makeResult('fail', 'manifest.ui.type', 'Hybrid UI must use sandbox-html.', runtimeProfile?.ui?.runtimeType || '(empty)'));
+    }
+  } else if (appType === 'service') {
+    if (!isManagedRuntime(runtimeProfile)) {
+      checks.push(
+        makeResult(
+          'fail',
+          'manifest.runtime.type',
+          'Service package runtime must be process-node, process-python, or binary.',
+          runtimeTypeForValidation || '(empty)'
+        )
+      );
+    }
+    checks.push(
+      entry || runtimeCommand
+        ? makeResult('pass', 'manifest.runtime.entry', 'Service runtime entry or command exists.', entry || runtimeCommand)
+        : makeResult('fail', 'manifest.runtime.entry', 'Service package requires a runtime entry or command.')
+    );
+  } else {
     checks.push(
       entry
         ? makeResult('pass', 'manifest.runtime.entry', 'Runtime entry exists.', entry)
         : makeResult('fail', 'manifest.runtime.entry', 'Runtime entry is required for non-service apps.')
     );
-  } else {
-    checks.push(makeResult('pass', 'manifest.runtime.entry', 'Service app entry rule is acceptable.', entry || '(empty)'));
   }
 
   for (const permission of permissions) {
@@ -416,6 +459,12 @@ function runChecks(manifest) {
 
   if (permissions.length === 0) {
     checks.push(makeResult('warn', 'permissions', 'No permissions declared. Confirm this is intentional.'));
+  }
+  if ((appType === 'service' || appType === 'hybrid') && !permissions.includes('runtime.process')) {
+    checks.push(makeResult('fail', 'permissions.runtime.process', 'Managed tool packages must declare runtime.process.'));
+  }
+  if (appType === 'hybrid' && !permissions.includes('service.bridge')) {
+    checks.push(makeResult('fail', 'permissions.service.bridge', 'Hybrid UI must declare service.bridge to call its paired service.'));
   }
 
   if (fileAssociations === undefined || fileAssociations === null) {

@@ -1,13 +1,16 @@
-# Manifest, Permissions, And Extension Points
+﻿# Manifest, Permissions, And Extension Points
 
 Status: `[ACTIVE]`
 
-## Required Manifest Fields
+이 문서는 My Web OS package manifest의 독립 개발 계약이다.
+
+## 1. 최소 sandbox app manifest
 
 ```json
 {
   "id": "my-addon",
   "title": "My Addon",
+  "description": "Small sandbox addon.",
   "version": "1.0.0",
   "type": "app",
   "runtime": {
@@ -18,268 +21,221 @@ Status: `[ACTIVE]`
 }
 ```
 
-Fields:
+필수 필드:
 
-- `id`: stable package/app identifier
-- `title`: user-visible title
-- `version`: semver-like version string
-- `type`: usually `app`
-- `runtime.type`: use `sandbox-html` for ordinary addons
-- `runtime.entry`: relative entry file
-- `permissions`: declared platform capability list
-
-## Runtime Types
-
-Current addon default:
-
-```text
-sandbox-html
-```
-
-Ordinary UI addons should use:
-
-```text
-type: app
-runtime.type: sandbox-html
-```
-
-Other runtime/app types exist in validation, including `service`, `hybrid`, and
-managed process runtimes. They should not be used for ordinary UI addons
-without explicit lifecycle, approval, runtime, and audit design. Service
-packages may not appear in the desktop launcher.
-
-## Permissions
-
-Common permissions:
-
-| Permission | Use |
+| Field | 설명 |
 | --- | --- |
-| `ui.notification` | Show Web OS notifications/toasts |
-| `window.open` | Open another registered Web OS app |
-| `system.info` | Read system overview |
-| `app.data.list` | List addon-owned data files/directories |
-| `app.data.read` | Read addon-owned data |
-| `app.data.write` | Write addon-owned data |
-| `host.file.read` | Read granted host files |
-| `host.file.write` | Write granted host files |
+| `id` | 안정적인 package/app id. 소문자, 숫자, dash 권장 |
+| `title` | 사용자에게 보이는 이름 |
+| `version` | semver-like 버전 문자열 |
+| `type` | `app`, `widget`, `service`, `hybrid`, `developer` |
+| `runtime.type` | 실행 방식 |
+| `runtime.entry` | runtime entry 파일. 패키지 루트 기준 상대 경로 |
+| `permissions` | 사용할 capability 목록 |
 
-Rules:
+## 2. Package types
 
-- Permission list must be explicit.
-- Do not request host permissions for UI-only tools.
-- `host.file.write` is high-risk and should be justified by the addon purpose.
-
-## Extended Manifest Fields
-
-Current normalizers also understand these fields:
-
-| Field | Status | Notes |
+| Type | 의미 | Launcher |
 | --- | --- | --- |
-| `description` | Stable | User-facing package summary |
-| `icon` | Stable | Lucide name, image URL/data URL, or package asset path |
-| `author` | Stable metadata | Display/review metadata |
-| `repository` | Stable metadata | Project or source URL |
-| `singleton` | Stable | Reuses one app window and may receive `webos:launch-data` |
-| `window.width/height/minWidth/minHeight` | Stable | Initial desktop window sizing hints |
-| `media.scopes` | Advanced | Reviewed lifecycle risk; scope names are validated |
-| `dependencies` | Advanced | Package dependency/version range metadata |
-| `compatibility` | Advanced | Server/runtime compatibility checks |
-| `release.channel` | Distribution | `stable`, `beta`, `alpha`, or `canary` |
-| `service` | Experimental for ordinary addons | Runtime service settings; not a UI addon default |
-| `healthcheck` | Experimental for ordinary addons | Managed runtime healthcheck metadata |
-| `resources` | Experimental for ordinary addons | Managed runtime resource hints |
+| `app` | 일반 windowed sandbox app | 표시 |
+| `widget` | widget package | widget 영역/스토어 대상 |
+| `service` | UI 없는 background package | 숨김 |
+| `hybrid` | sandbox UI + managed service | `ui.entry`가 있으면 표시 |
+| `developer` | 개발/테스트 도구 | 구현 정책에 따름 |
 
-Package Center may preserve unknown fields in source files, but addon authors
-should not rely on unknown fields becoming runtime behavior.
+## 3. Runtime types
 
-## File Associations
+| Runtime | 용도 | 격리 수준 |
+| --- | --- | --- |
+| `sandbox-html` | HTML/CSS/JS UI addon | iframe sandbox |
+| `process-node` | Node.js managed service | 신뢰한 native process |
+| `process-python` | Python managed service | 신뢰한 native process |
+| `binary` | allowlisted binary service | 신뢰한 native process |
 
-Use `fileAssociations` to register opener behavior.
+일반 UI 애드온은 `type: "app"` + `runtime.type: "sandbox-html"`을 사용한다.
+
+Plex/Immich/downloader급 툴은 `type: "hybrid"`를 사용한다.
+
+## 4. Hybrid manifest contract
+
+```json
+{
+  "id": "media-tool",
+  "title": "Media Tool",
+  "version": "0.1.0",
+  "type": "hybrid",
+  "runtime": {
+    "type": "process-node",
+    "entry": "service/index.js",
+    "cwd": ".",
+    "args": []
+  },
+  "ui": {
+    "type": "sandbox-html",
+    "entry": "ui/index.html"
+  },
+  "service": {
+    "autoStart": false,
+    "restartPolicy": "on-failure",
+    "maxRetries": 3,
+    "restartDelayMs": 1000,
+    "http": {
+      "enabled": true
+    }
+  },
+  "healthcheck": {
+    "type": "http",
+    "path": "/health",
+    "intervalMs": 10000,
+    "timeoutMs": 2000
+  },
+  "permissions": [
+    "runtime.process",
+    "service.bridge",
+    "app.data.read",
+    "app.data.write"
+  ]
+}
+```
+
+Hybrid 규칙:
+
+- `runtime.entry`는 service entry다.
+- `ui.entry`는 launcher에서 열리는 sandbox UI entry다.
+- `ui.type`은 `sandbox-html`이어야 한다.
+- `runtime.type`은 `process-node`, `process-python`, `binary` 중 하나여야 한다.
+- UI가 service를 호출하려면 `service.bridge`가 필요하다.
+- managed process 실행에는 `runtime.process`가 필요하다.
+
+## 5. Service package manifest
+
+UI가 없는 background package:
+
+```json
+{
+  "id": "index-worker",
+  "title": "Index Worker",
+  "version": "0.1.0",
+  "type": "service",
+  "runtime": {
+    "type": "process-node",
+    "entry": "service/index.js"
+  },
+  "service": {
+    "autoStart": true,
+    "restartPolicy": "on-failure",
+    "maxRetries": 3,
+    "restartDelayMs": 1000,
+    "http": { "enabled": true }
+  },
+  "healthcheck": {
+    "type": "http",
+    "path": "/health"
+  },
+  "permissions": ["runtime.process", "app.data.read", "app.data.write"]
+}
+```
+
+## 6. Permissions
+
+| Permission | 용도 | 위험 |
+| --- | --- | --- |
+| `ui.notification` | notification/toast 표시 | 낮음 |
+| `window.open` | 다른 Web OS app 열기 | 낮음/중간 |
+| `system.info` | 시스템 요약 조회 | 중간 |
+| `app.data.list` | app-owned data 목록 | 낮음 |
+| `app.data.read` | app-owned data 읽기 | 낮음 |
+| `app.data.write` | app-owned data 쓰기 | 낮음/중간 |
+| `host.file.read` | File Station grant 기반 host file 읽기 | 높음 |
+| `host.file.write` | grant 기반 host file 쓰기/overwrite | 높음 |
+| `runtime.process` | managed native process 실행 | 높음 |
+| `service.bridge` | sandbox UI가 자기 service 호출 | 중간/높음 |
+| `host.allowedRoots.read` | configured allowedRoots 정보/대상 읽기 의도 | 높음 |
+| `host.allowedRoots.write` | allowedRoots 대상 쓰기 의도 | 높음 |
+| `network.outbound` | 외부 네트워크/API/download | 중간/높음 |
+
+권한 원칙:
+
+- 필요한 것만 선언한다.
+- `runtime.process`, `host.*`, `network.outbound`는 설치 전 설명이 필요하다.
+- `host.allowedRoots.*`는 V1에서 OS 강제 격리가 아니라 신뢰/표시/감사 계약이다.
+- 파일 하나를 열고 저장하는 UI 애드온은 `host.file.read/write` grant 흐름을 사용한다.
+- 로컬 라이브러리를 스캔하는 서비스는 `host.allowedRoots.read`를 선언한다.
+
+## 7. Optional metadata
+
+```json
+{
+  "author": "Your Name",
+  "repository": "https://example.com/repo",
+  "icon": "Package",
+  "singleton": true,
+  "window": {
+    "width": 960,
+    "height": 720,
+    "minWidth": 480,
+    "minHeight": 320
+  }
+}
+```
+
+## 8. File associations
+
+파일 뷰어/에디터는 file association을 선언할 수 있다.
 
 ```json
 {
   "fileAssociations": [
     {
-      "extensions": ["json", "txt"],
-      "actions": ["open", "edit", "preview"],
-      "defaultAction": "open"
+      "id": "markdown-open",
+      "label": "Open Markdown",
+      "extensions": ["md", "markdown"],
+      "mimeTypes": ["text/markdown"],
+      "action": "open"
     }
-  ]
+  ],
+  "permissions": ["host.file.read"]
 }
 ```
 
-Rules:
+File Station은 앱을 launch하면서 `context.app.launchData`에 path/grant 정보를 넣는다. Addon은 직접 host path를 신뢰하지 말고 SDK의 file API를 사용한다.
 
-- Extensions are lowercase without dots.
-- Current File Station matching is extension-centered. `mimeTypes` are accepted
-  as manifest metadata but should not be the only matching strategy.
-- `actions` should match behavior the addon actually supports.
-- `defaultAction` should be one of the declared actions.
-- Editor-style apps normally need `host.file.read` and `host.file.write`.
-- Supported actions are `preview`, `open`, `edit`, `import`, and `export`.
+## 9. Healthcheck
 
-## `contributes.fileContextMenu`
-
-Adds File Station right-click file actions.
+Managed service는 healthcheck를 선언할 수 있다.
 
 ```json
 {
-  "contributes": {
-    "fileContextMenu": [
-      {
-        "label": "Open in JSON Tool",
-        "action": "open",
-        "extensions": ["json"]
-      }
-    ]
+  "healthcheck": {
+    "type": "http",
+    "path": "/health",
+    "intervalMs": 10000,
+    "timeoutMs": 2000
   }
 }
 ```
 
-Rules:
+규칙:
 
-- Declarative only.
-- No app code executes during menu construction.
-- Action should map to a supported launch/open behavior.
+- HTTP healthcheck path는 `/`로 시작하는 상대 path여야 한다.
+- absolute URL은 허용하지 않는다.
+- `..`, backslash, control character는 사용하지 않는다.
+- Runtime Manager가 `127.0.0.1:<WEBOS_SERVICE_PORT>`로 붙인다.
 
-## `contributes.fileCreateTemplates`
+## 10. Compatibility/dependencies
 
-Adds safe new-file templates.
+선택적으로 dependencies/compatibility를 선언할 수 있다.
 
 ```json
 {
-  "contributes": {
-    "fileCreateTemplates": [
-      {
-        "label": "JSON File",
-        "name": "Untitled.json",
-        "extension": "json",
-        "content": "{\n  \"hello\": \"world\"\n}\n",
-        "action": "edit",
-        "openAfterCreate": true
-      }
-    ]
+  "dependencies": [
+    { "id": "helper-package", "version": ">=1.0.0", "optional": false }
+  ],
+  "compatibility": {
+    "minServerVersion": "1.0.0",
+    "requiredRuntimeTypes": ["process-node"]
   }
 }
 ```
 
-Rules:
-
-- Template content is static.
-- `openAfterCreate` must be boolean.
-- No addon code executes to create the file.
-- Template `name` must be a safe file name and is capped at 128 characters.
-- Template `content` is capped at 64 KiB.
-
-## `contributes.previewProviders`
-
-Registers preview providers for File Station.
-
-```json
-{
-  "contributes": {
-    "previewProviders": [
-      { "label": "JSON Preview", "extensions": ["json"] }
-    ]
-  }
-}
-```
-
-Rules:
-
-- Requires `host.file.read`.
-- File Station should issue a temporary grant only after explicit user handoff.
-- Addon must handle missing grant.
-
-## `contributes.thumbnailProviders`
-
-Registers thumbnail provider discovery.
-
-```json
-{
-  "contributes": {
-    "thumbnailProviders": [
-      { "label": "Image Thumbnail", "extensions": ["png", "jpg"] }
-    ]
-  }
-}
-```
-
-Current behavior:
-
-- Provider metadata is discoverable.
-- Host file grants are not issued during ordinary directory listing.
-- Explicit user handoff is still required.
-
-## `contributes.settingsPanels`
-
-Declares future package settings panels.
-
-```json
-{
-  "contributes": {
-    "settingsPanels": [
-      { "label": "Settings", "entry": "settings.html" }
-    ]
-  }
-}
-```
-
-Current status:
-
-- Validated and visible as metadata.
-- Full Package Center settings launch is a later UI step.
-
-## `contributes.backgroundServices`
-
-Declares background service candidates.
-
-```json
-{
-  "contributes": {
-    "backgroundServices": [
-      {
-        "id": "indexer",
-        "label": "Indexer",
-        "entry": "service.js",
-        "autoStart": false
-      }
-    ]
-  }
-}
-```
-
-Current status:
-
-- Metadata only for ordinary addon work.
-- `autoStart: true` is treated as a request, not execution permission.
-- Do not rely on background service execution until lifecycle policy exists.
-
-## Validation Limits
-
-Important current limits:
-
-| Item | Limit |
-| --- | --- |
-| Extension value | `a-z`, numbers, `.`, `_`, `+`, `-`, max 32 chars |
-| Contribution id | max 64 chars, `a-z`, numbers, `.`, `_`, `:`, `-` |
-| Contribution label | max 80 chars |
-| File template name | max 128 chars |
-| File template content | max 64 KiB |
-| Relative entry path | safe relative path, max 180 chars |
-
-## Package Replacement Policy
-
-Inventory package apps may replace built-in `standard` addons with the same id.
-
-Current package-first replacements:
-
-- `doc-viewer`
-- `model-viewer`
-- `editor`
-
-Rules:
-
-- Replacement is allowed for `standard` addons.
-- Replacement is not allowed for `system` apps.
-- Package replacement should preserve app id and file association behavior.
+Package Center preflight가 dependency/compatibility 경고 또는 실패를 표시한다.

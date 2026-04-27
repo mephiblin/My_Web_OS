@@ -1,5 +1,6 @@
 const fs = require('fs-extra');
 const path = require('path');
+const net = require('net');
 
 const packageRegistryService = require('./packageRegistryService');
 const ProcessSupervisor = require('./processSupervisor');
@@ -29,6 +30,12 @@ function toNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function createRuntimeError(message, code) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
 class RuntimeManager {
   constructor() {
     this.name = 'runtimeManager';
@@ -48,7 +55,10 @@ class RuntimeManager {
       stopTimeoutMs: 5000,
       logFileMaxBytes: 10 * 1024 * 1024,
       logFileMaxFiles: 5,
-      healthcheckFailureThreshold: 3
+      healthcheckFailureThreshold: 3,
+      servicePortStart: 38000,
+      servicePortEnd: 38999,
+      serviceProxyTimeoutMs: 15000
     };
 
     this.supervisor.on('log', (event) => {
@@ -109,6 +119,7 @@ class RuntimeManager {
       lastError: '',
       healthStatus: 'unknown',
       lastHealthAt: null,
+      servicePort: null,
       updatedAt: nowIso()
     };
     this.appStates.set(appId, initial);
@@ -131,6 +142,7 @@ class RuntimeManager {
       lastError: state.lastError || '',
       healthStatus: state.healthStatus || 'unknown',
       lastHealthAt: state.lastHealthAt || null,
+      servicePort: state.servicePort || null,
       updatedAt: state.updatedAt,
       service: app.runtimeProfile?.service || null,
       healthcheck: app.runtimeProfile?.healthcheck || null
@@ -303,6 +315,66 @@ class RuntimeManager {
     throw err;
   }
 
+  async isPortAvailable(port) {
+    return new Promise((resolve) => {
+      const server = net.createServer();
+      server.unref();
+      server.once('error', () => resolve(false));
+      server.listen(port, '127.0.0.1', () => {
+        server.close(() => resolve(true));
+      });
+    });
+  }
+
+  isServicePortInRange(port) {
+    const normalizedPort = Number(port);
+    return Number.isInteger(normalizedPort) &&
+      normalizedPort >= this.runtimeConfig.servicePortStart &&
+      normalizedPort <= this.runtimeConfig.servicePortEnd;
+  }
+
+  async allocateServicePort(appId) {
+    const state = this.ensureState(appId);
+    const currentPort = Number(state.servicePort);
+    if (this.isServicePortInRange(currentPort) && await this.isPortAvailable(currentPort)) {
+      return currentPort;
+    }
+    state.servicePort = null;
+
+    const start = Math.max(1, toNumber(this.runtimeConfig.servicePortStart, 38000));
+    const end = Math.max(start, toNumber(this.runtimeConfig.servicePortEnd, 38999));
+    const reserved = new Set();
+    for (const [otherAppId, otherState] of this.appStates.entries()) {
+      if (otherAppId === appId) continue;
+      const port = Number(otherState?.servicePort);
+      if (Number.isInteger(port) && port > 0) reserved.add(port);
+    }
+
+    for (let port = start; port <= end; port += 1) {
+      if (reserved.has(port)) continue;
+      if (!(await this.isPortAvailable(port))) continue;
+      state.servicePort = port;
+      return port;
+    }
+
+    const err = new Error(`No available service port in range ${start}-${end}.`);
+    err.code = 'RUNTIME_SERVICE_PORT_UNAVAILABLE';
+    throw err;
+  }
+
+  async buildRuntimeEnv(appId, appRoot, servicePort) {
+    const configPaths = await serverConfig.getPaths();
+    const appDataDir = await appPaths.ensureAppDataRoot(appId);
+    return {
+      WEBOS_APP_ID: appId,
+      WEBOS_PACKAGE_DIR: appRoot,
+      WEBOS_APP_DATA_DIR: appDataDir,
+      WEBOS_ALLOWED_ROOTS_JSON: JSON.stringify(configPaths.allowedRoots || []),
+      WEBOS_SERVICE_PORT: String(servicePort || ''),
+      WEBOS_RUNTIME_MODE: 'managed-process'
+    };
+  }
+
   async resolveExecutionPlan(appId) {
     const { appRoot, profile } = await this.loadManifest(appId);
     if (!isManagedRuntime(profile)) {
@@ -337,10 +409,13 @@ class RuntimeManager {
     if (profile.runtimeType === 'binary') {
       if (!profile.command && runtimeEntryPath) {
         args.push(...profile.args);
+        const servicePort = await this.allocateServicePort(appId);
         return {
           command: runtimeEntryPath,
           args,
           cwd,
+          env: await this.buildRuntimeEnv(appId, appRoot, servicePort),
+          servicePort,
           profile
         };
       }
@@ -348,19 +423,25 @@ class RuntimeManager {
         args.push(runtimeEntryPath);
       }
       args.push(...profile.args);
+      const servicePort = await this.allocateServicePort(appId);
       return {
         command,
         args,
         cwd,
+        env: await this.buildRuntimeEnv(appId, appRoot, servicePort),
+        servicePort,
         profile
       };
     }
 
     args.push(runtimeEntryPath, ...profile.args);
+    const servicePort = await this.allocateServicePort(appId);
     return {
       command,
       args,
       cwd,
+      env: await this.buildRuntimeEnv(appId, appRoot, servicePort),
+      servicePort,
       profile
     };
   }
@@ -401,22 +482,29 @@ class RuntimeManager {
       reason = healthy ? '' : 'Process is not running.';
     } else if (healthType === 'http') {
       const rawPath = String(profile.healthcheck?.path || '').trim();
-      const target = /^https?:\/\//i.test(rawPath)
-        ? rawPath
-        : `http://127.0.0.1${rawPath.startsWith('/') ? rawPath : `/${rawPath}`}`;
-
-      try {
-        const response = await fetch(target, {
-          method: 'GET',
-          signal: AbortSignal.timeout(Math.max(100, toNumber(profile.healthcheck?.timeoutMs, 2000)))
-        });
-        healthy = response.ok;
-        if (!healthy) {
-          reason = `Health endpoint returned ${response.status}.`;
-        }
-      } catch (error) {
+      const statePort = Number(state.servicePort);
+      if (!this.isServicePortInRange(statePort) || !rawPath.startsWith('/')) {
         healthy = false;
-        reason = error.message || 'HTTP healthcheck failed.';
+        reason = 'HTTP healthcheck target is invalid.';
+      } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawPath) || rawPath.startsWith('//') || rawPath.includes('\\')) {
+        healthy = false;
+        reason = 'HTTP healthcheck path must be relative to the package service.';
+      } else {
+        const target = new URL(rawPath, `http://127.0.0.1:${statePort}`).toString();
+
+        try {
+          const response = await fetch(target, {
+            method: 'GET',
+            signal: AbortSignal.timeout(Math.max(100, toNumber(profile.healthcheck?.timeoutMs, 2000)))
+          });
+          healthy = response.ok;
+          if (!healthy) {
+            reason = `Health endpoint returned ${response.status}.`;
+          }
+        } catch (error) {
+          healthy = false;
+          reason = error.message || 'HTTP healthcheck failed.';
+        }
       }
     }
 
@@ -579,6 +667,9 @@ class RuntimeManager {
     this.runtimeConfig.logFileMaxBytes = Math.max(1024, toNumber(runtimeDefaults.logFileMaxBytes, 10 * 1024 * 1024));
     this.runtimeConfig.logFileMaxFiles = Math.max(1, toNumber(runtimeDefaults.logFileMaxFiles, 5));
     this.runtimeConfig.healthcheckFailureThreshold = Math.max(1, toNumber(runtimeDefaults.healthcheckFailureThreshold, 3));
+    this.runtimeConfig.servicePortStart = Math.max(1, toNumber(runtimeDefaults.servicePortStart, 38000));
+    this.runtimeConfig.servicePortEnd = Math.max(this.runtimeConfig.servicePortStart, toNumber(runtimeDefaults.servicePortEnd, 38999));
+    this.runtimeConfig.serviceProxyTimeoutMs = Math.max(500, toNumber(runtimeDefaults.serviceProxyTimeoutMs, 15000));
 
     this.supervisor.stopTimeoutMs = this.runtimeConfig.stopTimeoutMs;
     await this.ensureRuntimeLogsDir();
@@ -736,7 +827,8 @@ class RuntimeManager {
     await this.supervisor.start(appId, {
       command: plan.command,
       args: plan.args,
-      cwd: plan.cwd
+      cwd: plan.cwd,
+      env: plan.env
     });
 
     return this.getApp(appId);
@@ -836,7 +928,8 @@ class RuntimeManager {
           message: 'Runtime execution plan is resolvable.',
           command: plan.command,
           args: plan.args,
-          cwd: plan.cwd
+          cwd: plan.cwd,
+          servicePort: plan.servicePort
         });
       } catch (err) {
         checks.push({
@@ -863,7 +956,8 @@ class RuntimeManager {
         ? {
           command: plan.command,
           args: plan.args,
-          cwd: plan.cwd
+          cwd: plan.cwd,
+          servicePort: plan.servicePort
         }
         : null
     };
@@ -918,10 +1012,48 @@ class RuntimeManager {
         lastError: state.lastError,
         healthStatus: state.healthStatus || 'unknown',
         lastHealthAt: state.lastHealthAt || null,
+        servicePort: state.servicePort || null,
         updatedAt: state.updatedAt
       };
     }
     return result;
+  }
+
+  getServiceProxyTimeoutMs() {
+    return Math.max(500, toNumber(this.runtimeConfig.serviceProxyTimeoutMs, 15000));
+  }
+
+  async getServiceConnectionInfo(appId) {
+    const app = await packageRegistryService.getSandboxApp(appId);
+    if (!app) {
+      const err = new Error('App not found.');
+      err.code = 'RUNTIME_APP_NOT_FOUND';
+      throw err;
+    }
+    if (!isManagedRuntime(app.runtimeProfile)) {
+      const err = new Error('This app does not expose a managed service runtime.');
+      err.code = 'RUNTIME_NOT_MANAGED';
+      throw err;
+    }
+    const state = this.ensureState(appId);
+    if (!this.supervisor.isRunning(appId) || !['running', 'degraded'].includes(String(state.status || '').toLowerCase())) {
+      const err = new Error('Package service is not running.');
+      err.code = 'RUNTIME_SERVICE_UNAVAILABLE';
+      err.status = state.status || 'stopped';
+      throw err;
+    }
+    if (!state.servicePort) {
+      throw createRuntimeError('Package service port is not assigned.', 'RUNTIME_SERVICE_PORT_MISSING');
+    }
+    if (!this.isServicePortInRange(state.servicePort)) {
+      throw createRuntimeError('Package service port is outside the allowed runtime range.', 'RUNTIME_SERVICE_PORT_INVALID');
+    }
+    return {
+      appId,
+      port: Number(state.servicePort),
+      status: state.status,
+      healthStatus: state.healthStatus || 'unknown'
+    };
   }
 }
 

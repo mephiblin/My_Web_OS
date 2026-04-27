@@ -1044,7 +1044,9 @@ function buildOwnershipMatrixItems(apps) {
 function normalizeSandboxManifest(manifest) {
   if (!manifest || typeof manifest !== 'object') return null;
   const runtimeProfile = normalizeRuntimeProfile(manifest);
-  const resolvedEntry = runtimeProfile.entry;
+  const resolvedEntry = runtimeProfile.appType === 'hybrid'
+    ? runtimeProfile.ui?.entry
+    : runtimeProfile.entry;
   const mediaScopes = normalizeManifestMediaScopes(manifest);
   const fileAssociations = normalizeFileAssociations(manifest.fileAssociations);
   const contributes = normalizeContributes(manifest.contributes, fileAssociations);
@@ -1079,6 +1081,26 @@ function normalizeSandboxManifest(manifest) {
     runtime: runtimeProfile.runtimeType === 'sandbox-html' ? 'sandbox' : runtimeProfile.runtimeType,
     runtimeType: runtimeProfile.runtimeType,
     runtimeProfile: sanitizeProfileForClient(runtimeProfile),
+    ui: runtimeProfile.appType === 'hybrid'
+      ? {
+          type: runtimeProfile.ui?.runtimeType || 'sandbox-html',
+          entry: runtimeProfile.ui?.entry || ''
+        }
+      : null,
+    service: runtimeProfile.appType === 'hybrid' || runtimeProfile.appType === 'service'
+      ? {
+          entry: runtimeProfile.entry || '',
+          autoStart: Boolean(runtimeProfile.service?.autoStart),
+          restartPolicy: runtimeProfile.service?.restartPolicy || 'never',
+          http: {
+            enabled: Boolean(runtimeProfile.service?.http?.enabled)
+          },
+          healthcheck: {
+            type: runtimeProfile.healthcheck?.type || 'none',
+            path: runtimeProfile.healthcheck?.path || ''
+          }
+        }
+      : null,
     source: 'inventory-package',
     singleton: Boolean(manifest.singleton),
     permissions: Array.isArray(manifest.permissions) ? manifest.permissions.map(String) : [],

@@ -72,6 +72,7 @@ function normalizeTemplate(input, index, namespace) {
   const runtimeType = String(input.defaults.runtimeType || '').trim();
   const appType = String(input.defaults.appType || '').trim();
   const entry = String(input.defaults.entry || '').trim();
+  const uiEntry = String(input.defaults.uiEntry || '').trim();
 
   if (!runtimeType) {
     throw createCatalogLoadError(`Template "${id}" defaults.runtimeType is required.`);
@@ -81,6 +82,9 @@ function normalizeTemplate(input, index, namespace) {
   }
   if (!entry) {
     throw createCatalogLoadError(`Template "${id}" defaults.entry is required.`);
+  }
+  if (appType === 'hybrid' && !uiEntry) {
+    throw createCatalogLoadError(`Template "${id}" defaults.uiEntry is required for hybrid templates.`);
   }
 
   return {
@@ -93,6 +97,7 @@ function normalizeTemplate(input, index, namespace) {
       runtimeType,
       appType,
       entry,
+      ...(uiEntry ? { uiEntry } : {}),
       permissions: normalizePermissions(input.defaults.permissions, index, id)
     }
   };

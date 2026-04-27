@@ -1,270 +1,238 @@
-# Core Integration Map
+﻿# Core Integration Map
 
 Status: `[ACTIVE]`
 
-This is the contract between ordinary sandbox addons and the Web OS core.
-Use it before editing core files or assuming an API exists.
+이 문서는 addon/package가 My Web OS host와 만나는 지점을 정리한다. 프로젝트 소스 없이도 어떤 entry, API, SDK, launch data를 기대해야 하는지 알 수 있게 하는 지도다.
 
-## Registry And Launch
+## 1. Package discovery
 
-Installed package apps are discovered from:
+설치된 inventory package는 package root의 `manifest.json`으로 식별된다.
+
+```text
+<package-root>/manifest.json
+```
+
+repo 안 direct inventory 개발 경로:
 
 ```text
 server/storage/inventory/apps/<app-id>/manifest.json
 ```
 
-The desktop registry is loaded from `/api/system/apps`. The client registry
-store caches that result after first load; reload the browser after direct
-inventory edits, or trigger a forced registry refresh from trusted core UI.
+Package Center ZIP/registry 설치 후에도 논리적으로는 같은 package root 구조가 된다.
 
-Ordinary UI addons should use:
+## 2. Launcher rules
 
-```json
-{
-  "type": "app",
-  "runtime": {
-    "type": "sandbox-html",
-    "entry": "index.html"
-  }
-}
+Launcher에 표시되는 조건:
+
+- `type: "app"`이고 `runtime.type: "sandbox-html"`, `runtime.entry`가 존재
+- `type: "hybrid"`이고 `ui.entry`가 존재
+
+Launcher에서 숨겨지는 조건:
+
+- `type: "service"`
+- entry 파일 없음
+- manifest invalid
+
+Hybrid launch metadata는 UI entry를 가리켜야 한다.
+
+```text
+runtime.entry -> service/index.js
+ui.entry      -> ui/index.html
+launcher      -> /api/sandbox/<app-id>/ui/index.html
 ```
 
-`type: "service"` packages are valid lifecycle records but are skipped by the
-desktop app list. `service`, `hybrid`, and managed process runtimes are not the
-stable ordinary addon target.
+## 3. Sandbox asset serving
 
-Inventory packages may replace built-in `standard` addons with the same id.
-They do not replace `system` apps.
-
-## Sandbox Iframe Boundary
-
-Sandbox HTML is served from:
+Sandbox app asset은 sandbox route를 통해 제공된다.
 
 ```text
 /api/sandbox/<app-id>/<entry>
+/api/sandbox/sdk.js
 ```
 
-The iframe is currently:
+Package asset은 entry HTML 기준 상대 경로로 로드한다.
 
 ```html
-<iframe sandbox="allow-scripts">
+<link rel="stylesheet" href="./assets/app.css">
+<script src="./assets/app.js"></script>
 ```
 
-Implications:
+`manifest.json`을 정적 asset처럼 읽는 것에 의존하지 말 것.
 
-- The child iframe has an opaque origin.
-- Parent and child DOM access is blocked.
-- Do not depend on cookies, `localStorage`, `sessionStorage`, forms, popups,
-  downloads, top navigation, or direct parent DOM calls.
-- Use `/api/sandbox/sdk.js` and `postMessage` through the SDK.
-- Static package assets may be loaded by relative path from the entry page.
-- `/api/sandbox/<app-id>/manifest.json` is intentionally not served as a
-  static asset.
-- Do not call arbitrary `/api/*` routes from addon code. Use SDK methods.
+## 4. Sandbox context
 
-## Context Shape
-
-Use:
+모든 sandbox UI는 SDK ready를 기다린다.
 
 ```js
 const context = await window.WebOS.ready();
-const app = context?.app || {};
-const launchData = app.launchData || {};
 ```
 
-The current context shape is:
+중요 필드:
 
 ```js
-{
-  type: 'webos:context',
-  app: {
-    id,
-    title,
-    description,
-    permissions,
-    runtime,
-    sdkUrl,
-    launchData
-  },
-  capabilities,
-  apiPolicy
-}
+context.app.id
+context.app.title
+context.app.permissions
+context.app.launchData
+context.capabilities
+context.apiPolicy
 ```
 
-Important: `launchData` lives at `context.app.launchData`, not
-`context.launchData`.
+## 5. File Station launch data
 
-## Relaunch And Singleton Data
+파일 연결로 열린 앱은 `context.app.launchData`에서 파일 정보를 받는다. 정확한 shape는 release마다 확장될 수 있으므로 defensive하게 읽는다.
 
-If an existing singleton window receives new launch data, the parent frame
-sends:
-
-```js
-{
-  type: 'webos:launch-data',
-  launchData
-}
-```
-
-The SDK does not automatically rewrite your local variables. Addons that can
-open different files in the same window should listen for this event:
-
-```js
-window.addEventListener('message', (event) => {
-  if (event.source !== window.parent) return;
-  const payload = event.data || {};
-  if (payload.type === 'webos:launch-data') {
-    loadFromLaunchData(payload.launchData || {});
-  }
-});
-```
-
-## File Station Handoff
-
-Normal File Station open/edit launch data:
-
-```js
-{
-  path: '/absolute/host/path/example.txt',
-  fileContext: {
-    source: 'file-station',
-    file: {
-      path: '/absolute/host/path/example.txt',
-      name: 'example.txt',
-      extension: 'txt',
-      mode: 'read' // or 'readwrite'
-    },
-    permissionContext: {
-      grantId: 'fg_...',
-      scope: 'single-file',
-      expiresOnWindowClose: true
-    }
-  }
-}
-```
-
-Use it like this:
+권장 처리:
 
 ```js
 const context = await window.WebOS.ready();
-const launchData = context?.app?.launchData || {};
-const file = launchData?.fileContext?.file || {};
-const permission = launchData?.fileContext?.permissionContext || {};
+const launchData = context.app.launchData || {};
+const file = launchData.file || launchData.files?.[0] || null;
 
-if (!file.path || !permission.grantId) {
-  throw new Error('Open this addon from File Station with a file grant.');
+if (file?.path && file?.grantId) {
+  const content = await window.WebOS.files.read({
+    path: file.path,
+    grantId: file.grantId
+  });
 }
 ```
 
-Preview provider launch data adds `previewContext`:
+파일 하나만 전제하지 말고 다중 파일 launch 가능성을 열어둔다.
+
+## 6. App-owned data
+
+App data는 package-owned storage다. Host user file과 다르다.
+
+SDK:
 
 ```js
-{
-  path: '/absolute/host/path/example.txt',
-  previewContext: {
-    source: 'file-station-preview',
-    kind: 'preview',
-    provider: {
-      appId: 'my-addon',
-      label: 'My Preview'
-    }
-  },
-  fileContext: {
-    source: 'file-station',
-    file: {
-      path: '/absolute/host/path/example.txt',
-      name: 'example.txt',
-      extension: 'txt',
-      mode: 'read'
-    },
-    permissionContext: {
-      grantId: 'fg_...',
-      scope: 'single-file',
-      expiresOnWindowClose: true
-    }
-  }
-}
+await WebOS.app.data.write({ path: 'settings.json', content: '{}' });
+await WebOS.app.data.read({ path: 'settings.json' });
+await WebOS.app.data.list({ path: '' });
 ```
 
-Cloud file handoff currently uses `source: "file-station-cloud"` and
-`scope: "cloud-file"` with an empty `grantId`. The sandbox host file API cannot
-read `cloud://` paths through `WebOS.files.*` yet. Show a clear unsupported or
-missing-grant message instead of retrying.
-
-## File Grant Rules
-
-File grants are parent-issued, not addon-created.
-
-- Scope is currently `single-file`.
-- Default TTL is 1 hour.
-- Grants are tied to path, app id, user, and mode.
-- `readwrite` satisfies read and write; `read` does not satisfy write.
-- `expiresOnWindowClose` is true in File Station handoffs.
-- Missing, expired, app-mismatched, user-mismatched, mode-denied, or
-  path-mismatched grants must be shown as user-visible errors.
-
-Sandbox addons cannot create arbitrary new host files by path. Create new files
-through File Station templates or another trusted core flow, then open the file
-with a `readwrite` grant.
-
-## Parent Approval Overlays
-
-The parent frame may ask the user to allow sensitive SDK calls:
+Managed service env:
 
 ```text
-window.open
-app.data.write
-host.file.read
-host.file.write
-system.info
+WEBOS_APP_DATA_DIR
 ```
 
-`Always Allow` is in-memory for the current iframe/window permission. It is not
-a persistent permission setting and does not replace backend approval for file
-overwrite or package lifecycle operations.
+서비스는 cache/db/job metadata를 여기에 저장한다.
 
-Common parent/SDK errors:
+## 7. Service bridge path
 
-| Code | Meaning |
-| --- | --- |
-| `APP_PERMISSION_DENIED` | Permission missing from manifest or denied before bridge call |
-| `SANDBOX_APPROVAL_DENIED` | User denied parent permission approval |
-| `SANDBOX_APPROVAL_BUSY` | Another parent approval is already open |
-| `WEBOS_SDK_REQUEST_TIMEOUT` | Parent did not answer an SDK request in time |
-| `SANDBOX_BRIDGE_READY_TIMEOUT` | Addon did not complete SDK ready handshake |
-
-## Host Write Approval Flow
-
-Addon code calls only:
+Hybrid UI는 SDK로 자기 서비스에 요청한다.
 
 ```js
-await window.WebOS.files.write({
-  path: file.path,
-  grantId: permission.grantId,
-  content: nextContent,
-  overwrite: true
-});
+await WebOS.service.request({ method: 'GET', path: '/health' });
 ```
 
-If overwrite approval is required, the parent frame:
+실제 backend proxy:
 
-1. receives the backend preflight from the failed write,
-2. opens the trusted Web OS approval UI outside the iframe,
-3. collects user-entered typed confirmation,
-4. calls the approve route,
-5. retries the write with `{ operationId, nonce, targetHash }`.
+```text
+POST /api/sandbox/:appId/service/request
+  -> 127.0.0.1:<WEBOS_SERVICE_PORT><path>
+```
 
-Addon code must not call `approveWrite()`, `write/approve`, or send
-`{ approved: true }`.
+Addon 개발자는 backend route를 직접 호출하지 말고 SDK를 사용한다.
 
-## When Core Work Is Required
+## 8. Runtime Manager contract
 
-Stop ordinary addon work and create a core task when you need:
+Managed process runtime은 Package Center/Runtime Manager가 관리한다.
 
-- a new SDK method,
-- a new manifest extension point,
-- File Station to pass a new launch/grant shape,
-- cloud-file grants for sandbox apps,
-- persistent permission settings,
-- background execution,
-- package lifecycle behavior that is not already exposed through Package Center.
+기본 작업:
+
+- start
+- stop
+- restart
+- logs
+- events
+- health
+- recover
+
+Service env:
+
+```text
+WEBOS_APP_ID
+WEBOS_PACKAGE_DIR
+WEBOS_APP_DATA_DIR
+WEBOS_ALLOWED_ROOTS_JSON
+WEBOS_SERVICE_PORT
+WEBOS_RUNTIME_MODE=managed-process
+```
+
+HTTP service는 `127.0.0.1:${WEBOS_SERVICE_PORT}`에 listen한다.
+
+## 9. Runtime config defaults
+
+플랫폼 기본값:
+
+```json
+{
+  "runtime": {
+    "servicePortStart": 38000,
+    "servicePortEnd": 38999,
+    "serviceProxyTimeoutMs": 15000
+  }
+}
+```
+
+패키지는 이 range를 직접 확장할 수 없다.
+
+## 10. Package Center contract
+
+Package Center가 담당하는 것:
+
+- template scaffold
+- ZIP import
+- registry install/update
+- manifest preflight/update
+- lifecycle approval
+- backup snapshot
+- rollback
+- runtime lifecycle controls
+- logs/events/health 표시
+
+패키지 개발자가 담당하는 것:
+
+- 정확한 manifest 작성
+- 최소 permission 선언
+- service API 안정성
+- healthcheck 제공
+- app data migration
+- 오류를 `{ code, message }` 형태로 명확히 반환
+
+## 11. 언제 sandbox addon으로 충분한가
+
+다음이면 `app + sandbox-html`이면 충분하다.
+
+- 단일 파일 viewer/editor
+- markdown/csv/json preview
+- 작은 설정 UI
+- 외부 native process가 필요 없는 도구
+- host file은 File Station grant로 받은 것만 읽거나 저장
+
+## 12. 언제 hybrid가 필요한가
+
+다음이면 `hybrid`가 적합하다.
+
+- media library scan/index
+- thumbnail generation
+- long-running download queue
+- ffmpeg wrapper
+- local database/cache service
+- background worker
+- UI가 service 상태를 보고 조작해야 함
+
+## 13. 언제 core/platform 변경인가
+
+Addon 문서만으로 해결할 수 없는 경우:
+
+- 새 SDK capability가 필요함
+- 새 Host API가 필요함
+- Package Center preflight/approval 계약 변경 필요
+- Runtime Manager lifecycle 동작 변경 필요
+- OS-level isolation, Docker, per-folder grant 필요
+- system app 자체 기능 변경 필요
+
+이 경우는 addon 개발이 아니라 platform development다.

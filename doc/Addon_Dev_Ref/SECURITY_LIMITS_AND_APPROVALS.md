@@ -1,236 +1,200 @@
-# Security, Limits, And Approval Rules
+﻿# Security, Limits, And Approval Rules
 
 Status: `[ACTIVE]`
 
-This file defines the practical safety boundary for addon development.
+이 문서는 addon/package 개발자가 반드시 이해해야 하는 보안 경계다.
 
-## Core Security Model
+## 1. 두 가지 신뢰 모델
+
+### Sandbox UI addon
 
 ```text
-Addon asks for capability.
-Parent Web OS frame owns trusted UI and approval.
-Backend enforces permission, target, nonce, target hash, TTL, consume-once, and audit.
+sandbox-html iframe
+  -> parent frame bridge
+  -> backend permission check
+  -> scoped operation
 ```
 
-An addon is not trusted to approve its own risky Host operation.
+특징:
 
-## Sandbox Iframe Limits
+- 브라우저 iframe sandbox 안에서 실행된다.
+- Host filesystem을 직접 만지지 못한다.
+- SDK와 backend guard를 통해서만 기능을 요청한다.
+- 위험 작업 approval은 parent frame이 담당한다.
 
-The current iframe uses `sandbox="allow-scripts"` only.
+### Native process package
 
-Do not depend on:
+```text
+managed process: process-node/process-python/binary
+  -> local OS process
+  -> Runtime Manager lifecycle/log/health
+```
 
-- same-origin access,
-- parent DOM access,
-- cookies,
-- `localStorage` or `sessionStorage`,
-- browser forms,
-- popups,
-- direct downloads,
-- top-level navigation.
+특징:
 
-Use the SDK bridge for platform access. Static package assets may be loaded
-relative to the sandbox entry page, but `manifest.json` is not served as a
-static asset.
+- 신뢰한 로컬 패키지 모델이다.
+- OS 레벨 완전 격리가 아니다.
+- Package Center가 위험 권한과 실행 정보를 명확히 보여줘야 한다.
+- Docker/컨테이너 격리는 V1 범위가 아니다.
 
-## Host File Access
+## 2. Sandbox iframe 제한
 
-Host file access requires:
+현재 sandbox UI는 제한된 iframe에서 실행된다고 가정한다.
 
-1. declared permission
-2. valid File Station/file grant
+사용하지 말 것:
+
+- parent DOM 직접 접근
+- same-origin storage 의존
+- cookies
+- `localStorage`, `sessionStorage`
+- popups
+- top navigation
+- 임의 download
+- 임의 `/api/*` 직접 호출
+
+사용할 것:
+
+- `/api/sandbox/sdk.js`
+- `window.WebOS.ready()`
+- `WebOS.app.data.*`
+- `WebOS.files.*`
+- `WebOS.service.request()`
+
+## 3. Host file access
+
+Host file 접근 조건:
+
+1. manifest permission 선언
+2. File Station 또는 trusted parent flow가 만든 grant
 3. backend path validation
 4. app/user/grant match
-5. operation-specific approval when needed
+5. overwrite 등 위험 작업은 별도 approval
 
-Read:
+읽기:
 
 ```js
 await WebOS.files.read({ path, grantId });
 ```
 
-Write:
+쓰기:
 
 ```js
 await WebOS.files.write({ path, grantId, content, overwrite: true });
 ```
 
-Sandbox addons cannot create arbitrary new host files by path. New host files
-must be created by a trusted core surface such as File Station templates, then
-opened with a `readwrite` grant.
+Sandbox addon은 임의 host path에 새 파일을 직접 만들 수 있다고 가정하면 안 된다. 새 host 파일은 File Station template 같은 trusted UI에서 만들고 grant로 전달받는다.
 
-## Overwrite Approval
+## 4. Overwrite approval
 
-For existing host files, overwrite is high-risk.
+Overwrite는 parent-owned approval이다.
 
-Correct flow:
+정상 흐름:
 
-1. Addon calls `WebOS.files.write({ overwrite: true })`.
-2. Backend returns approval-required preflight when needed.
-3. Parent Web OS frame shows typed-confirm approval dialog.
-4. User types the confirmation in trusted parent UI.
-5. Parent calls backend approve endpoint.
-6. Parent retries write with scoped approval evidence.
-7. Backend consumes nonce once and validates target hash.
+```text
+addon calls WebOS.files.write({ overwrite: true })
+  -> backend returns approval-required preflight
+  -> parent shows typed confirmation UI
+  -> user types confirmation
+  -> parent creates approval
+  -> parent retries write with scoped approval evidence
+  -> backend validates target hash and consumes nonce once
+```
 
-Forbidden:
+금지:
 
 ```js
 await WebOS.files.approveWrite();
 fetch('/api/sandbox/my-addon/file/write/approve');
+fetch('/api/sandbox/my-addon/file/write', { body: JSON.stringify({ approved: true }) });
 ```
 
-Forbidden:
+## 5. Service bridge 보안
 
-```json
-{
-  "approval": {
-    "approved": true
-  }
-}
-```
+`WebOS.service.request()`는 hybrid UI가 자기 service에 요청하는 유일한 표준 경로다.
 
-## Raw Tickets
-
-Raw file URLs are bearer-style access. They must be short-lived tickets, not
-grant URLs.
-
-Correct:
+허용:
 
 ```js
-const ticket = await WebOS.files.rawTicket({ path, grantId, profile: 'preview' });
-const url = WebOS.files.rawUrl(ticket);
+await WebOS.service.request({ method: 'GET', path: '/health' });
 ```
 
-Forbidden:
+거부:
 
 ```js
-WebOS.files.rawUrl({ path, grantId });
+await WebOS.service.request({ path: 'http://127.0.0.1:22/' });
+await WebOS.service.request({ path: '//localhost/admin' });
+await WebOS.service.request({ path: '/../secret' });
+await WebOS.service.request({ path: '/%2e%2e/secret' });
 ```
 
-Legacy sandbox raw grant endpoint is disabled with:
+Backend proxy 규칙:
+
+- target은 항상 `127.0.0.1:<WEBOS_SERVICE_PORT>`다.
+- service port는 runtime configured range 안이어야 한다.
+- absolute URL, protocol-relative URL, backslash, traversal, invalid encoding은 거부된다.
+- hop-by-hop/sensitive headers는 허용하지 않는다.
+- request body size 제한이 있다.
+- timeout은 runtime config의 `serviceProxyTimeoutMs`를 따른다.
+
+## 6. allowedRoots 모델
+
+V1은 global `allowedRoots` 모델이다.
+
+- `WEBOS_ALLOWED_ROOTS_JSON`이 service env로 전달된다.
+- 패키지는 설치 전 `host.allowedRoots.read/write` 의도를 manifest에 표시한다.
+- Package Center가 이 위험을 보여준다.
+- OS 레벨로 “이 process는 이 폴더만 접근 가능”을 강제하지 않는다.
+
+따라서 신뢰하지 않는 외부 패키지를 native process로 실행하면 안 된다. 외부 마켓플레이스 수준 신뢰 모델은 Docker/per-folder grant 같은 V2 격리가 필요하다.
+
+## 7. network permission
+
+외부 API 호출, 다운로드, metadata fetch, youtube download 같은 기능은 `network.outbound`를 선언해야 한다.
+
+이 권한은 현재 네트워크를 OS 레벨로 막는 기능이라기보다 설치 전 위험 표시와 감사/정책 계약이다.
+
+## 8. App data boundary
+
+App-owned data는 안전한 기본 저장소다.
 
 ```text
-SANDBOX_RAW_GRANT_URL_DISABLED
+WEBOS_APP_DATA_DIR
 ```
 
-Ticket limits:
+권장:
 
-- `preview` defaults to 5 minutes and is capped at 10 minutes.
-- `media` is capped at 8 hours absolute and 45 minutes idle.
-- Media tickets become invalid when target size or mtime changes.
+- 설정 파일
+- job queue metadata
+- scan cache
+- thumbnails/index database
+- package-local state
 
-## Package Lifecycle Approval
+주의:
 
-Package install, import, update, rollback, and manifest update are high-risk
-lifecycle operations. They use:
+- 사용자 media library 원본을 app data에 복사하지 말 것.
+- 대용량 파일은 allowedRoots나 user-selected grant를 통해 다룰 것.
 
-```text
-preflight -> typed confirmation -> approval nonce -> execute
-```
+## 9. Package lifecycle approval
 
-Rules:
+설치/업데이트/rollback/delete/manifest update는 Package Center lifecycle approval을 거친다.
 
-- Typed confirmation must be entered by the user in trusted Package Center UI.
-- Do not copy `preflight.approval.typedConfirmation` into approval code.
-- Approval evidence must include `operationId`, `nonce`, and `targetHash`.
-- Legacy `{ approved: true }` shortcuts are rejected.
+패키지 개발자는 다음 정보를 preflight에서 잘 드러나게 manifest를 작성해야 한다.
 
-## Data Boundaries
+- runtime type/command/entry
+- permissions
+- network/allowedRoots 의도
+- healthcheck
+- backup/rollback 영향
+- service autoStart/restartPolicy
 
-App data:
+## 10. 보안 체크리스트
 
-```text
-server/storage/inventory/data/<app-id>/
-```
+릴리즈 전 확인:
 
-Host files:
-
-```text
-allowed roots managed by Host/file APIs
-```
-
-Do not confuse app data with host file access.
-
-## Current Platform Limits
-
-Sandbox is browser sandboxing, not VM/kernel isolation.
-
-Current limitations:
-
-- No native OS/kernel isolation for addon code.
-- Sandbox iframe currently allows scripts only; many browser platform features
-  are intentionally unavailable.
-- No public-internet security claim by default.
-- Backend restart can invalidate pending approval state.
-- Long-running transfer/backup behavior still benefits from real-use observation.
-- `backgroundServices` are metadata only until lifecycle/approval execution policy exists.
-- `settingsPanels` are metadata/validation first; full launch UX is later.
-- Browser click-through automation is not yet a full coverage gate.
-
-## Risk Classification
-
-Low risk:
-
-- UI-only utility
-- app-owned data only
-- notification-only addon
-
-Medium risk:
-
-- reads granted host files
-- opens raw preview tickets
-- contributes File Station preview actions
-
-High risk:
-
-- writes granted host files
-- overwrites existing host files
-- package lifecycle changes
-- background execution proposals
-- system/terminal/docker operations
-
-High-risk changes require backend contract and focused tests.
-
-## Approval Recovery UX
-
-Handle approval failures as normal user outcomes:
-
-| Situation | Addon/UI response |
-| --- | --- |
-| User denied approval | Keep content unchanged; show "Approval denied" and allow retry |
-| Approval expired | Ask user to retry the save/install flow from the current state |
-| Target changed | Reload or re-read target before offering another write |
-| Backend restarted | Reopen preflight and approval; old nonce is invalid |
-| Grant missing/expired | Ask user to reopen the file from File Station |
-| Another approval busy | Disable duplicate action and retry after current dialog closes |
-
-## Bad Pattern Checklist
-
-Search before finishing:
-
-```bash
-rg -n "approveWrite|approved: true|rawUrl\\(\\{ path, grantId \\}\\)" \
-  client/src/apps/addons server/storage/inventory/apps server/routes/packages.js
-```
-
-Also check system self-confirmation regressions:
-
-```bash
-rg -n "typedConfirmation: .*expectedConfirmation|typedConfirmation: .*preflight\\?\\.approval" \
-  client/src/apps/system
-```
-
-These patterns should not appear in production addon/system paths.
-
-## Human Review Questions
-
-Before merging an addon:
-
-1. Does it request only necessary permissions?
-2. Does it show clear missing-grant state?
-3. Does it avoid direct backend approval calls?
-4. Does it avoid raw grant URLs?
-5. Does it handle SDK startup failure visibly?
-6. Does Package Center install/update/remove behavior remain valid?
-7. Does it keep feature code out of core desktop/window files?
+- 불필요한 `host.*`, `runtime.process`, `network.outbound` 권한이 없는가?
+- sandbox UI가 임의 `/api/*` route를 직접 호출하지 않는가?
+- service가 `127.0.0.1`에만 listen하는가?
+- service path API가 명시 JSON 오류를 반환하는가?
+- app data와 사용자 원본 파일을 구분하는가?
+- update 전 backup/rollback 경로가 Package Center에 표시되는가?
+- stopped service 상태를 UI가 recoverable error로 보여주는가?

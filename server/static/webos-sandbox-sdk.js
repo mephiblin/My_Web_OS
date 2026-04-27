@@ -204,6 +204,17 @@
       data: appDataApi
     },
     appData: appDataApi,
+    service: {
+      request: function serviceRequest(input) {
+        var payload = input && typeof input === 'object' ? input : {};
+        return requestWithPermission('service.bridge', 'service.request', {
+          method: payload.method || 'GET',
+          path: payload.path || '/',
+          headers: payload.headers && typeof payload.headers === 'object' ? payload.headers : undefined,
+          body: payload.body
+        });
+      }
+    },
     files: {
       rawUrl: function rawUrl(input) {
         var payload = input && typeof input === 'object' ? input : {};

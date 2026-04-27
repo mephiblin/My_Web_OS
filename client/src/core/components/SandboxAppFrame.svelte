@@ -60,7 +60,8 @@
     'host.file.read': 'host.file.read',
     'host.file.rawTicket': 'host.file.read',
     'host.file.writePreflight': 'host.file.write',
-    'host.file.write': 'host.file.write'
+    'host.file.write': 'host.file.write',
+    'service.request': 'service.bridge'
   };
 
   const SENSITIVE_RISK_LEVELS = new Set(['medium', 'high']);
@@ -226,6 +227,11 @@
 
       case 'host.file.write': {
         const result = await writeHostFileWithParentApproval(params);
+        return result.result;
+      }
+
+      case 'service.request': {
+        const result = await sandboxApi(`/api/sandbox/${encodeURIComponent(appId)}/service/request`, params);
         return result.result;
       }
 
@@ -402,6 +408,9 @@
     }
     if (permission === 'system.info') {
       return 'Read current host system overview metrics.';
+    }
+    if (permission === 'service.bridge') {
+      return `Call package service path "${String(params.path || '/').trim() || '/'}".`;
     }
     return `Execute "${request?.method || 'unknown'}".`;
   }

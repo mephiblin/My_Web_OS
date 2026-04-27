@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "test": "npm run test:server",
-    "test:server": "node --test --test-concurrency=1 server/tests",
+    "test:server": "node --test --test-concurrency=1 \"server/tests/**/*.test.js\"",
     "verify:syntax": "node tools/verify-syntax.js",
     "verify:packages": "npm run apps:registry:migrate -- --dry-run --fail-on-removal && npm run package:doctor -- --builtin-registry=server/storage/inventory/system/apps.json",
     "verify:client": "npm --prefix client run build",

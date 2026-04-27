@@ -415,6 +415,15 @@ Use a sandbox/package app when:
 - isolation matters
 - lifecycle operations are useful
 
+Use a hybrid tool package when:
+
+- the package needs a local Node/Python/binary service
+- the UI should remain sandboxed
+- Package Center should operate start/stop/restart/logs/health
+- the package is closer to Plex, Immich, or downloader tooling than a simple viewer
+
+See `doc/reference/tool-package-development-guide.md`.
+
 ## Rule Of Thumb
 
 Keep the OS core small and authoritative.

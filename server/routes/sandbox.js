@@ -21,6 +21,9 @@ const {
 
 const router = express.Router();
 const SANDBOX_SDK_FILE = path.join(__dirname, '../static/webos-sandbox-sdk.js');
+const MAX_SERVICE_REQUEST_PATH_LENGTH = 2048;
+const MAX_SERVICE_HEADER_VALUE_LENGTH = 8192;
+const MAX_SERVICE_REQUEST_BODY_BYTES = 1024 * 1024;
 
 const CAPABILITY_BY_ID = new Map(CAPABILITY_CATALOG.map((item) => [item.id, item]));
 
@@ -89,6 +92,90 @@ async function ensurePermittedSandboxApp(res, appId, permission) {
 
 async function readJsonBody(req) {
   return req.body && typeof req.body === 'object' ? req.body : {};
+}
+
+function normalizeServiceRequestPath(value) {
+  const requestPath = String(value || '').trim();
+  if (requestPath.length > MAX_SERVICE_REQUEST_PATH_LENGTH) {
+    const err = new Error('Service request path is too long.');
+    err.code = 'SANDBOX_SERVICE_PATH_INVALID';
+    throw err;
+  }
+  if (!requestPath || !requestPath.startsWith('/')) {
+    const err = new Error('Service request path must start with "/".');
+    err.code = 'SANDBOX_SERVICE_PATH_INVALID';
+    throw err;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(requestPath)) {
+    const err = new Error('Service request path cannot contain control characters.');
+    err.code = 'SANDBOX_SERVICE_PATH_INVALID';
+    throw err;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(requestPath) || requestPath.startsWith('//') || requestPath.includes('\\')) {
+    const err = new Error('Service request path must be relative to the package service.');
+    err.code = 'SANDBOX_SERVICE_PATH_INVALID';
+    throw err;
+  }
+  if (requestPath.includes('#') || /[\u0000-\u001f\u007f]/.test(requestPath)) {
+    const err = new Error('Service request path contains unsupported characters.');
+    err.code = 'SANDBOX_SERVICE_PATH_INVALID';
+    throw err;
+  }
+  const pathname = requestPath.split('?')[0];
+  let decodedPathname = pathname;
+  try {
+    decodedPathname = decodeURIComponent(pathname);
+  } catch (_err) {
+    const err = new Error('Service request path contains invalid encoding.');
+    err.code = 'SANDBOX_SERVICE_PATH_INVALID';
+    throw err;
+  }
+  if (decodedPathname.split('/').some((segment) => segment === '..')) {
+    const err = new Error('Service request path cannot contain parent traversal.');
+    err.code = 'SANDBOX_SERVICE_PATH_INVALID';
+    throw err;
+  }
+  return requestPath;
+}
+
+function normalizeServiceRequestMethod(value) {
+  const method = String(value || 'GET').trim().toUpperCase();
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const err = new Error('Service request method is not supported.');
+    err.code = 'SANDBOX_SERVICE_METHOD_INVALID';
+    throw err;
+  }
+  return method;
+}
+
+function normalizeServiceRequestHeaders(value) {
+  const headers = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return headers;
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = String(rawKey || '').trim().toLowerCase();
+    if (!key || ['host', 'connection', 'content-length', 'authorization', 'cookie', 'set-cookie'].includes(key)) continue;
+    if (!['accept', 'content-type'].includes(key)) continue;
+    const headerValue = String(rawValue || '');
+    if (/[\r\n]/.test(headerValue) || headerValue.length > MAX_SERVICE_HEADER_VALUE_LENGTH) {
+      const err = new Error('Service request header value is invalid.');
+      err.code = 'SANDBOX_SERVICE_HEADER_INVALID';
+      throw err;
+    }
+    headers[key] = headerValue;
+  }
+  return headers;
+}
+
+function assertServiceRequestBodySize(value) {
+  const byteLength = Buffer.byteLength(String(value || ''), 'utf8');
+  if (byteLength > MAX_SERVICE_REQUEST_BODY_BYTES) {
+    const err = new Error('Service request body is too large.');
+    err.code = 'SANDBOX_SERVICE_BODY_TOO_LARGE';
+    err.details = {
+      limitBytes: MAX_SERVICE_REQUEST_BODY_BYTES
+    };
+    throw err;
+  }
 }
 
 async function resolveAllowedHostPath(rawPath) {
@@ -636,6 +723,107 @@ router.post('/:appId/file/write', auth, async (req, res) => {
       error: true,
       code: err.code || 'SANDBOX_FILE_WRITE_FAILED',
       message: err.message
+    });
+  }
+});
+
+router.post('/:appId/service/request', auth, async (req, res) => {
+  const app = await ensurePermittedSandboxApp(res, req.params.appId, 'service.bridge');
+  if (!app) return;
+
+  try {
+    const runtimeManager = req.app.get('runtimeManager');
+    if (!runtimeManager || typeof runtimeManager.getServiceConnectionInfo !== 'function') {
+      return res.status(503).json({
+        error: true,
+        code: 'RUNTIME_MANAGER_UNAVAILABLE',
+        message: 'Runtime manager is not initialized.'
+      });
+    }
+
+    const body = await readJsonBody(req);
+    const method = normalizeServiceRequestMethod(body.method);
+    const requestPath = normalizeServiceRequestPath(body.path);
+    const service = await runtimeManager.getServiceConnectionInfo(app.id);
+    const servicePort = Number(service.port);
+    if (!Number.isInteger(servicePort) || servicePort <= 0 || servicePort > 65535) {
+      return res.status(503).json({
+        error: true,
+        code: 'RUNTIME_SERVICE_PORT_INVALID',
+        message: 'Package service port is invalid.'
+      });
+    }
+    const target = new URL(requestPath, `http://127.0.0.1:${servicePort}`).toString();
+    const headers = normalizeServiceRequestHeaders(body.headers);
+    const hasBody = method !== 'GET' && method !== 'DELETE' && body.body !== undefined;
+    let requestBody;
+    if (hasBody) {
+      if (typeof body.body === 'string') {
+        requestBody = body.body;
+      } else {
+        requestBody = JSON.stringify(body.body == null ? {} : body.body);
+        if (!headers['content-type']) headers['content-type'] = 'application/json';
+      }
+      assertServiceRequestBodySize(requestBody);
+    }
+
+    const response = await fetch(target, {
+      method,
+      headers,
+      body: requestBody,
+      signal: AbortSignal.timeout(runtimeManager.getServiceProxyTimeoutMs())
+    });
+    const text = await response.text();
+    let result = text;
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        result = text ? JSON.parse(text) : null;
+      } catch (_err) {
+        result = text;
+      }
+    }
+
+    if (!response.ok) {
+      return res.status(502).json({
+        error: true,
+        code: 'SANDBOX_SERVICE_REQUEST_FAILED',
+        message: `Package service returned HTTP ${response.status}.`,
+        details: {
+          status: response.status,
+          result
+        }
+      });
+    }
+
+    await auditService.log('SANDBOX', 'sandbox.service.request', {
+      appId: app.id,
+      method,
+      path: requestPath,
+      user: req.user?.username
+    }, 'INFO');
+
+    return res.json({
+      success: true,
+      result,
+      service: {
+        status: service.status,
+        healthStatus: service.healthStatus
+      }
+    });
+  } catch (err) {
+    const status =
+      err.code === 'APP_PERMISSION_DENIED' ? 403 :
+      err.code === 'RUNTIME_SERVICE_UNAVAILABLE' || err.code === 'RUNTIME_SERVICE_PORT_MISSING' || err.code === 'RUNTIME_SERVICE_PORT_INVALID' ? 503 :
+      err.code === 'RUNTIME_APP_NOT_FOUND' ? 404 :
+      err.code?.startsWith('SANDBOX_SERVICE_') ? 400 :
+      err.name === 'TimeoutError' ? 504 :
+      500;
+    return res.status(status).json({
+      error: true,
+      code: err.code || (err.name === 'TimeoutError' ? 'SANDBOX_SERVICE_TIMEOUT' : 'SANDBOX_SERVICE_REQUEST_FAILED'),
+      message: err.message || 'Package service request failed.',
+      details: err.details || null
     });
   }
 });

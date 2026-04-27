@@ -6,9 +6,10 @@ const RUNTIME_TYPE_MAP = {
   binary: 'binary'
 };
 
-const APP_TYPES = new Set(['app', 'service', 'hybrid']);
+const APP_TYPES = new Set(['app', 'widget', 'service', 'hybrid', 'developer']);
 const RESTART_POLICIES = new Set(['never', 'on-failure', 'always']);
 const HEALTHCHECK_TYPES = new Set(['none', 'process', 'http']);
+const MAX_HEALTHCHECK_PATH_LENGTH = 2048;
 
 function toPosixRelativePath(value = '') {
   return String(value || '')
@@ -40,6 +41,49 @@ function normalizeStringArray(value) {
   return value.map((item) => String(item || '').trim()).filter(Boolean);
 }
 
+function assertValidServicePath(value, fieldName) {
+  const servicePath = String(value || '').trim();
+  if (!servicePath) {
+    const err = new Error(`${fieldName} is required when healthcheck.type is "http".`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (servicePath.length > MAX_HEALTHCHECK_PATH_LENGTH) {
+    const err = new Error(`${fieldName} is too long.`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (!servicePath.startsWith('/')) {
+    const err = new Error(`${fieldName} must start with "/".`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(servicePath) || servicePath.startsWith('//') || servicePath.includes('\\')) {
+    const err = new Error(`${fieldName} must be relative to the package service.`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(servicePath)) {
+    const err = new Error(`${fieldName} cannot contain control characters.`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  const pathname = servicePath.split(/[?#]/)[0];
+  let decodedPathname = pathname;
+  try {
+    decodedPathname = decodeURIComponent(pathname);
+  } catch (_err) {
+    const err = new Error(`${fieldName} contains invalid encoding.`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+  if (decodedPathname.split('/').some((segment) => segment === '..')) {
+    const err = new Error(`${fieldName} cannot contain parent traversal.`);
+    err.code = 'RUNTIME_PROFILE_INVALID';
+    throw err;
+  }
+}
+
 function normalizeRestartPolicy(value, fallback) {
   const policy = String(value || '').trim().toLowerCase();
   if (RESTART_POLICIES.has(policy)) {
@@ -52,10 +96,14 @@ function normalizeRuntimeProfile(manifest = {}) {
   const runtimeRaw = manifest.runtime && typeof manifest.runtime === 'object'
     ? manifest.runtime
     : {};
+  const uiRaw = manifest.ui && typeof manifest.ui === 'object'
+    ? manifest.ui
+    : {};
   const runtimeType = normalizeRuntimeType(
-    typeof manifest.runtime === 'string' ? manifest.runtime : runtimeRaw.type
+    typeof manifest.runtime === 'string' ? manifest.runtime : (runtimeRaw.type || runtimeRaw.runtimeType)
   );
-  const appType = normalizeAppType(manifest.type, runtimeType);
+  const appType = normalizeAppType(manifest.type || manifest.appType, runtimeType);
+  const uiRuntimeType = normalizeRuntimeType(uiRaw.type || 'sandbox-html');
 
   const manifestEntry = manifest.entry;
   const entryFromRuntime = runtimeRaw.entry;
@@ -66,6 +114,11 @@ function normalizeRuntimeProfile(manifest = {}) {
     ? (entryFromManifestApp || entryFromManifestString || '')
     : (entryFromManifestService || entryFromManifestString || entryFromManifestApp || '');
   const entry = toPosixRelativePath(entryFromRuntime || defaultEntry || '');
+  const uiEntry = toPosixRelativePath(
+    uiRaw.entry ||
+    entryFromManifestApp ||
+    (appType === 'hybrid' ? '' : (runtimeType === 'sandbox-html' ? entry : ''))
+  );
   const runtimeCommand = String(runtimeRaw.command || '').trim();
   const runtimeCwd = toPosixRelativePath(runtimeRaw.cwd || '.');
   const args = normalizeStringArray(runtimeRaw.args);
@@ -79,7 +132,10 @@ function normalizeRuntimeProfile(manifest = {}) {
     autoStart: Boolean(serviceRaw.autoStart),
     restartPolicy: normalizeRestartPolicy(serviceRaw.restartPolicy, defaultRestartPolicy),
     maxRetries: Number.isFinite(Number(serviceRaw.maxRetries)) ? Number(serviceRaw.maxRetries) : 3,
-    restartDelayMs: Number.isFinite(Number(serviceRaw.restartDelayMs)) ? Number(serviceRaw.restartDelayMs) : 1000
+    restartDelayMs: Number.isFinite(Number(serviceRaw.restartDelayMs)) ? Number(serviceRaw.restartDelayMs) : 1000,
+    http: {
+      enabled: Boolean(serviceRaw.http?.enabled)
+    }
   };
 
   const healthcheckRaw = manifest.healthcheck && typeof manifest.healthcheck === 'object'
@@ -104,6 +160,10 @@ function normalizeRuntimeProfile(manifest = {}) {
     runtimeType,
     appType,
     entry,
+    ui: {
+      runtimeType: uiRuntimeType,
+      entry: uiEntry
+    },
     command: runtimeCommand,
     cwd: runtimeCwd || '.',
     args,
@@ -120,8 +180,11 @@ function assertValidRuntimeProfile(manifest = {}, profile = normalizeRuntimeProf
     err.code = 'RUNTIME_PROFILE_INVALID';
     throw err;
   }
-  if (runtimeInput && typeof runtimeInput === 'object' && runtimeInput.type && !hasRuntimeType(runtimeInput.type)) {
-    const err = new Error(`Unsupported runtime type: ${runtimeInput.type}`);
+  const runtimeObjectType = runtimeInput && typeof runtimeInput === 'object'
+    ? (runtimeInput.type || runtimeInput.runtimeType)
+    : '';
+  if (runtimeObjectType && !hasRuntimeType(runtimeObjectType)) {
+    const err = new Error(`Unsupported runtime type: ${runtimeObjectType}`);
     err.code = 'RUNTIME_PROFILE_INVALID';
     throw err;
   }
@@ -133,6 +196,32 @@ function assertValidRuntimeProfile(manifest = {}, profile = normalizeRuntimeProf
   }
 
   if (profile.appType !== 'service' && !profile.entry) {
+    if (profile.appType === 'hybrid' && profile.ui?.entry) {
+      // Hybrid packages launch their UI from ui.entry and run their service from runtime.entry.
+    } else {
+      const err = new Error('Runtime entry is required.');
+      err.code = 'RUNTIME_PROFILE_INVALID';
+      throw err;
+    }
+  }
+
+  if (profile.appType === 'hybrid') {
+    if (profile.ui?.runtimeType !== 'sandbox-html') {
+      const err = new Error('Hybrid package UI must use sandbox-html.');
+      err.code = 'RUNTIME_PROFILE_INVALID';
+      throw err;
+    }
+    if (!profile.ui?.entry) {
+      const err = new Error('Hybrid package ui.entry is required.');
+      err.code = 'RUNTIME_PROFILE_INVALID';
+      throw err;
+    }
+    if (!isManagedRuntime(profile)) {
+      const err = new Error('Hybrid package runtime must be process-node, process-python, or binary.');
+      err.code = 'RUNTIME_PROFILE_INVALID';
+      throw err;
+    }
+  } else if (profile.appType !== 'service' && !profile.entry) {
     const err = new Error('Runtime entry is required.');
     err.code = 'RUNTIME_PROFILE_INVALID';
     throw err;
@@ -167,10 +256,8 @@ function assertValidRuntimeProfile(manifest = {}, profile = normalizeRuntimeProf
     err.code = 'RUNTIME_PROFILE_INVALID';
     throw err;
   }
-  if ((profile.healthcheck?.type || 'none') === 'http' && !String(profile.healthcheck?.path || '').trim()) {
-    const err = new Error('healthcheck.path is required when healthcheck.type is "http".');
-    err.code = 'RUNTIME_PROFILE_INVALID';
-    throw err;
+  if ((profile.healthcheck?.type || 'none') === 'http') {
+    assertValidServicePath(profile.healthcheck?.path, 'healthcheck.path');
   }
   if (!Number.isFinite(Number(profile.healthcheck?.intervalMs)) || Number(profile.healthcheck.intervalMs) <= 0) {
     const err = new Error('healthcheck.intervalMs must be greater than 0.');
@@ -201,11 +288,20 @@ function toManifestRuntimeFields(profile) {
   return {
     type: profile.appType,
     runtime,
+    ...(profile.appType === 'hybrid'
+      ? {
+          ui: {
+            type: profile.ui?.runtimeType || 'sandbox-html',
+            entry: profile.ui?.entry || ''
+          }
+        }
+      : {}),
     service: {
       autoStart: Boolean(profile.service?.autoStart),
       restartPolicy: profile.service?.restartPolicy || 'never',
       maxRetries: Number.isFinite(Number(profile.service?.maxRetries)) ? Number(profile.service.maxRetries) : 3,
-      restartDelayMs: Number.isFinite(Number(profile.service?.restartDelayMs)) ? Number(profile.service.restartDelayMs) : 1000
+      restartDelayMs: Number.isFinite(Number(profile.service?.restartDelayMs)) ? Number(profile.service.restartDelayMs) : 1000,
+      ...(profile.service?.http?.enabled ? { http: { enabled: true } } : {})
     },
     healthcheck: {
       type: profile.healthcheck?.type || 'none',
@@ -239,6 +335,7 @@ function sanitizeProfileForClient(profile) {
     runtimeType: profile.runtimeType,
     appType: profile.appType,
     entry: profile.entry,
+    ui: profile.ui ? { ...profile.ui } : { runtimeType: 'sandbox-html', entry: '' },
     command: profile.command,
     cwd: profile.cwd,
     args: Array.isArray(profile.args) ? [...profile.args] : [],
