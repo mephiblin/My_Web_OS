@@ -612,6 +612,97 @@
     return [];
   }
 
+  function getPackageTypeLabel(pkg) {
+    return pkg?.appType || pkg?.type || 'app';
+  }
+
+  function getPackageRuntimeLabel(pkg) {
+    const runtime = pkg?.runtime;
+    if (typeof runtime === 'string') return runtime;
+    if (runtime && typeof runtime === 'object' && runtime.type) return runtime.type;
+    return pkg?.runtimeProfile?.runtimeType || pkg?.runtimeProfile?.type || 'sandbox';
+  }
+
+  function getPackageVersionLabel(pkg) {
+    return pkg?.version || (pkg?.id ? getLifecycle(pkg)?.current?.version : '') || '-';
+  }
+
+  function getPackageChannelLabel(pkg) {
+    if (activeCategory === CATEGORY.INSTALLED && pkg?.id) return getLifecycleCurrentChannel(pkg);
+    return pkg?.channel || pkg?.releaseChannel || 'stable';
+  }
+
+  function getPackagePublisherLabel(pkg) {
+    return pkg?.publisher || pkg?.author || pkg?.maintainer || pkg?.source?.title || 'Web OS Team';
+  }
+
+  function getPackageMinimumWebOsLabel(pkg) {
+    return pkg?.compatibility?.minimumWebOs
+      || pkg?.compatibility?.minWebOs
+      || pkg?.compatibility?.webos
+      || pkg?.engines?.webos
+      || '2.0.0';
+  }
+
+  function getPackageArchitectureLabel(pkg) {
+    const raw = pkg?.architectures || pkg?.architecture || pkg?.compatibility?.architectures || pkg?.compatibility?.architecture;
+    if (Array.isArray(raw) && raw.length > 0) return raw.join(', ');
+    return raw || 'Any';
+  }
+
+  function getPackageDateValue(pkg, kind) {
+    const lifecycle = pkg?.id ? getLifecycle(pkg) : null;
+    if (kind === 'released') {
+      return pkg?.releasedAt || pkg?.releaseDate || pkg?.createdAt || lifecycle?.current?.installedAt || pkg?.updatedAt || '';
+    }
+    if (kind === 'updated') {
+      return pkg?.updatedAt || lifecycle?.current?.updatedAt || lifecycle?.updatedAt || lifecycle?.current?.installedAt || '';
+    }
+    return lifecycle?.current?.installedAt || pkg?.installedAt || pkg?.createdAt || '';
+  }
+
+  function getPackageSizeLabel(pkg) {
+    const lifecycle = pkg?.id ? getLifecycle(pkg) : null;
+    const rawSize = pkg?.sizeBytes ?? pkg?.size ?? lifecycle?.current?.sizeBytes ?? lifecycle?.current?.size;
+    const fileCount = pkg?.fileCount ?? pkg?.filesCount ?? lifecycle?.current?.fileCount ?? lifecycle?.current?.filesCount ?? null;
+    const sizeLabel = Number.isFinite(Number(rawSize))
+      ? formatFileSize(Number(rawSize))
+      : (typeof rawSize === 'string' && rawSize.trim() ? rawSize.trim() : 'Unknown');
+    if (Number.isFinite(Number(fileCount)) && Number(fileCount) > 0) {
+      return `${sizeLabel} (${Number(fileCount)} files)`;
+    }
+    return sizeLabel;
+  }
+
+  function getPackageStatusLabel(pkg) {
+    if (activeCategory === CATEGORY.INSTALLED) {
+      return isServicePackage(pkg) ? getRuntimeStatusLabel(pkg) : 'Installed';
+    }
+    return pkg?.installed ? 'Installed' : 'Available';
+  }
+
+  function getPackageStatusClass(pkg) {
+    return String(getPackageStatusLabel(pkg) || 'available').toLowerCase();
+  }
+
+  function countPackagesByCategory(category) {
+    const rows = getActivePackageList();
+    if (category === 'all') return rows.length;
+    if (category === 'applications') {
+      return rows.filter((pkg) => ['app', 'hybrid'].includes(String(getPackageTypeLabel(pkg)).toLowerCase())).length;
+    }
+    if (category === 'tools') {
+      return rows.filter((pkg) => ['tool', 'developer', 'service'].includes(String(getPackageTypeLabel(pkg)).toLowerCase())).length;
+    }
+    if (category === 'libraries') {
+      return rows.filter((pkg) => ['library', 'lib'].includes(String(getPackageTypeLabel(pkg)).toLowerCase())).length;
+    }
+    if (category === 'samples') {
+      return rows.filter((pkg) => ['sample', 'demo', 'template'].includes(String(getPackageTypeLabel(pkg)).toLowerCase())).length;
+    }
+    return 0;
+  }
+
   function isServicePackage(pkg) {
     if (!pkg) return false;
     if (pkg.appType === 'service' || pkg.type === 'service') return true;
@@ -753,6 +844,17 @@
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) return '-';
     return parsed.toLocaleString();
+  }
+
+  function formatShortDate(value) {
+    if (!value) return '-';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '-';
+    return parsed.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
   }
 
   function formatEventLabel(event) {
@@ -3035,26 +3137,79 @@
 </script>
 
 <div class="package-center">
-  <aside class="category-panel glass-effect">
-    <div class="panel-title">Package Center</div>
-    <div class="panel-kicker">Library</div>
-    <button class="category {activeCategory === CATEGORY.STORE ? 'active' : ''}" onclick={() => setActiveCategory(CATEGORY.STORE)}>
-      <Store size={16} />
-      <span>Store</span>
-      <small>{storePackages.length}</small>
-    </button>
-    <button class="category {activeCategory === CATEGORY.INSTALLED ? 'active' : ''}" onclick={() => setActiveCategory(CATEGORY.INSTALLED)}>
-      <LayoutGrid size={16} />
-      <span>Installed</span>
-      <small>{installedPackages.length}</small>
-    </button>
+  <header class="package-command-bar">
+    <div class="command-brand">
+      <div class="command-app-icon"><LayoutGrid size={18} /></div>
+      <strong>Web OS Package Center</strong>
+    </div>
+    <div class="command-segment">
+      <button class="command-select" onclick={() => setActiveCategory(activeCategory === CATEGORY.INSTALLED ? CATEGORY.STORE : CATEGORY.INSTALLED)}>
+        {activeCategory === CATEGORY.INSTALLED ? 'Installed' : 'Store'}
+        <span>v</span>
+      </button>
+      <button class="command-select" type="button">
+        Sort: Name
+        <span>v</span>
+      </button>
+      <button class="command-select" type="button">
+        Filters
+        <span>v</span>
+      </button>
+    </div>
+    <label class="command-search">
+      <Search size={16} />
+      <input type="search" bind:value={packageQuery} placeholder="Search packages..." />
+    </label>
+    <div class="command-actions">
+      <button class="command-action" onclick={reloadActivePackages} disabled={activeCategory === CATEGORY.STORE ? loadingStore : loadingInstalled}>
+        <RefreshCw size={15} />
+        Refresh
+      </button>
+      <button class="command-action" onclick={() => { setActiveCategory(CATEGORY.STORE); packageUtilityPanel = packageUtilityPanel === 'zip' ? '' : 'zip'; }}>
+        <Upload size={15} />
+        Import
+      </button>
+      <button class="command-icon" type="button" aria-label="More package actions">...</button>
+    </div>
+  </header>
 
-    <div class="panel-divider"></div>
+  <aside class="category-panel glass-effect">
+    <div class="library-rail">
+      <div class="panel-title">Library</div>
+      <button class="category {activeCategory === CATEGORY.STORE ? 'active' : ''}" onclick={() => setActiveCategory(CATEGORY.STORE)}>
+        <Store size={16} />
+        <span>Store</span>
+        <small>{storePackages.length}</small>
+      </button>
+      <button class="category {activeCategory === CATEGORY.INSTALLED ? 'active' : ''}" onclick={() => setActiveCategory(CATEGORY.INSTALLED)}>
+        <LayoutGrid size={16} />
+        <span>Installed</span>
+        <small>{installedPackages.length}</small>
+      </button>
+      <button class="category muted" type="button" disabled title="Update filtering is not wired yet.">
+        <RefreshCw size={16} />
+        <span>Updates</span>
+        <small>0</small>
+      </button>
+
+      <div class="panel-divider"></div>
+      <div class="panel-title">Categories</div>
+      <button class="category muted active-soft" type="button" disabled title="Category filters are planned for the next package taxonomy pass."><span>All</span><small>{countPackagesByCategory('all')}</small></button>
+      <button class="category muted" type="button" disabled title="Category filters are planned for the next package taxonomy pass."><span>Applications</span><small>{countPackagesByCategory('applications')}</small></button>
+      <button class="category muted" type="button" disabled title="Category filters are planned for the next package taxonomy pass."><span>Tools</span><small>{countPackagesByCategory('tools')}</small></button>
+      <button class="category muted" type="button" disabled title="Category filters are planned for the next package taxonomy pass."><span>Libraries</span><small>{countPackagesByCategory('libraries')}</small></button>
+      <button class="category muted" type="button" disabled title="Category filters are planned for the next package taxonomy pass."><span>Samples</span><small>{countPackagesByCategory('samples')}</small></button>
+
+      <div class="rail-summary">
+        <span>{activeCategory === CATEGORY.INSTALLED ? 'Installed Packages' : 'Store Packages'}</span>
+        <strong>{getFilteredActivePackageList().length} packages</strong>
+      </div>
+    </div>
+
     <section class="package-list-panel glass-effect">
       <div class="package-list-head">
         <div class="package-list-title">
-          <span>{activeCategory === CATEGORY.STORE ? 'Discover' : 'Installed'}</span>
-          <strong>{getFilteredActivePackageList().length} packages</strong>
+          <strong>{getFilteredActivePackageList().length} {activeCategory === CATEGORY.STORE ? 'Store Packages' : 'Installed Packages'}</strong>
         </div>
         <div class="package-list-actions">
           {#if activeCategory === CATEGORY.STORE}
@@ -3718,24 +3873,25 @@
     {#if activeCategory === CATEGORY.STORE && getSelectedPackage()}
       {@const selectedPackage = getSelectedPackage()}
       {@const selectedDependencies = getPackageDependencies(selectedPackage)}
-      <div class="selected-package-detail glass-effect store-selected-detail">
-        <div class="installed-app-summary">
-          <div class="installed-app-icon">
+      {@const selectedWidgets = getPackageWidgets(selectedPackage)}
+      <article class="selected-package-detail package-detail-shell glass-effect store-selected-detail">
+        <header class="installed-app-summary package-detail-hero">
+          <div class="installed-app-icon package-detail-icon">
             <div class="icon-box">
               {#if hasImageIcon(selectedPackage)}
                 <img class="icon-image" src={getIconUrl(selectedPackage)} alt={selectedPackage.title} loading="lazy" />
               {:else}
-                <LayoutGrid size={18} />
+                <LayoutGrid size={30} />
               {/if}
             </div>
           </div>
-          <div class="installed-app-main">
-            <div class="installed-app-title-row">
+          <div class="installed-app-main package-detail-heading">
+            <div class="installed-app-title-row package-detail-title-row">
               <div>
                 <h3>{selectedPackage.title || selectedPackage.id}</h3>
-                <span>{selectedPackage.id}</span>
+                <span>{selectedPackage.id} <em>&middot;</em> v{getPackageVersionLabel(selectedPackage)}</span>
               </div>
-              <div class="installed-primary-actions">
+              <div class="installed-primary-actions package-detail-actions">
                 {#if selectedPackage.installed}
                   {#if selectedPackage.updatePolicy?.allowed}
                     <button class="btn primary" onclick={() => quickInstallPackage(selectedPackage, { overwrite: true })} disabled={installingPackageId === selectedPackage.id || installReview?.loading}>
@@ -3761,94 +3917,75 @@
                 {/if}
               </div>
             </div>
-            <div class="installed-status-line">
-              <span>{selectedPackage.installed ? 'Installed' : 'Available'}</span>
-              <span>{getPackageKindLabel(selectedPackage)}</span>
+            <div class="installed-status-line package-detail-badges">
+              <span class="status-pill {getPackageStatusClass(selectedPackage)}">{getPackageStatusLabel(selectedPackage)}</span>
+              <span>{getPackageChannelLabel(selectedPackage)} Channel</span>
             </div>
           </div>
-        </div>
-        <div class="installed-detail-layout">
-          <section class="installed-spec-panel installed-description-panel">
-            <div class="installed-spec-title">Description</div>
-            <p>{selectedPackage.description || 'No description provided.'}</p>
-          </section>
-          <section class="installed-spec-panel">
-            <div class="installed-spec-title">Information</div>
-            <div class="installed-spec-list">
-              <div>
-                <span>Identifier</span>
-                <strong>{selectedPackage.id}</strong>
-              </div>
-              <div>
-                <span>Type</span>
-                <strong>{selectedPackage.appType || selectedPackage.type || 'app'}</strong>
-              </div>
-              <div>
-                <span>Runtime</span>
-                <strong>{selectedPackage.runtime || selectedPackage.runtimeProfile?.runtimeType || '-'}</strong>
-              </div>
-              <div>
-                <span>Source</span>
-                <strong>{getPackageSourceLabel(selectedPackage)}</strong>
-              </div>
+        </header>
+
+        <nav class="package-detail-tabs" aria-label="Package detail sections">
+          <span class="active">Overview</span>
+          <span>Details</span>
+          <span>Dependencies</span>
+          <span>Widget ({selectedWidgets.length})</span>
+          <span>Files</span>
+        </nav>
+
+        <section class="package-detail-overview">
+          <p class="package-detail-description">{selectedPackage.description || 'No description provided.'}</p>
+          <div class="package-detail-main-grid">
+            <div class="package-preview-empty" aria-label="Package screenshot placeholder"></div>
+            <div class="package-facts">
+              <div><span>TYPE</span><strong>{getPackageTypeLabel(selectedPackage)}</strong></div>
+              <div><span>RUNTIME</span><strong>{getPackageRuntimeLabel(selectedPackage)}</strong></div>
+              <div><span>BOUNDARY</span><strong>{getWorkspaceBoundaryLabel(selectedPackage)}</strong></div>
+              <div><span>IDENTIFIER</span><strong>{selectedPackage.id}</strong></div>
+              <div><span>PUBLISHER</span><strong>{getPackagePublisherLabel(selectedPackage)}</strong></div>
+              <div><span>RELEASED</span><strong>{formatShortDate(getPackageDateValue(selectedPackage, 'released'))}</strong></div>
+              <div><span>SIZE</span><strong>{getPackageSizeLabel(selectedPackage)}</strong></div>
+              <div><span>LAST UPDATED</span><strong>{formatShortDate(getPackageDateValue(selectedPackage, 'updated'))}</strong></div>
+              <div><span>CHANNEL</span><strong>{getPackageChannelLabel(selectedPackage)}</strong></div>
             </div>
-          </section>
-          <section class="installed-spec-panel">
-            <div class="installed-spec-title">Version</div>
-            <div class="installed-spec-list">
-              <div>
-                <span>Version</span>
-                <strong>{selectedPackage.version || '-'}</strong>
+          </div>
+
+          <div class="installed-detail-layout package-detail-card-grid">
+            <section class="installed-spec-panel package-info-card">
+              <div class="installed-spec-title">Version</div>
+              <div class="installed-spec-list package-info-list">
+                <div><span>Current Version</span><strong>{getPackageVersionLabel(selectedPackage)}</strong></div>
+                <div><span>Minimum Web OS</span><strong>{getPackageMinimumWebOsLabel(selectedPackage)}</strong></div>
+                <div><span>Channel</span><strong>{getPackageChannelLabel(selectedPackage)}</strong></div>
+                <div><span>Release Date</span><strong>{formatShortDate(getPackageDateValue(selectedPackage, 'released'))}</strong></div>
               </div>
-              <div>
-                <span>Channel</span>
-                <strong>{selectedPackage.channel || selectedPackage.releaseChannel || 'stable'}</strong>
+            </section>
+            <section class="installed-spec-panel package-info-card">
+              <div class="installed-spec-title">Compatibility</div>
+              <div class="installed-spec-list package-info-list">
+                <div><span>Web OS</span><strong>{getPackageMinimumWebOsLabel(selectedPackage)} or higher</strong></div>
+                <div><span>Architectures</span><strong>{getPackageArchitectureLabel(selectedPackage)}</strong></div>
+                <div><span>Runtime</span><strong>{getPackageRuntimeLabel(selectedPackage)}</strong></div>
               </div>
-              <div>
-                <span>Store ID</span>
-                <strong>{selectedPackage.source?.id || 'store'}</strong>
-              </div>
-              <div>
-                <span>Zip</span>
-                <strong>{selectedPackage.zipUrl ? 'Ready' : 'Unavailable'}</strong>
-              </div>
-            </div>
-          </section>
-          <section class="installed-spec-panel">
-            <div class="installed-spec-title">Status</div>
-            <div class="installed-spec-list">
-              <div>
-                <span>Install State</span>
-                <strong>{selectedPackage.installed ? 'Installed' : 'Available'}</strong>
-              </div>
-              <div>
-                <span>Update</span>
-                <strong>{selectedPackage.installed ? (selectedPackage.updatePolicy?.allowed ? 'Available' : 'Blocked') : '-'}</strong>
-              </div>
-              <div>
-                <span>Policy</span>
-                <strong>{selectedPackage.updatePolicy?.blockedReason || '-'}</strong>
-              </div>
-              <div>
-                <span>Boundary</span>
-                <strong>{getWorkspaceBoundaryLabel(selectedPackage)}</strong>
-              </div>
-            </div>
-          </section>
-          <section class="installed-spec-panel">
-            <div class="installed-spec-title">Dependencies</div>
-            {#if selectedDependencies.length > 0}
-              <div class="installed-dependency-list">
-                {#each selectedDependencies as dependency}
-                  <span>{dependency}</span>
-                {/each}
-              </div>
-            {:else}
-              <div class="runtime-log-empty">No dependencies declared.</div>
-            {/if}
-          </section>
-        </div>
-      </div>
+            </section>
+            <section class="installed-spec-panel package-info-card">
+              <div class="installed-spec-title">Dependencies</div>
+              {#if selectedDependencies.length > 0}
+                <div class="installed-dependency-list package-dependency-list">
+                  {#each selectedDependencies as dependency}
+                    <span>{dependency}</span>
+                  {/each}
+                </div>
+              {:else}
+                <div class="package-empty-line">No dependencies declared.</div>
+              {/if}
+            </section>
+            <section class="installed-spec-panel package-info-card">
+              <div class="installed-spec-title">Widgets</div>
+              <strong>{selectedWidgets.length === 1 ? '1 widget included' : `${selectedWidgets.length} widgets included`}</strong>
+            </section>
+          </div>
+        </section>
+      </article>
     {/if}
 
     {#if activeCategory === CATEGORY.STORE}
@@ -4173,660 +4310,151 @@
     {/if}
 
     {#if activeCategory === CATEGORY.INSTALLED}
-      <div class="block glass-effect installed-management">
-        {#if loadingInstalled}
-          <div class="empty">Loading installed packages...</div>
-        {:else if installedPackages.length === 0}
-          <div class="empty">No installed packages.</div>
-        {:else if getFilteredActivePackageList().length === 0}
-          <div class="empty">No installed packages match the current search.</div>
-        {:else}
-          <div class="grid selected-package-management">
-            {#each getSelectedPackageRows() as pkg}
-              {@const packageWidgets = getPackageWidgets(pkg)}
-              {@const dependencyItems = getPackageDependencies(pkg)}
-              <article class="card selected-management-card">
-                <div class="installed-app-summary">
-                  <div class="installed-app-icon">
-                    <div class="icon-box">
-                      {#if hasImageIcon(pkg)}
-                        <img class="icon-image" src={getIconUrl(pkg)} alt={pkg.title} loading="lazy" />
-                      {:else}
-                        <LayoutGrid size={18} />
-                      {/if}
-                    </div>
-                  </div>
-                  <div class="installed-app-main">
-                    <div class="installed-app-title-row">
-                      <div>
-                        <h3>{pkg.title || pkg.id}</h3>
-                        <span>{pkg.id}</span>
-                      </div>
-                      <div class="installed-primary-actions">
-                        {#if canOpenPackage(pkg)}
-                          <button class="btn primary" onclick={() => openInstalledPackage(pkg)}>
-                            <Play size={14} />
-                            Open
-                          </button>
-                        {/if}
-                        {#if isServicePackage(pkg)}
-                          <button class="btn ghost" onclick={() => controlRuntime(pkg, 'start')} disabled={runtimeActioning === `${pkg.id}:start` || isRuntimeRunning(pkg)}>
-                            <Play size={14} />
-                            Start
-                          </button>
-                          <button class="btn ghost" onclick={() => controlRuntime(pkg, 'stop')} disabled={runtimeActioning === `${pkg.id}:stop` || !isRuntimeRunning(pkg)}>
-                            <Square size={14} />
-                            Stop
-                          </button>
-                        {/if}
-                        <button
-                          class="btn ghost"
-                          onclick={() => Promise.all([loadInstalledPackages(), loadRuntimeStatuses()])}
-                          disabled={loadingInstalled}
-                        >
-                          <RefreshCw size={14} />
-                          Refresh
-                        </button>
-                      </div>
-                    </div>
-                    <div class="installed-status-line">
-                      <span>{isServicePackage(pkg) ? getRuntimeStatusLabel(pkg) : 'Installed'}</span>
-                      <span>{getPackageKindLabel(pkg)}</span>
-                    </div>
-                  </div>
-                </div>
-                <div class="installed-detail-layout">
-                  <section class="installed-spec-panel installed-description-panel">
-                    <div class="installed-spec-title">Description</div>
-                    <p>{pkg.description || 'No description provided.'}</p>
-                  </section>
-                  <section class="installed-spec-panel">
-                    <div class="installed-spec-title">Information</div>
-                    <div class="installed-spec-list">
-                      <div>
-                        <span>Identifier</span>
-                        <strong>{pkg.id}</strong>
-                      </div>
-                      <div>
-                        <span>Type</span>
-                        <strong>{pkg.appType || pkg.type || 'app'}</strong>
-                      </div>
-                      <div>
-                        <span>Runtime</span>
-                        <strong>{pkg.runtime || pkg.runtimeProfile?.runtimeType || '-'}</strong>
-                      </div>
-                      <div>
-                        <span>Boundary</span>
-                        <strong>{getWorkspaceBoundaryLabel(pkg)}</strong>
-                      </div>
-                    </div>
-                  </section>
-                  <section class="installed-spec-panel">
-                    <div class="installed-spec-title">Version</div>
-                    <div class="installed-spec-list">
-                      <div>
-                        <span>Version</span>
-                        <strong>{pkg.version || '-'}</strong>
-                      </div>
-                      <div>
-                        <span>Channel</span>
-                        <strong>{getLifecycleCurrentChannel(pkg)}</strong>
-                      </div>
-                      <div>
-                        <span>Installed</span>
-                        <strong>{formatDateTime(getLifecycle(pkg)?.current?.installedAt)}</strong>
-                      </div>
-                      <div>
-                        <span>Source</span>
-                        <strong>{getLifecycle(pkg)?.current?.source || pkg.source?.id || '-'}</strong>
-                      </div>
-                    </div>
-                  </section>
-                  <section class="installed-spec-panel">
-                    <div class="installed-spec-title">Status</div>
-                    <div class="installed-spec-list">
-                      <div>
-                        <span>Runtime</span>
-                        <strong>{isServicePackage(pkg) ? getRuntimeStatusLabel(pkg) : 'Installed'}</strong>
-                      </div>
-                      <div class="installed-health-field">
-                        <span>Health</span>
-                        <strong class="health {getHealthStatus(pkg)}">{getHealthStatusText(pkg)}</strong>
-                        <button class="btn tiny ghost" onclick={() => runHealthCheck(pkg)} disabled={healthLoading === pkg.id}>
-                          {healthLoading === pkg.id ? 'Checking...' : 'Run Check'}
-                        </button>
-                      </div>
-                      <div>
-                        <span>Last Check</span>
-                        <strong>{formatDateTime(getHealthReport(pkg)?.checkedAt)}</strong>
-                      </div>
-                      <div>
-                        <span>Summary</span>
-                        <strong>{getHealthReport(pkg)?.summary || '-'}</strong>
-                      </div>
-                    </div>
-                  </section>
-                  <section class="installed-spec-panel">
-                    <div class="installed-spec-title">Dependencies</div>
-                    {#if dependencyItems.length > 0}
-                      <div class="installed-dependency-list">
-                        {#each dependencyItems as dependency}
-                          <span>{dependency}</span>
-                        {/each}
-                      </div>
-                    {:else}
-                      <div class="runtime-log-empty">No dependencies declared.</div>
-                    {/if}
-                  </section>
-                  {#if (pkg.appType || pkg.type) === 'hybrid'}
-                    <section class="installed-spec-panel">
-                      <div class="installed-spec-title">Entrypoints</div>
-                      <div class="installed-spec-list">
-                        <div>
-                          <span>UI</span>
-                          <strong>{pkg.ui?.entry || pkg.runtimeProfile?.ui?.entry || pkg.entry || '-'}</strong>
-                        </div>
-                        <div>
-                          <span>Service</span>
-                          <strong>{pkg.service?.entry || pkg.runtimeProfile?.entry || '-'}</strong>
-                        </div>
-                      </div>
-                    </section>
-                  {/if}
-                  {#if packageWidgets.length > 0}
-                    <section class="installed-spec-panel">
-                      <div class="installed-spec-title">Widgets</div>
-                      <strong>{packageWidgets.length}</strong>
-                    </section>
-                  {/if}
-                </div>
-                {#if packageWidgets.length > 0}
-                  <div class="package-widgets">
-                    {#each packageWidgets as contribution}
-                      <div class="package-widget-row">
-                        <div>
-                          <strong>{contribution.title || contribution.label}</strong>
-                          <span>{contribution.entry}</span>
-                        </div>
-                        <button class="btn ghost" onclick={() => addPackageWidget(pkg, contribution)}>
-                          <Plus size={14} />
-                          Add Widget
-                        </button>
-                      </div>
-                    {/each}
-                  </div>
+      {#if loadingInstalled}
+        <div class="empty">Loading installed packages...</div>
+      {:else if installedPackages.length === 0}
+        <div class="empty">No installed packages.</div>
+      {:else if getFilteredActivePackageList().length === 0}
+        <div class="empty">No installed packages match the current search.</div>
+      {:else if getSelectedPackage()}
+        {@const pkg = getSelectedPackage()}
+        {@const packageWidgets = getPackageWidgets(pkg)}
+        {@const dependencyItems = getPackageDependencies(pkg)}
+        <article class="selected-package-detail package-detail-shell glass-effect installed-management">
+          <header class="installed-app-summary package-detail-hero">
+            <div class="installed-app-icon package-detail-icon">
+              <div class="icon-box">
+                {#if hasImageIcon(pkg)}
+                  <img class="icon-image" src={getIconUrl(pkg)} alt={pkg.title} loading="lazy" />
+                {:else}
+                  <LayoutGrid size={30} />
                 {/if}
-                <div class="actions installed-management-actions">
+              </div>
+            </div>
+            <div class="installed-app-main package-detail-heading">
+              <div class="installed-app-title-row package-detail-title-row">
+                <div>
+                  <h3>{pkg.title || pkg.id}</h3>
+                  <span>{pkg.id} <em>&middot;</em> v{getPackageVersionLabel(pkg)}</span>
+                </div>
+                <div class="installed-primary-actions package-detail-actions">
                   {#if canOpenPackage(pkg)}
-                    <button class="btn ghost" onclick={() => stopInstalledPackage(pkg)}>
-                      <Square size={14} />
-                      Close Windows
+                    <button class="btn primary" onclick={() => openInstalledPackage(pkg)}>
+                      <Play size={14} />
+                      Open
                     </button>
                   {/if}
                   {#if isServicePackage(pkg)}
-                    <button class="btn ghost" onclick={() => controlRuntime(pkg, 'restart')} disabled={runtimeActioning === `${pkg.id}:restart`}>
-                      <RotateCcw size={14} />
-                      Restart
+                    <button class="btn ghost" onclick={() => controlRuntime(pkg, 'start')} disabled={runtimeActioning === `${pkg.id}:start` || isRuntimeRunning(pkg)}>
+                      <Play size={14} />
+                      Start
                     </button>
-                    <button class="btn ghost" onclick={() => toggleRuntimeLogs(pkg)} disabled={runtimeLogsLoading === pkg.id}>
-                      {runtimeLogsByApp[pkg.id] ? 'Hide Logs' : (runtimeLogsLoading === pkg.id ? 'Loading Logs...' : 'Logs')}
+                    <button class="btn ghost" onclick={() => controlRuntime(pkg, 'stop')} disabled={runtimeActioning === `${pkg.id}:stop` || !isRuntimeRunning(pkg)}>
+                      <Square size={14} />
+                      Stop
                     </button>
                   {/if}
-                  <button class="btn ghost" onclick={() => toggleOpsConsole(pkg)} disabled={lifecycleLoading === pkg.id || runtimeEventsLoading === pkg.id}>
-                    {isConsoleOpen(pkg) ? 'Ops Close' : 'Ops Console'}
-                  </button>
-                  <button class="btn ghost" onclick={() => openCloneDialog(pkg)}>
-                    Clone
-                  </button>
-                  <button class="btn ghost" onclick={() => downloadInstalledPackage(pkg)}>
-                    <Download size={14} />
-                    Export
+                  <button class="btn ghost" onclick={() => Promise.all([loadInstalledPackages(), loadRuntimeStatuses()])} disabled={loadingInstalled}>
+                    <RefreshCw size={14} />
+                    Check for Updates
                   </button>
                   <button class="btn danger" onclick={() => openPackageDeleteReview(pkg)} disabled={isPackageDeleteBusy(pkg.id)}>
                     <Trash2 size={14} />
                     Remove
                   </button>
+                  <button class="btn ghost" onclick={() => downloadInstalledPackage(pkg)}>
+                    <Download size={14} />
+                    Export
+                  </button>
                 </div>
-                {#if isConsoleOpen(pkg)}
-                  <div class="ops-console">
-                    <div class="ops-row">
-                      <div class="ops-group">
-                        <div class="ops-label">Release Channel</div>
-                        <div class="ops-inline">
-                          {#each ['stable', 'beta', 'alpha', 'canary'] as channel}
-                            <button
-                              class="btn tiny {getLifecycleCurrentChannel(pkg) === channel ? 'primary' : 'ghost'}"
-                              onclick={() => setReleaseChannel(pkg, channel)}
-                              disabled={Boolean(lifecycleActioning)}
-                            >
-                              {channel}
-                            </button>
-                          {/each}
-                        </div>
-                      </div>
-                      <div class="ops-group">
-                        <div class="ops-label">Recover Flow</div>
-                        <div class="ops-inline">
-                          <button class="btn tiny ghost" onclick={() => recoverRuntime(pkg)} disabled={lifecycleActioning === `${pkg.id}:recover`}>
-                            {lifecycleActioning === `${pkg.id}:recover` ? 'Recovering...' : 'Recover'}
-                          </button>
-                          <button class="btn tiny ghost" onclick={() => loadRuntimeEvents(pkg.id)} disabled={runtimeEventsLoading === pkg.id}>
-                            {runtimeEventsLoading === pkg.id ? 'Loading events...' : 'Reload events'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+              </div>
+              <div class="installed-status-line package-detail-badges">
+                <span class="status-pill {getPackageStatusClass(pkg)}">{getPackageStatusLabel(pkg)}</span>
+                <span>{getPackageChannelLabel(pkg)} Channel</span>
+              </div>
+            </div>
+          </header>
 
-                    <div class="ops-row">
-                      <div class="ops-group">
-                        <div class="ops-label">Create Backup</div>
-                        <div class="ops-inline">
-                          <input
-                            type="text"
-                            placeholder="backup note"
-                            value={getBackupNote(pkg.id)}
-                            oninput={(event) => setBackupNote(pkg.id, event.currentTarget.value)}
-                          />
-                          <button class="btn tiny ghost" onclick={() => createLifecycleBackup(pkg)} disabled={lifecycleActioning === `${pkg.id}:backup`}>
-                            {lifecycleActioning === `${pkg.id}:backup` ? 'Backing up...' : 'Backup'}
-                          </button>
-                          <button class="btn tiny ghost" onclick={() => createBackupJob(pkg)} disabled={lifecycleActioning === `${pkg.id}:backup-job:create`}>
-                            {lifecycleActioning === `${pkg.id}:backup-job:create` ? 'Queueing...' : 'Queue Job'}
-                          </button>
-                          <button class="btn tiny ghost" onclick={() => loadBackupJobs(pkg.id)} disabled={isBackupJobsLoading(pkg.id)}>
-                            {isBackupJobsLoading(pkg.id) ? 'Loading jobs...' : 'Reload Jobs'}
-                          </button>
-                        </div>
-                        {#if getBackupJobs(pkg.id).length === 0}
-                          <div class="runtime-log-empty">No backup jobs.</div>
-                        {:else}
-                          <div class="backup-jobs-list">
-                            {#each getBackupJobs(pkg.id) as job (job.id)}
-                              <div class="backup-job-row">
-                                <div class="backup-job-head">
-                                  <span class="job-id">{job.id}</span>
-                                  <span class="status {getBackupJobStatusClass(job.status)}">{job.status || 'unknown'}</span>
-                                </div>
-                                <div class="backup-job-meta">
-                                  <span>created {formatDateTime(job.createdAt)}</span>
-                                  <span>started {formatDateTime(job.startedAt)}</span>
-                                  <span>finished {formatDateTime(job.finishedAt)}</span>
-                                  <span>backup {job.backupId || '-'}</span>
-                                </div>
-                                {#if job.note}
-                                  <div class="backup-job-note">{job.note}</div>
-                                {/if}
-                                {#if job.error?.message}
-                                  <div class="runtime-event error">{job.error.message}</div>
-                                {/if}
-                                {#if isBackupJobCancelable(job)}
-                                  <div class="ops-inline">
-                                    <button
-                                      class="btn tiny danger"
-                                      onclick={() => cancelBackupJob(pkg, job)}
-                                      disabled={isBackupJobActioning(pkg.id, job.id, 'cancel')}
-                                    >
-                                      {isBackupJobActioning(pkg.id, job.id, 'cancel') ? 'Canceling...' : 'Cancel Job'}
-                                    </button>
-                                  </div>
-                                {/if}
-                              </div>
-                            {/each}
-                          </div>
-                        {/if}
-                      </div>
-                    </div>
+          <nav class="package-detail-tabs" aria-label="Package detail sections">
+            <span class="active">Overview</span>
+            <span>Details</span>
+            <span>Dependencies</span>
+            <span>Widget ({packageWidgets.length})</span>
+            <span>Files</span>
+          </nav>
 
-                    <div class="ops-row">
-                      <div class="ops-group">
-                        <div class="ops-label">Backup Retention</div>
-                        <div class="ops-inline">
-                          <input
-                            type="number"
-                            min="1"
-                            max="100"
-                            value={getBackupPolicyDraft(pkg.id, pkg).maxBackups}
-                            oninput={(event) => setBackupPolicyDraftField(pkg.id, 'maxBackups', event.currentTarget.value)}
-                          />
-                          <button class="btn tiny ghost" onclick={() => saveBackupPolicy(pkg)} disabled={lifecycleActioning === `${pkg.id}:backup-policy`}>
-                            {lifecycleActioning === `${pkg.id}:backup-policy` ? 'Saving...' : 'Save Policy'}
-                          </button>
-                          <span class="runtime-event">
-                            current max: {getBackupPolicyMax(pkg)}
-                          </span>
-                        </div>
-                      </div>
-                      <div class="ops-group">
-                        <div class="ops-label">Backup Schedule</div>
-                        <div class="ops-inline">
-                          <label class="preflight-bypass">
-                            <input
-                              type="checkbox"
-                              checked={getBackupPolicyDraft(pkg.id, pkg).enabled === 'true'}
-                              disabled={getBackupPolicyDraft(pkg.id, pkg).interval === 'manual'}
-                              onchange={(event) => setBackupPolicyDraftField(pkg.id, 'enabled', event.currentTarget.checked ? 'true' : 'false')}
-                            />
-                            <span>Enable</span>
-                          </label>
-                          <select
-                            value={getBackupPolicyDraft(pkg.id, pkg).interval}
-                            onchange={(event) => {
-                              const value = String(event.currentTarget.value || 'manual').trim().toLowerCase();
-                              setBackupPolicyDraftField(pkg.id, 'interval', BACKUP_SCHEDULE_OPTIONS.includes(value) ? value : 'manual');
-                              if (value === 'manual') {
-                                setBackupPolicyDraftField(pkg.id, 'enabled', 'false');
-                              }
-                            }}
-                          >
-                            {#each BACKUP_SCHEDULE_OPTIONS as option}
-                              <option value={option}>{option}</option>
-                            {/each}
-                          </select>
-                          <input
-                            type="time"
-                            value={getBackupPolicyDraft(pkg.id, pkg).timeOfDay}
-                            oninput={(event) => setBackupPolicyDraftField(pkg.id, 'timeOfDay', event.currentTarget.value)}
-                          />
-                          <span class="runtime-event">
-                            current interval: {getBackupPolicySchedule(pkg).interval}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
+          <section class="package-detail-overview">
+            <p class="package-detail-description">{pkg.description || 'No description provided.'}</p>
+            <div class="package-detail-main-grid">
+              <div class="package-preview-empty" aria-label="Package screenshot placeholder"></div>
+              <div class="package-facts">
+                <div><span>TYPE</span><strong>{getPackageTypeLabel(pkg)}</strong></div>
+                <div><span>RUNTIME</span><strong>{getPackageRuntimeLabel(pkg)}</strong></div>
+                <div><span>BOUNDARY</span><strong>{getWorkspaceBoundaryLabel(pkg)}</strong></div>
+                <div><span>IDENTIFIER</span><strong>{pkg.id}</strong></div>
+                <div><span>PUBLISHER</span><strong>{getPackagePublisherLabel(pkg)}</strong></div>
+                <div><span>RELEASED</span><strong>{formatShortDate(getPackageDateValue(pkg, 'released'))}</strong></div>
+                <div><span>SIZE</span><strong>{getPackageSizeLabel(pkg)}</strong></div>
+                <div><span>LAST UPDATED</span><strong>{formatShortDate(getPackageDateValue(pkg, 'updated'))}</strong></div>
+                <div><span>CHANNEL</span><strong>{getPackageChannelLabel(pkg)}</strong></div>
+              </div>
+            </div>
 
-                    <div class="ops-row">
-                      <div class="ops-group">
-                        <div class="ops-label">Rollback</div>
-                        <div class="ops-inline">
-                          <select
-                            onchange={(event) => setSelectedBackup(pkg.id, event.currentTarget.value)}
-                            value={selectedBackupByApp[pkg.id] || ''}
-                          >
-                            <option value="">select backup</option>
-                            {#each getAvailableBackups(pkg) as backup}
-                              <option value={backup.id}>
-                                {backup.id} | {backup.version} | {formatDateTime(backup.createdAt)}
-                              </option>
-                            {/each}
-                          </select>
-                          <button class="btn tiny danger" onclick={() => openRollbackReview(pkg)} disabled={lifecycleActioning === `${pkg.id}:rollback` || rollbackReview?.loading}>
-                            {lifecycleActioning === `${pkg.id}:rollback` ? 'Reviewing...' : 'Rollback'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div class="ops-row">
-                      <div class="ops-group">
-                        <div class="ops-label">Manifest Editor</div>
-                        <div class="ops-inline">
-                          <button class="btn tiny ghost" onclick={() => toggleManifestEditor(pkg)}>
-                            {isManifestEditorOpen(pkg.id) ? 'Close Editor' : 'Open Editor'}
-                          </button>
-                          {#if isManifestEditorOpen(pkg.id)}
-                            <button
-                              class="btn tiny ghost"
-                              onclick={() => openManifestEditor(pkg)}
-                              disabled={Boolean(getManifestEditorState(pkg.id)?.loading) || Boolean(getManifestEditorState(pkg.id)?.saving)}
-                            >
-                              {getManifestEditorState(pkg.id)?.loading ? 'Loading...' : 'Reload'}
-                            </button>
-                          {/if}
-                        </div>
-                        {#if isManifestEditorOpen(pkg.id)}
-                          <div class="manifest-editor-panel">
-                            {#if getManifestEditorState(pkg.id)?.loading}
-                              <div class="runtime-log-empty">Loading manifest...</div>
-                            {:else if getManifestEditorState(pkg.id)?.loadError}
-                              <div class="preflight-blocked-reason">{getManifestEditorState(pkg.id)?.loadError}</div>
-                            {:else}
-                              <textarea
-                                class="manifest-editor-textarea"
-                                value={getManifestEditorState(pkg.id)?.text || ''}
-                                oninput={(event) => onManifestEditorInput(pkg, event.currentTarget.value)}
-                                spellcheck="false"
-                              ></textarea>
-                              {#if getManifestEditorState(pkg.id)?.parseError}
-                                <div class="manifest-parse-error">{getManifestEditorState(pkg.id)?.parseError}</div>
-                              {/if}
-                              {#if getManifestEditorState(pkg.id)?.preflight}
-                                <div class="manifest-preflight-head">
-                                  <span class="preflight-decision {getManifestEditorState(pkg.id)?.preflight?.blocked ? 'blocked' : getManifestEditorState(pkg.id)?.preflight?.decision}">
-                                    {getManifestEditorState(pkg.id)?.preflight?.blocked ? 'BLOCKED' : getInstallReviewDecisionLabel(getManifestEditorState(pkg.id)?.preflight)}
-                                  </span>
-                                  <span class="preflight-summary-inline">{getManifestEditorState(pkg.id)?.preflight?.summary}</span>
-                                </div>
-                                {#if getManifestMediaScopeReview(getManifestEditorState(pkg.id))}
-                                  <div class="preflight-group">
-                                    <div class="preflight-label">Media Scope Review</div>
-                                    <div class="preflight-summary-inline">
-                                      {getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.summary}
-                                    </div>
-                                    <div class="manifest-review-meta">
-                                      <span class="preflight-decision {getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalRequired && !getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted ? 'warn' : getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted ? 'pass' : getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.status}">
-                                        {getManifestMediaScopeStatusLabel(getManifestMediaScopeReview(getManifestEditorState(pkg.id)))}
-                                      </span>
-                                      <span class="manifest-review-chip">
-                                        Risk: {getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.risk || 'unknown'}
-                                      </span>
-                                      <span class="manifest-review-chip">
-                                        {getManifestMediaScopeApprovalHint(getManifestMediaScopeReview(getManifestEditorState(pkg.id)))}
-                                      </span>
-                                    </div>
-                                    {#if getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.scopes?.length}
-                                      <div class="preflight-list">
-                                        {#each getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.scopes || [] as scope}
-                                          <div class="preflight-item">
-                                            <span class="preflight-item-status {scope.status}">{String(scope.status || 'info').toUpperCase()}</span>
-                                            <span>{scope.label}</span>
-                                            {#if scope.detail}
-                                              <span class="preflight-item-detail">{scope.detail}</span>
-                                            {/if}
-                                          </div>
-                                        {/each}
-                                      </div>
-                                    {/if}
-                                    {#if getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalRequired}
-                                      <label class="preflight-bypass manifest-approval-toggle">
-                                        <input
-                                          type="checkbox"
-                                          checked={getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted === true}
-                                          onchange={(event) => setManifestMediaScopesAccepted(pkg, event.currentTarget.checked)}
-                                        />
-                                        I reviewed and approve the media scope changes
-                                      </label>
-                                    {/if}
-                                  </div>
-                                {/if}
-                                {#if getManifestEditorState(pkg.id)?.preflight?.blockers?.length}
-                                  <div class="preflight-list">
-                                    {#each getManifestEditorState(pkg.id)?.preflight?.blockers || [] as blocker}
-                                      <div class="preflight-item">
-                                        <span class="preflight-item-status fail">FAIL</span>
-                                        <span>{blocker.label}</span>
-                                        {#if blocker.detail}
-                                          <span class="preflight-item-detail">{blocker.detail}</span>
-                                        {/if}
-                                      </div>
-                                    {/each}
-                                  </div>
-                                {/if}
-                                <label class="approval-field">
-                                  <span>Type {getLifecycleTypedConfirmation(getManifestEditorState(pkg.id)?.preflight)} to approve</span>
-                                  <input
-                                    value={getManifestEditorState(pkg.id)?.lifecycleTypedInput || ''}
-                                    oninput={(event) => setManifestLifecycleTypedInput(pkg, event.currentTarget.value)}
-                                    disabled={Boolean(getManifestEditorState(pkg.id)?.saving)}
-                                    autocomplete="off"
-                                  />
-                                </label>
-                              {/if}
-                              <div class="manifest-editor-actions">
-                                <button
-                                  class="btn tiny ghost"
-                                  onclick={() => runManifestPreflight(pkg)}
-                                  disabled={
-                                    Boolean(getManifestEditorState(pkg.id)?.preflightLoading)
-                                    || Boolean(getManifestEditorState(pkg.id)?.saving)
-                                    || Boolean(getManifestEditorState(pkg.id)?.parseError)
-                                    || !getManifestEditorState(pkg.id)?.parsed
-                                  }
-                                >
-                                  {getManifestEditorState(pkg.id)?.preflightLoading ? 'Preflight...' : 'Run Preflight'}
-                                </button>
-                                <button
-                                  class="btn tiny primary"
-                                  onclick={() => saveManifestUpdate(pkg)}
-                                  disabled={
-                                  Boolean(getManifestEditorState(pkg.id)?.saving)
-                                  || Boolean(getManifestEditorState(pkg.id)?.preflightLoading)
-                                  || Boolean(getManifestEditorState(pkg.id)?.parseError)
-                                  || !getManifestEditorState(pkg.id)?.parsed
-                                  || !getManifestEditorState(pkg.id)?.preflight
-                                  || Boolean(getManifestEditorState(pkg.id)?.preflight?.blocked)
-                                  || (
-                                    Boolean(getManifestEditorState(pkg.id)?.preflight)
-                                    && (getManifestEditorState(pkg.id)?.lifecycleTypedInput || '').trim() !== getLifecycleTypedConfirmation(getManifestEditorState(pkg.id)?.preflight)
-                                  )
-                                  || (
-                                    getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalRequired
-                                    && !getManifestMediaScopeReview(getManifestEditorState(pkg.id))?.approvalAccepted
-                                  )
-                                }
-                                >
-                                  {getManifestEditorState(pkg.id)?.saving ? 'Saving...' : 'Save Manifest'}
-                                </button>
-                              </div>
-                            {/if}
-                          </div>
-                        {/if}
-                      </div>
-                    </div>
-
-                    <div class="ops-row">
-                      <div class="ops-group">
-                        <div class="ops-label">Package Files</div>
-                        <div class="ops-inline">
-                          <button
-                            class="btn tiny ghost"
-                            onclick={() => openPackageDirectory(pkg, getParentDirectory(getPackageFilesState(pkg.id).path))}
-                            disabled={Boolean(packageFilesLoadingByApp[pkg.id]) || !getPackageFilesState(pkg.id).path}
-                          >
-                            Up
-                          </button>
-                          <button
-                            class="btn tiny ghost"
-                            onclick={() => refreshPackageDirectory(pkg)}
-                            disabled={Boolean(packageFilesLoadingByApp[pkg.id])}
-                          >
-                            {packageFilesLoadingByApp[pkg.id] ? 'Loading...' : 'Reload'}
-                          </button>
-                          <span class="package-files-path">/{getPackageFilesState(pkg.id).path || ''}</span>
-                        </div>
-
-                        {#if packageFilesErrorByApp[pkg.id]}
-                          <div class="preflight-blocked-reason">{packageFilesErrorByApp[pkg.id]}</div>
-                        {:else if packageFilesLoadingByApp[pkg.id]}
-                          <div class="runtime-log-empty">Loading package files...</div>
-                        {:else if getPackageFilesState(pkg.id).entries.length === 0}
-                          <div class="runtime-log-empty">No files in this directory.</div>
-                        {:else}
-                          <div class="package-files-list">
-                            {#each getPackageFilesState(pkg.id).entries as entry}
-                              <div class="package-file-row">
-                                <span class="package-file-name {entry.type}">
-                                  {entry.type === 'directory' ? '[DIR]' : '[FILE]'} {entry.name}
-                                </span>
-                                <div class="package-file-actions">
-                                  {#if entry.type === 'directory'}
-                                    <button class="btn tiny ghost" onclick={() => openPackageDirectory(pkg, entry.path)}>Enter</button>
-                                  {:else}
-                                    <button class="btn tiny ghost" onclick={() => openPackageFileEditor(pkg.id, entry.path)}>Edit</button>
-                                  {/if}
-                                </div>
-                              </div>
-                            {/each}
-                          </div>
-                        {/if}
-                      </div>
-                    </div>
-
-                    <div class="ops-row split">
-                      <div class="ops-panel">
-                        <div class="ops-panel-title">Lifecycle Summary</div>
-                        {#if lifecycleLoading === pkg.id}
-                          <div class="runtime-log-empty">Loading lifecycle...</div>
-                        {:else if !getLifecycle(pkg)}
-                          <div class="runtime-log-empty">No lifecycle data.</div>
-                        {:else}
-                          <div class="ops-meta-list">
-                            <div>Current: {getLifecycle(pkg)?.current?.version || '-'}</div>
-                            <div>Installed: {formatDateTime(getLifecycle(pkg)?.current?.installedAt)}</div>
-                            <div>Source: {getLifecycle(pkg)?.current?.source || '-'}</div>
-                            <div>Boundary: {getWorkspaceBoundaryLabel(pkg)}</div>
-                            <div>Local Workspace: {getWorkspaceBridge(pkg)?.path || '-'}</div>
-                            <div>Backups: {getAvailableBackups(pkg).length}</div>
-                          </div>
-                        {/if}
-                      </div>
-                      <div class="ops-panel">
-                        <div class="ops-panel-title">Recent Runtime Events</div>
-                        {#if runtimeEventsLoading === pkg.id}
-                          <div class="runtime-log-empty">Loading events...</div>
-                        {:else if !runtimeEventsByApp[pkg.id] || runtimeEventsByApp[pkg.id].length === 0}
-                          <div class="runtime-log-empty">No events.</div>
-                        {:else}
-                          <div class="event-list">
-                            {#each runtimeEventsByApp[pkg.id].slice(-10).reverse() as event}
-                              <div class="event-row">
-                                <span>{formatDateTime(event.timestamp)}</span>
-                                <span>{formatEventLabel(event)}</span>
-                                <span>{event.reason || event.message || '-'}</span>
-                              </div>
-                            {/each}
-                          </div>
-                        {/if}
-                      </div>
-                    </div>
-
-                    <div class="ops-row">
-                      <div class="ops-group">
-                        <div class="ops-label">Last Health/QA</div>
-                        {#if getHealthReport(pkg)}
-                          <div class="ops-meta-list">
-                            <div>Status: {String(getHealthStatus(pkg)).toUpperCase()}</div>
-                            <div>Checked: {formatDateTime(getHealthReport(pkg)?.checkedAt)}</div>
-                            <div>Summary: {getHealthReport(pkg)?.summary || '-'}</div>
-                          </div>
-                        {:else}
-                          <div class="runtime-log-empty">No health report yet.</div>
-                        {/if}
-                      </div>
-                    </div>
+            <div class="installed-detail-layout package-detail-card-grid">
+              <section class="installed-spec-panel package-info-card">
+                <div class="installed-spec-title">Version</div>
+                <div class="installed-spec-list package-info-list">
+                  <div><span>Current Version</span><strong>{getPackageVersionLabel(pkg)}</strong></div>
+                  <div><span>Minimum Web OS</span><strong>{getPackageMinimumWebOsLabel(pkg)}</strong></div>
+                  <div><span>Channel</span><strong>{getPackageChannelLabel(pkg)}</strong></div>
+                  <div><span>Release Date</span><strong>{formatShortDate(getPackageDateValue(pkg, 'released'))}</strong></div>
+                </div>
+              </section>
+              <section class="installed-spec-panel package-info-card">
+                <div class="installed-spec-title">Compatibility</div>
+                <div class="installed-spec-list package-info-list">
+                  <div><span>Web OS</span><strong>{getPackageMinimumWebOsLabel(pkg)} or higher</strong></div>
+                  <div><span>Architectures</span><strong>{getPackageArchitectureLabel(pkg)}</strong></div>
+                  <div><span>Runtime</span><strong>{getPackageRuntimeLabel(pkg)}</strong></div>
+                </div>
+              </section>
+              <section class="installed-spec-panel package-info-card">
+                <div class="installed-spec-title">Dependencies</div>
+                {#if dependencyItems.length > 0}
+                  <div class="installed-dependency-list package-dependency-list">
+                    {#each dependencyItems as dependency}
+                      <span>{dependency}</span>
+                    {/each}
+                  </div>
+                {:else}
+                  <div class="package-empty-line">No dependencies declared.</div>
+                {/if}
+              </section>
+              <section class="installed-spec-panel package-info-card">
+                <div class="installed-spec-title">Widgets</div>
+                <strong>{packageWidgets.length === 1 ? '1 widget included' : `${packageWidgets.length} widgets included`}</strong>
+                {#if packageWidgets.length > 0}
+                  <div class="package-widget-actions">
+                    {#each packageWidgets as contribution}
+                      <button class="btn ghost" onclick={() => addPackageWidget(pkg, contribution)}>
+                        <Plus size={14} />
+                        Add {contribution.title || contribution.label || 'Widget'}
+                      </button>
+                    {/each}
                   </div>
                 {/if}
-                {#if runtimeLogsByApp[pkg.id]}
-                  <div class="runtime-log-panel">
-                    {#if runtimeLogsByApp[pkg.id].length === 0}
-                      <div class="runtime-log-empty">No logs.</div>
-                    {:else}
-                      {#each runtimeLogsByApp[pkg.id] as row}
-                        <div class="runtime-log-line">
-                          <span>[{new Date(row.timestamp).toLocaleTimeString()}]</span>
-                          <span class="runtime-log-stream {row.stream}">{row.stream}</span>
-                          <span>{row.message}</span>
-                        </div>
-                      {/each}
-                    {/if}
-                  </div>
-                {/if}
-              </article>
-            {/each}
-          </div>
-        {/if}
-      </div>
+              </section>
+            </div>
+          </section>
+        </article>
+      {/if}
     {/if}
   </section>
+
+  <footer class="package-status-bar">
+    <span>{activeCategory === CATEGORY.INSTALLED ? 'Installed package library ready' : 'Package store ready'}</span>
+    <span>Showing {getFilteredActivePackageList().length} packages</span>
+  </footer>
 
   {#if rollbackReview}
     <div class="modal-backdrop" role="presentation">
@@ -4986,34 +4614,169 @@
 
 <style>
   .package-center {
+    --pc-bg: #07101c;
+    --pc-panel: rgba(15, 23, 36, 0.74);
+    --pc-panel-strong: rgba(17, 25, 40, 0.92);
+    --pc-border: rgba(148, 163, 184, 0.16);
+    --pc-border-strong: rgba(148, 163, 184, 0.28);
+    --pc-blue: #58a6ff;
+    --pc-blue-strong: #2f81f7;
+    --pc-danger: #ff6b6b;
+    --pc-muted: #94a3b8;
     height: 100%;
     min-height: 0;
-    padding: 14px;
+    padding: 0;
     display: grid;
-    grid-template-columns: minmax(360px, 440px) minmax(0, 1fr);
-    gap: 10px;
+    grid-template-columns: 250px minmax(340px, 390px) minmax(0, 1fr);
+    grid-template-rows: 64px minmax(0, 1fr) 38px;
+    grid-template-areas:
+      "command command command"
+      "library library detail"
+      "status status status";
+    gap: 0;
     color: var(--text-main);
-    background: linear-gradient(180deg, #111827 0%, #0b1120 42%, #070b12 100%);
+    background:
+      radial-gradient(circle at 68% 0%, rgba(47, 129, 247, 0.16), transparent 30%),
+      radial-gradient(circle at 8% 12%, rgba(88, 166, 255, 0.09), transparent 26%),
+      linear-gradient(180deg, #111827 0%, #0b1120 42%, #070b12 100%);
     overflow: hidden;
   }
 
-  .category-panel {
-    border: 1px solid rgba(148, 163, 184, 0.16);
+  .package-command-bar {
+    grid-area: command;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: auto auto minmax(240px, 520px) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--pc-border);
+    background: rgba(10, 16, 26, 0.88);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(16px);
+  }
+
+  .command-brand,
+  .command-segment,
+  .command-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .command-brand {
+    padding-right: 14px;
+    border-right: 1px solid var(--pc-border);
+    color: #f8fafc;
+    white-space: nowrap;
+  }
+
+  .command-app-icon {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 10px;
+    background: rgba(30, 41, 59, 0.72);
+    color: #dbeafe;
+  }
+
+  .command-segment {
+    padding-right: 14px;
+    border-right: 1px solid var(--pc-border);
+  }
+
+  .command-select,
+  .command-action,
+  .command-icon {
+    min-height: 34px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: #cbd5e1;
+    padding: 0 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color 150ms ease, background 150ms ease, color 150ms ease, transform 150ms ease;
+  }
+
+  .command-select:hover,
+  .command-action:hover:not(:disabled),
+  .command-icon:hover {
+    border-color: rgba(88, 166, 255, 0.28);
+    background: rgba(88, 166, 255, 0.1);
+    color: #eff6ff;
+    transform: translateY(-1px);
+  }
+
+  .command-action:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .command-search {
+    min-width: 0;
+    height: 38px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
     border-radius: 8px;
-    padding: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    background: rgba(2, 6, 23, 0.58);
+    color: var(--pc-muted);
+  }
+
+  .command-search input {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: #e2e8f0;
+    padding: 0;
+  }
+
+  .command-actions {
+    justify-content: flex-end;
+  }
+
+  .category-panel {
+    grid-area: library;
+    border: 0;
+    border-right: 1px solid var(--pc-border);
+    border-radius: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 250px minmax(340px, 390px);
+    gap: 0;
+    min-height: 0;
+    background: rgba(8, 13, 22, 0.72);
+  }
+
+  .library-rail {
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    min-height: 0;
-    background: rgba(8, 13, 22, 0.92);
+    gap: 7px;
+    padding: 18px 14px 14px;
+    border-right: 1px solid var(--pc-border);
+    background:
+      linear-gradient(180deg, rgba(15, 23, 36, 0.86), rgba(8, 13, 22, 0.88)),
+      rgba(8, 13, 22, 0.88);
   }
 
   .panel-title {
-    font-size: 12px;
-    color: #93c5fd;
-    letter-spacing: 0;
+    margin: 4px 6px 8px;
+    font-size: 11px;
+    color: #9fb4d0;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    margin-bottom: 6px;
   }
 
   .panel-kicker {
@@ -5025,7 +4788,7 @@
 
   .category {
     border: 1px solid transparent;
-    border-radius: 6px;
+    border-radius: 10px;
     background: transparent;
     color: #cbd5e1;
     padding: 9px 10px;
@@ -5041,37 +4804,80 @@
   }
 
   .category small {
-    color: #94a3b8;
+    min-width: 24px;
+    border-radius: 8px;
+    padding: 2px 6px;
+    background: rgba(148, 163, 184, 0.12);
+    color: #c3d3e7;
     font-size: 11px;
+    text-align: center;
   }
 
   .category.active {
-    border-color: rgba(96, 165, 250, 0.38);
-    background: linear-gradient(90deg, rgba(37, 99, 235, 0.42), rgba(14, 165, 233, 0.12));
+    border-color: rgba(88, 166, 255, 0.28);
+    background: linear-gradient(90deg, rgba(47, 129, 247, 0.34), rgba(88, 166, 255, 0.12));
     color: #f8fafc;
+  }
+
+  .category.muted {
+    color: #adbad0;
+  }
+
+  .category.active-soft {
+    border-color: rgba(148, 163, 184, 0.16);
+    background: rgba(148, 163, 184, 0.08);
+  }
+
+  .category:disabled {
+    cursor: default;
+    opacity: 0.72;
   }
 
   .panel-divider {
     height: 1px;
     background: rgba(148, 163, 184, 0.16);
-    margin: 8px 0;
+    margin: 10px 6px;
+  }
+
+  .rail-summary {
+    margin-top: auto;
+    border: 1px solid var(--pc-border);
+    border-radius: 10px;
+    padding: 12px;
+    display: grid;
+    gap: 4px;
+    background: rgba(15, 23, 36, 0.58);
+  }
+
+  .rail-summary span {
+    color: #9fb4d0;
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+
+  .rail-summary strong {
+    color: #e2e8f0;
+    font-size: 13px;
   }
 
   .content {
+    grid-area: detail;
     min-height: 0;
     display: grid;
     gap: 12px;
     align-content: start;
     overflow: auto;
-    padding-right: 4px;
+    padding: 14px 12px 14px;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(88, 166, 255, 0.08), transparent 42%),
+      rgba(7, 12, 20, 0.44);
   }
 
   .package-list-panel {
-    flex: 1;
     min-height: 0;
     border: 0;
     border-radius: 0;
-    background: transparent;
+    background: rgba(8, 13, 22, 0.58);
     display: grid;
     grid-template-rows: auto auto auto minmax(0, 1fr);
     overflow: hidden;
@@ -5082,7 +4888,7 @@
     justify-content: space-between;
     align-items: center;
     gap: 10px;
-    padding: 12px;
+    padding: 18px 14px 12px;
     border-bottom: 1px solid rgba(148, 163, 184, 0.12);
   }
 
@@ -5105,23 +4911,17 @@
     color: #e0f2fe;
   }
 
-  .package-list-head span {
-    color: #93c5fd;
-    font-size: 11px;
-    text-transform: uppercase;
-  }
-
   .package-list-head strong {
     color: #f8fafc;
     font-size: 15px;
   }
 
   .library-search {
+    display: none;
     margin: 10px 12px;
     border: 1px solid rgba(148, 163, 184, 0.2);
     border-radius: 0;
     background: rgba(2, 6, 23, 0.62);
-    display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
@@ -5277,21 +5077,20 @@
   .package-list {
     min-height: 0;
     overflow: auto;
-    padding: 0 0 6px;
+    padding: 8px 12px 8px;
     display: grid;
     align-content: start;
-    gap: 0;
+    gap: 8px;
   }
 
   .package-list-item {
     width: 100%;
     min-width: 0;
-    border: 0;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-    border-radius: 0;
+    border: 1px solid transparent;
+    border-radius: 10px;
     background: transparent;
     color: #e2e8f0;
-    padding: 8px;
+    padding: 12px;
     display: grid;
     grid-template-columns: 36px minmax(0, 1fr) auto;
     align-items: center;
@@ -5301,12 +5100,16 @@
   }
 
   .package-list-item:hover {
-    background: rgba(51, 65, 85, 0.45);
+    border-color: rgba(148, 163, 184, 0.16);
+    background: rgba(51, 65, 85, 0.32);
   }
 
   .package-list-item.active {
-    border-left: 3px solid rgba(96, 165, 250, 0.8);
-    background: linear-gradient(90deg, rgba(37, 99, 235, 0.34), rgba(15, 23, 42, 0.3));
+    border-color: rgba(88, 166, 255, 0.26);
+    background:
+      linear-gradient(90deg, rgba(47, 129, 247, 0.28), rgba(15, 23, 42, 0.2)),
+      rgba(15, 23, 42, 0.62);
+    box-shadow: inset 3px 0 0 rgba(88, 166, 255, 0.86);
   }
 
   .list-icon {
@@ -5359,14 +5162,256 @@
   }
 
   .selected-package-detail {
-    border: 1px solid rgba(96, 165, 250, 0.2);
-    border-radius: 8px;
-    padding: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 14px;
+    padding: 26px;
     background:
-      linear-gradient(180deg, rgba(30, 41, 59, 0.94), rgba(10, 15, 25, 0.9)),
-      rgba(15, 23, 42, 0.9);
+      linear-gradient(180deg, rgba(22, 32, 50, 0.94), rgba(10, 15, 25, 0.92)),
+      rgba(15, 23, 42, 0.92);
     display: grid;
+    gap: 22px;
+    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.24);
+  }
+
+  .package-detail-shell {
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+    border-radius: 10px;
+    background:
+      linear-gradient(135deg, rgba(18, 29, 46, 0.96), rgba(10, 16, 27, 0.98)),
+      rgba(15, 23, 42, 0.96);
+  }
+
+  .package-detail-hero {
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 22px;
+    padding: 28px 28px 24px;
+    align-items: center;
+  }
+
+  .package-detail-icon .icon-box {
+    width: 98px;
+    height: 98px;
+    border-radius: 12px;
+    color: #dbeafe;
+    background:
+      radial-gradient(circle at 30% 18%, rgba(191, 219, 254, 0.26), transparent 36%),
+      linear-gradient(145deg, rgba(37, 99, 235, 0.55), rgba(30, 41, 59, 0.92));
+    border-color: rgba(88, 166, 255, 0.28);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 16px 42px rgba(15, 23, 42, 0.34);
+  }
+
+  .package-detail-heading {
+    gap: 12px;
+  }
+
+  .package-detail-title-row {
+    align-items: flex-start;
+  }
+
+  .package-detail-title-row h3 {
+    font-size: 25px;
+    letter-spacing: -0.03em;
+  }
+
+  .package-detail-title-row span {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: #aebbd0;
+    font-size: 14px;
+  }
+
+  .package-detail-title-row em {
+    color: #64748b;
+    font-style: normal;
+  }
+
+  .package-detail-actions {
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .package-detail-actions .btn {
+    min-height: 42px;
+    border-radius: 7px;
+    padding-inline: 16px;
+  }
+
+  .package-detail-badges {
+    align-items: center;
     gap: 14px;
+    text-transform: none;
+    color: #aebbd0;
+  }
+
+  .status-pill {
+    border: 1px solid rgba(74, 222, 128, 0.22);
+    border-radius: 6px;
+    padding: 7px 12px;
+    background: rgba(34, 197, 94, 0.14);
+    color: #bbf7d0;
+    font-weight: 700;
+  }
+
+  .status-pill.available {
+    border-color: rgba(96, 165, 250, 0.24);
+    background: rgba(37, 99, 235, 0.16);
+    color: #bfdbfe;
+  }
+
+  .status-pill.running,
+  .status-pill.degraded,
+  .status-pill.starting {
+    border-color: rgba(34, 197, 94, 0.28);
+    background: rgba(22, 163, 74, 0.18);
+    color: #bbf7d0;
+  }
+
+  .status-pill.stopped {
+    border-color: rgba(251, 191, 36, 0.22);
+    background: rgba(217, 119, 6, 0.14);
+    color: #fde68a;
+  }
+
+  .package-detail-tabs {
+    min-height: 58px;
+    padding: 0 26px;
+    border-top: 1px solid rgba(148, 163, 184, 0.08);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    display: flex;
+    align-items: end;
+    gap: 16px;
+    color: #aebbd0;
+    background: rgba(8, 13, 22, 0.12);
+  }
+
+  .package-detail-tabs span {
+    position: relative;
+    padding: 0 12px 15px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .package-detail-tabs span.active {
+    color: #58a6ff;
+  }
+
+  .package-detail-tabs span.active::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    background: #58a6ff;
+    box-shadow: 0 0 18px rgba(88, 166, 255, 0.5);
+  }
+
+  .package-detail-overview {
+    padding: 26px;
+    display: grid;
+    gap: 28px;
+  }
+
+  .package-detail-description {
+    margin: 0;
+    max-width: 820px;
+    color: #d8e1ed;
+    line-height: 1.65;
+  }
+
+  .package-detail-main-grid {
+    display: grid;
+    grid-template-columns: minmax(320px, 0.9fr) minmax(260px, 1.1fr);
+    gap: 28px;
+    align-items: start;
+  }
+
+  .package-preview-empty {
+    min-height: 226px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    border-radius: 4px;
+    background: rgba(2, 6, 23, 0.42);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .package-facts {
+    display: grid;
+    gap: 13px;
+    padding-top: 2px;
+  }
+
+  .package-facts div {
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1fr);
+    gap: 22px;
+    align-items: baseline;
+  }
+
+  .package-facts span {
+    color: #9fb0c7;
+    font-size: 12px;
+    text-transform: uppercase;
+  }
+
+  .package-facts strong {
+    color: #dbe5f2;
+    font-size: 14px;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+
+  .package-detail-card-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 18px;
+  }
+
+  .package-info-card {
+    min-height: 164px;
+    border-radius: 8px;
+    padding: 20px 18px;
+    background: rgba(15, 23, 42, 0.34);
+  }
+
+  .package-info-list div {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+  }
+
+  .package-info-list strong {
+    text-align: right;
+  }
+
+  .package-dependency-list {
+    color: #cbd5e1;
+  }
+
+  .package-empty-line {
+    color: #aebbd0;
+    font-size: 13px;
+  }
+
+  .package-widget-actions {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .package-status-bar {
+    grid-area: status;
+    min-width: 0;
+    border-top: 1px solid var(--pc-border);
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: #9fb4d0;
+    background: rgba(8, 13, 22, 0.88);
+    font-size: 12px;
   }
 
   .feedback {
@@ -5507,17 +5552,6 @@
     min-width: 0;
   }
 
-  .installed-description-panel {
-    grid-column: 1 / -1;
-  }
-
-  .installed-description-panel p {
-    margin: 0;
-    color: #cbd5e1;
-    font-size: 13px;
-    line-height: 1.45;
-  }
-
   .installed-spec-title {
     color: #93c5fd;
     font-size: 11px;
@@ -5547,32 +5581,6 @@
     color: #e2e8f0;
     font-size: 13px;
     overflow-wrap: anywhere;
-  }
-
-  .installed-health-field {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-  }
-
-  .installed-health-field > span {
-    grid-column: 1 / -1;
-  }
-
-  .installed-health-field .health.pass {
-    color: #bbf7d0;
-  }
-
-  .installed-health-field .health.warn {
-    color: #fde68a;
-  }
-
-  .installed-health-field .health.fail,
-  .installed-health-field .health.error {
-    color: #fecaca;
-  }
-
-  .installed-health-field .health.unknown {
-    color: #cbd5e1;
   }
 
   .installed-dependency-list {
@@ -5938,41 +5946,6 @@
     background: rgba(148, 163, 184, 0.08);
   }
 
-  .package-widgets {
-    display: grid;
-    gap: 8px;
-    padding: 8px;
-    border: 1px solid rgba(125, 211, 252, 0.18);
-    border-radius: 10px;
-    background: rgba(14, 165, 233, 0.06);
-  }
-
-  .package-widget-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .package-widget-row div {
-    min-width: 0;
-    display: grid;
-    gap: 2px;
-  }
-
-  .package-widget-row strong {
-    font-size: 12px;
-    color: #e0f2fe;
-  }
-
-  .package-widget-row span {
-    font-size: 11px;
-    color: var(--text-dim);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .actions {
     margin-top: auto;
     display: flex;
@@ -6039,235 +6012,10 @@
     text-align: center;
   }
 
-  .ops-console {
-    margin-top: 2px;
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 12px;
-    padding: 10px;
-    background: rgba(2, 6, 23, 0.5);
-    display: grid;
-    gap: 10px;
-  }
-
-  .ops-row {
-    display: grid;
-    gap: 8px;
-  }
-
-  .ops-row.split {
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  .ops-group {
-    display: grid;
-    gap: 6px;
-  }
-
-  .ops-group label,
-  .ops-label {
-    font-size: 11px;
-    color: #93c5fd;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  .ops-inline {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
-  }
-
-  .ops-inline input,
-  .ops-inline select {
-    min-width: 160px;
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    border-radius: 10px;
-    background: rgba(2, 6, 23, 0.65);
-    color: #e2e8f0;
-    padding: 6px 8px;
-    font-size: 12px;
-  }
-
-  .backup-jobs-list {
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 8px;
-    background: rgba(2, 6, 23, 0.62);
-    max-height: 220px;
-    overflow: auto;
-    padding: 6px;
-    display: grid;
-    gap: 6px;
-  }
-
-  .backup-job-row {
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 8px;
-    padding: 6px 8px;
-    display: grid;
-    gap: 4px;
-    background: rgba(15, 23, 42, 0.35);
-  }
-
-  .backup-job-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .backup-job-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    font-size: 11px;
-    color: var(--text-dim);
-  }
-
-  .backup-job-note {
-    font-size: 12px;
-    color: #cbd5e1;
-  }
-
-  .backup-job-head .status {
-    border-radius: 999px;
-    padding: 2px 7px;
-    border: 1px solid rgba(148, 163, 184, 0.28);
-    background: rgba(51, 65, 85, 0.25);
-    font-size: 10px;
-    font-weight: 600;
-  }
-
-  .backup-job-head .status.completed {
-    color: #bbf7d0;
-    border-color: rgba(22, 163, 74, 0.4);
-    background: rgba(22, 163, 74, 0.2);
-  }
-
-  .backup-job-head .status.failed {
-    color: #fecaca;
-    border-color: rgba(248, 113, 113, 0.4);
-    background: rgba(185, 28, 28, 0.2);
-  }
-
-  .backup-job-head .status.error {
-    color: #fecaca;
-    border-color: rgba(248, 113, 113, 0.4);
-    background: rgba(185, 28, 28, 0.2);
-  }
-
-  .backup-job-head .status.running {
-    color: #93c5fd;
-    border-color: rgba(96, 165, 250, 0.45);
-    background: rgba(37, 99, 235, 0.2);
-  }
-
-  .backup-job-head .status.queued {
-    color: #cbd5e1;
-    border-color: rgba(148, 163, 184, 0.45);
-    background: rgba(51, 65, 85, 0.35);
-  }
-
-  .backup-job-head .status.cancelled {
-    color: #fde68a;
-    border-color: rgba(217, 119, 6, 0.45);
-    background: rgba(180, 83, 9, 0.18);
-  }
-
-  .backup-job-head .status.unknown {
-    color: #cbd5e1;
-    border-color: rgba(148, 163, 184, 0.3);
-    background: rgba(51, 65, 85, 0.3);
-  }
-
-  .package-files-path {
-    font-size: 11px;
-    color: var(--text-dim);
-    max-width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .package-files-list {
-    max-height: 220px;
-    overflow: auto;
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 8px;
-    background: rgba(2, 6, 23, 0.62);
-    padding: 6px;
-    display: grid;
-    gap: 6px;
-  }
-
-  .package-file-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    border: 1px solid rgba(148, 163, 184, 0.14);
-    border-radius: 8px;
-    background: rgba(15, 23, 36, 0.45);
-    padding: 6px 8px;
-  }
-
-  .package-file-name {
-    font-size: 12px;
-    color: #e2e8f0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .package-file-name.directory {
-    color: #bae6fd;
-  }
-
-  .package-file-name.file {
-    color: #e2e8f0;
-  }
-
-  .package-file-actions {
-    display: inline-flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .ops-panel {
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 10px;
-    padding: 8px;
-    background: rgba(15, 23, 36, 0.45);
-    display: grid;
-    gap: 8px;
-  }
-
-  .ops-panel-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: #dbeafe;
-  }
-
   .ops-meta-list {
     display: grid;
     gap: 4px;
     font-size: 12px;
-    color: #cbd5e1;
-  }
-
-  .event-list {
-    max-height: 170px;
-    overflow: auto;
-    display: grid;
-    gap: 6px;
-  }
-
-  .event-row {
-    display: grid;
-    grid-template-columns: 1.2fr 0.8fr 1fr;
-    gap: 8px;
-    font-size: 11px;
     color: #cbd5e1;
   }
 
@@ -6352,7 +6100,6 @@
     gap: 6px;
   }
 
-  .preflight-group label,
   .preflight-label {
     font-size: 11px;
     color: #93c5fd;
@@ -6363,21 +6110,6 @@
   .preflight-list {
     display: grid;
     gap: 6px;
-  }
-
-  .manifest-review-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .manifest-review-chip {
-    border-radius: 999px;
-    padding: 3px 8px;
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    background: rgba(51, 65, 85, 0.24);
-    color: #cbd5e1;
-    font-size: 11px;
   }
 
   .preflight-item {
@@ -6467,52 +6199,6 @@
   .preflight-buttons {
     display: inline-flex;
     gap: 8px;
-  }
-
-  .manifest-editor-panel {
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 10px;
-    background: rgba(2, 6, 23, 0.52);
-    padding: 8px;
-    display: grid;
-    gap: 8px;
-  }
-
-  .manifest-editor-textarea {
-    width: 100%;
-    min-height: 220px;
-    resize: vertical;
-    border: 1px solid rgba(148, 163, 184, 0.24);
-    border-radius: 8px;
-    background: rgba(2, 6, 23, 0.72);
-    color: #e2e8f0;
-    padding: 8px;
-    font-size: 12px;
-    line-height: 1.45;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-  }
-
-  .manifest-parse-error {
-    border: 1px dashed rgba(248, 113, 113, 0.38);
-    border-radius: 8px;
-    background: rgba(127, 29, 29, 0.22);
-    color: #fecaca;
-    font-size: 12px;
-    padding: 7px 8px;
-  }
-
-  .manifest-preflight-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .manifest-editor-actions {
-    display: inline-flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
   }
 
   .modal-backdrop {
@@ -6654,14 +6340,67 @@
 
   @media (max-width: 1280px) {
     .package-center {
-      grid-template-columns: minmax(330px, 390px) minmax(0, 1fr);
+      grid-template-columns: 220px minmax(320px, 360px) minmax(0, 1fr);
+    }
+
+    .category-panel {
+      grid-template-columns: 220px minmax(320px, 360px);
+    }
+
+    .package-command-bar {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .command-segment {
+      display: none;
+    }
+
+    .package-detail-main-grid,
+    .package-detail-card-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .package-detail-title-row {
+      display: grid;
+    }
+
+    .package-detail-actions {
+      justify-content: flex-start;
     }
   }
 
   @media (max-width: 1000px) {
     .package-center {
       grid-template-columns: 1fr;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      grid-template-areas:
+        "command"
+        "library"
+        "detail"
+        "status";
       overflow: auto;
+    }
+
+    .package-command-bar {
+      grid-template-columns: 1fr;
+      align-items: stretch;
+      padding: 12px;
+    }
+
+    .command-brand,
+    .command-actions {
+      justify-content: space-between;
+    }
+
+    .category-panel {
+      grid-template-columns: 1fr;
+      border-right: 0;
+      border-bottom: 1px solid var(--pc-border);
+    }
+
+    .library-rail {
+      border-right: 0;
+      border-bottom: 1px solid var(--pc-border);
     }
 
     .category-panel,
@@ -6683,43 +6422,24 @@
       grid-template-columns: 1fr;
     }
 
-    .ops-row.split {
+    .package-detail-hero,
+    .package-detail-main-grid,
+    .package-detail-card-grid {
       grid-template-columns: 1fr;
     }
-  }
 
-  .runtime-log-panel {
-    margin-top: 4px;
-    max-height: 180px;
-    overflow: auto;
-    border-radius: 10px;
-    border: 1px solid rgba(148, 163, 184, 0.2);
-    background: rgba(2, 6, 23, 0.65);
-    padding: 8px;
-    display: grid;
-    gap: 4px;
-  }
+    .package-detail-tabs {
+      overflow-x: auto;
+      align-items: end;
+    }
 
-  .runtime-log-line {
-    display: grid;
-    grid-template-columns: auto auto 1fr;
-    gap: 8px;
-    font-size: 11px;
-    color: #cbd5e1;
-    line-height: 1.35;
-  }
+    .package-detail-actions {
+      justify-content: stretch;
+    }
 
-  .runtime-log-stream {
-    text-transform: uppercase;
-    opacity: 0.9;
-  }
-
-  .runtime-log-stream.stderr {
-    color: #fecaca;
-  }
-
-  .runtime-log-stream.system {
-    color: #bae6fd;
+    .package-detail-actions .btn {
+      flex: 1 1 auto;
+    }
   }
 
   .runtime-log-empty {
