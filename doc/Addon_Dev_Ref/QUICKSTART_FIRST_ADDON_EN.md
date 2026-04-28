@@ -34,6 +34,25 @@ hello-addon/
 }
 ```
 
+If the addon also ships a desktop widget, declare it in the same manifest.
+After install, Widget Store shows it under the Addons tab automatically.
+
+```json
+{
+  "contributes": {
+    "widgets": [
+      {
+        "id": "hello-widget",
+        "label": "Hello Widget",
+        "entry": "widget.html",
+        "defaultSize": { "w": 320, "h": 220 },
+        "minSize": { "w": 220, "h": 140 }
+      }
+    ]
+  }
+}
+```
+
 ## index.html
 
 ```html

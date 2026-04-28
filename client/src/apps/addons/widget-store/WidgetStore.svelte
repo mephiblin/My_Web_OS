@@ -1,12 +1,14 @@
 <script>
+  import { onMount } from 'svelte';
   import { widgets } from '../../../core/stores/widgetStore.js';
   import { widgetLibrary } from '../../../core/stores/widgetLibraryStore.js';
+  import { apiFetch } from '../../../utils/api.js';
   import { 
     Clock, Activity, Globe, Code, Plus, Trash2, LayoutGrid, 
-    Cpu, Wifi, HardDrive, Edit3, Save, ArrowLeft, Send, CalendarDays
+    Cpu, Wifi, HardDrive, Edit3, Save, ArrowLeft, Send, CalendarDays, Package as PackageIcon
   } from 'lucide-svelte';
 
-  let activeTab = $state('presets'); // 'presets' | 'system' | 'url' | 'custom'
+  let activeTab = $state('presets'); // 'presets' | 'system' | 'addons' | 'url' | 'custom'
   
   // Editor State
   let editorMode = $state('list'); // 'list' | 'create' | 'edit'
@@ -15,6 +17,9 @@
   
   let tempTitle = $state('');
   let tempSource = $state('');
+  let packageWidgets = $state([]);
+  let packageWidgetsLoading = $state(false);
+  let packageWidgetsError = $state('');
 
   const presets = [
     { source: 'clock', title: 'Clock', icon: Clock, desc: 'Real-time clock display', w: 200, h: 200 },
@@ -34,6 +39,60 @@
 
   function addSystemWidget(sw) {
     widgets.addWidget({ type: 'system', source: sw.source, title: sw.title, w: sw.w, h: sw.h });
+  }
+
+  function getPackageWidgetRows(pkg) {
+    const rows = Array.isArray(pkg?.contributes?.widgets) ? pkg.contributes.widgets : [];
+    return rows
+      .filter((contribution) => contribution?.id && contribution?.entry)
+      .map((contribution) => {
+        const defaultSize = contribution.defaultSize && typeof contribution.defaultSize === 'object'
+          ? contribution.defaultSize
+          : {};
+        const title = contribution.title || contribution.label || pkg.title || pkg.name || 'Package Widget';
+        return {
+          packageId: pkg.id,
+          packageTitle: pkg.title || pkg.name || pkg.id,
+          widgetId: contribution.id,
+          entry: contribution.entry,
+          title,
+          desc: `${pkg.title || pkg.name || pkg.id} · ${contribution.entry}`,
+          source: `${pkg.id}:${contribution.id}`,
+          w: Number.isFinite(Number(defaultSize.w)) ? Number(defaultSize.w) : 320,
+          h: Number.isFinite(Number(defaultSize.h)) ? Number(defaultSize.h) : 220
+        };
+      });
+  }
+
+  async function loadPackageWidgets() {
+    packageWidgetsLoading = true;
+    packageWidgetsError = '';
+    try {
+      const payload = await apiFetch('/api/packages');
+      const packages = Array.isArray(payload?.packages)
+        ? payload.packages
+        : (Array.isArray(payload) ? payload : []);
+      packageWidgets = packages.flatMap(getPackageWidgetRows);
+    } catch (err) {
+      packageWidgets = [];
+      packageWidgetsError = err?.message || 'Failed to load package widgets.';
+    } finally {
+      packageWidgetsLoading = false;
+    }
+  }
+
+  function addPackageWidget(row) {
+    if (!row?.packageId || !row?.widgetId || !row?.entry) return;
+    widgets.addWidget({
+      type: 'package',
+      packageId: row.packageId,
+      widgetId: row.widgetId,
+      entry: row.entry,
+      title: row.title,
+      source: row.source,
+      w: row.w,
+      h: row.h
+    });
   }
 
   function openCreate() {
@@ -84,6 +143,10 @@
   }
 
   const filteredLibrary = $derived($widgetLibrary.filter(i => i.type === (activeTab === 'url' ? 'url' : 'custom')));
+
+  onMount(() => {
+    loadPackageWidgets();
+  });
 </script>
 
 {#if deleteTemplateId}
@@ -110,6 +173,7 @@
     <button class:active={activeTab === 'system'} onclick={() => {activeTab = 'system'; editorMode = 'list'}}>
       System <span class="badge">Live</span>
     </button>
+    <button class:active={activeTab === 'addons'} onclick={() => {activeTab = 'addons'; editorMode = 'list'}}>Addons</button>
     <button class:active={activeTab === 'url'} onclick={() => {activeTab = 'url'; editorMode = 'list'}}>URL</button>
     <button class:active={activeTab === 'custom'} onclick={() => {activeTab = 'custom'; editorMode = 'list'}}>Code</button>
   </div>
@@ -138,6 +202,38 @@
           </div>
         {/each}
       </div>
+
+    {:else if activeTab === 'addons'}
+      <div class="section-toolbar">
+        <span>Installed package widgets</span>
+        <button class="refresh-btn" onclick={loadPackageWidgets} disabled={packageWidgetsLoading}>
+          {packageWidgetsLoading ? 'Loading...' : 'Refresh'}
+        </button>
+      </div>
+
+      {#if packageWidgetsLoading}
+        <div class="empty-state">Loading package widgets...</div>
+      {:else if packageWidgetsError}
+        <div class="state-card error-state">
+          <span>{packageWidgetsError}</span>
+          <button onclick={loadPackageWidgets}>Try Again</button>
+        </div>
+      {:else if packageWidgets.length === 0}
+        <div class="empty-state">No installed addons expose widgets yet.</div>
+      {:else}
+        <div class="preset-grid">
+          {#each packageWidgets as row}
+            <div class="card package-card">
+              <div class="icon-box package"><PackageIcon size={20} color="#fbbf24" /></div>
+              <div class="info">
+                <span class="title">{row.title}</span>
+                <span class="desc">{row.desc}</span>
+              </div>
+              <button class="add-btn package-btn" onclick={() => addPackageWidget(row)}><Plus size={14} /> Add</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
     {:else if editorMode === 'list'}
       <button class="create-hero-btn" onclick={openCreate}>
@@ -223,6 +319,7 @@
   .icon-box { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: rgba(88,166,255,0.1); border-radius: 8px; flex-shrink: 0; }
   .icon-box.sys { background: rgba(52, 211, 153, 0.1); }
   .icon-box.lib { background: rgba(255,255,255,0.05); color: var(--text-dim); }
+  .icon-box.package { background: rgba(251, 191, 36, 0.12); }
   
   .info { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .title { font-size: 13px; font-weight: 600; color: white; }
@@ -232,6 +329,16 @@
   .add-btn:hover { background: rgba(88,166,255,0.25); }
   .sys-btn { background: rgba(52,211,153,0.12); border-color: rgba(52,211,153,0.3); color: #34d399; }
   .sys-btn:hover { background: rgba(52,211,153,0.22); }
+  .package-btn { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.3); color: #fbbf24; }
+  .package-btn:hover { background: rgba(251,191,36,0.22); }
+
+  .section-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--text-dim); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }
+  .refresh-btn { padding: 5px 9px; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: 6px; color: var(--text-main); font-size: 11px; cursor: pointer; }
+  .refresh-btn:hover:not(:disabled) { background: rgba(255,255,255,0.1); }
+  .refresh-btn:disabled { cursor: wait; opacity: 0.6; }
+  .state-card { padding: 14px; border: 1px solid var(--glass-border); border-radius: 10px; background: rgba(255,255,255,0.04); color: var(--text-dim); font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .state-card button { padding: 6px 10px; border: 1px solid rgba(255,88,88,0.35); border-radius: 6px; background: rgba(255,88,88,0.12); color: #ff8a8a; cursor: pointer; }
+  .error-state { border-color: rgba(255,88,88,0.3); }
 
   /* Library Actions */
   .actions { display: flex; gap: 4px; }

@@ -51,6 +51,25 @@ server/storage/inventory/apps/hello-addon/
 - `runtime.entry`: 패키지 루트 기준 상대 HTML 경로
 - `permissions`: SDK로 사용할 기능을 명시
 
+앱이 데스크톱 위젯도 제공한다면 같은 manifest에 위젯 entry를 선언한다.
+설치 후 Widget Store의 Addons 탭에 자동으로 표시된다.
+
+```json
+{
+  "contributes": {
+    "widgets": [
+      {
+        "id": "hello-widget",
+        "label": "Hello Widget",
+        "entry": "widget.html",
+        "defaultSize": { "w": 320, "h": 220 },
+        "minSize": { "w": 220, "h": 140 }
+      }
+    ]
+  }
+}
+```
+
 ## 3. index.html
 
 ```html

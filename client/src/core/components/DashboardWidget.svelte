@@ -74,6 +74,10 @@
           return;
         }
         const contribution = (pkg.contributes?.widgets || []).find((item) => item.id === contributionId || item.entry === entry);
+        if (contributionId && !contribution) {
+          packageWidgetError = 'This package no longer exposes the saved widget.';
+          return;
+        }
         const resolvedEntry = String(contribution?.entry || entry).replace(/^[/\\]+/, '');
         packageWidgetApp = {
           ...pkg,
@@ -120,7 +124,7 @@
 
   // --- Drag ---
   function isInteractiveTarget(target) {
-    return Boolean(target?.closest?.('button, input, textarea, select, a, iframe, [role="button"], .no-widget-drag'));
+    return Boolean(target?.closest?.('button, input, textarea, select, a, iframe, .no-widget-drag'));
   }
 
   function startDrag(e) {
@@ -384,6 +388,15 @@
 
   .package-widget-shell :global(iframe) {
     background: transparent;
+  }
+
+  .dashboard-widget.unlocked .widget-iframe,
+  .dashboard-widget.unlocked .package-widget-shell :global(iframe) {
+    pointer-events: none;
+  }
+
+  .dashboard-widget.unlocked .package-widget-shell :global(.sandbox-shell) {
+    pointer-events: none;
   }
 
   /* Presets */

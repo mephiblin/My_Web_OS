@@ -15,6 +15,14 @@
         --shadow: 0 26px 80px rgba(42, 50, 88, 0.24), 0 8px 24px rgba(42, 50, 88, 0.14);
         --violet: #8b5cf6;
         --violet-dark: #6d45de;
+        --theme-primary: #9c64ff;
+        --theme-primary-strong: #7a46e8;
+        --agenda-add-start: #9c64ff;
+        --agenda-add-end: #7a46e8;
+        --today-fill-start: rgba(157, 100, 255, 0.4);
+        --today-fill-end: rgba(123, 74, 230, 0.38);
+        --today-text: #ffffff;
+        --today-number-bg: rgba(123, 74, 230, 0.26);
         --blue: #4169e1;
         --red: #c7362f;
         --orange: #f28b24;
@@ -181,7 +189,7 @@
       .primary-btn {
         padding: 0 23px;
         color: white;
-        background: linear-gradient(135deg, #9c64ff, #7a46e8);
+        background: linear-gradient(135deg, var(--theme-primary), var(--theme-primary-strong));
         box-shadow: 0 12px 22px rgba(128, 79, 231, 0.28);
       }
 
@@ -306,10 +314,19 @@
         letter-spacing: -0.03em;
       }
 
+      .day-cell.today {
+        background: linear-gradient(135deg, var(--today-fill-start), var(--today-fill-end));
+      }
+
       .today .day-number {
-        color: white !important;
-        background: linear-gradient(135deg, #9d64ff, #7b4ae6);
-        box-shadow: 0 8px 18px rgba(121, 74, 214, 0.36);
+        color: var(--today-text) !important;
+        background: var(--today-number-bg);
+        border-radius: 10px;
+      }
+
+      .selected .day-number {
+        outline: 2px solid rgba(16, 20, 34, 0.7);
+        outline-offset: 3px;
       }
 
       .event-dots {
@@ -337,14 +354,25 @@
       }
 
       .dot-more {
+        display: inline-flex;
+        align-items: center;
+        min-height: 12px;
         color: var(--muted);
         font-size: 11px;
-        line-height: 9px;
+        font-weight: 900;
+        line-height: 1;
       }
 
       .agenda-section {
         display: grid;
         gap: 18px;
+      }
+
+      .agenda-section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
       }
 
       .agenda-title {
@@ -364,6 +392,20 @@
         background: #a26cf1;
       }
 
+      .agenda-add-btn {
+        width: 34px;
+        height: 34px;
+        min-height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        color: white;
+        background: linear-gradient(135deg, var(--agenda-add-start), var(--agenda-add-end));
+        box-shadow: 0 10px 20px rgba(128, 79, 231, 0.24);
+        font-size: 22px;
+        line-height: 1;
+      }
+
       .agenda-list {
         display: grid;
         gap: 16px;
@@ -374,11 +416,22 @@
         background: rgba(118, 127, 154, 0.2);
       }
 
-      .agenda-item {
+      .agenda-card {
+        display: grid;
+        gap: 0;
+        border: 1px solid rgba(118, 127, 154, 0.14);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.34);
+        overflow: hidden;
+      }
+
+      .agenda-row {
+        width: 100%;
         display: grid;
         grid-template-columns: 12px minmax(0, 1fr) auto;
         align-items: center;
         gap: 12px;
+        padding: 11px 12px;
         color: var(--ink);
         background: transparent;
         text-align: left;
@@ -387,8 +440,16 @@
       .agenda-dot {
         width: 9px;
         height: 9px;
+        min-height: 9px;
+        padding: 0;
         border-radius: 999px;
+        border: 2px solid rgba(255, 255, 255, 0.84);
         background: var(--dot, var(--violet));
+        box-shadow: 0 2px 7px rgba(74, 84, 122, 0.18);
+      }
+
+      .agenda-dot.read-only {
+        cursor: default;
       }
 
       .agenda-main {
@@ -396,6 +457,11 @@
         display: flex;
         align-items: center;
         gap: 8px;
+        border: 0;
+        padding: 0;
+        color: inherit;
+        background: transparent;
+        text-align: left;
       }
 
       .agenda-name {
@@ -425,7 +491,89 @@
 
       .agenda-time {
         color: #656b7e;
+        font-size: 12px;
         font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .agenda-details {
+        display: none;
+        max-height: 168px;
+        overflow: auto;
+        border-top: 1px solid rgba(118, 127, 154, 0.12);
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.32);
+      }
+
+      .agenda-card.expanded .agenda-details {
+        display: grid;
+        gap: 10px;
+      }
+
+      .agenda-note {
+        max-height: 84px;
+        overflow: auto;
+        color: #4c5368;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.5;
+        white-space: pre-wrap;
+      }
+
+      .detail-actions,
+      .inline-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .inline-editor {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border-top: 1px solid rgba(118, 127, 154, 0.12);
+        background: rgba(255, 255, 255, 0.42);
+      }
+
+      .inline-editor .two-col {
+        grid-template-columns: 1fr;
+      }
+
+      .inline-editor-error {
+        display: none;
+        border: 1px solid rgba(199, 54, 47, 0.22);
+        border-radius: 12px;
+        padding: 9px 10px;
+        color: #a8221d;
+        background: rgba(255, 240, 238, 0.74);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.4;
+      }
+
+      .inline-editor-error.visible {
+        display: block;
+      }
+
+      .color-edit-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #52596d;
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      .color-swatch {
+        width: 24px;
+        height: 24px;
+        min-height: 24px;
+        border: 2px solid rgba(255, 255, 255, 0.92);
+        border-radius: 999px;
+        background: var(--dot, var(--violet));
+        box-shadow: 0 4px 12px rgba(74, 84, 122, 0.18);
       }
 
       .empty-state {
@@ -447,6 +595,27 @@
 
       .modal-backdrop.open {
         display: grid;
+      }
+
+      .settings-form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .settings-form label {
+        display: grid;
+        gap: 6px;
+        color: #52596d;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .settings-form input[type="color"] {
+        width: 100%;
+        height: 44px;
+        border: 1px solid rgba(118, 127, 154, 0.26);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.84);
       }
 
       .modal {
@@ -657,7 +826,7 @@
             <h1 id="monthLabel" class="month-title">Calendar</h1>
             <div class="toolbar-actions">
               <button id="todayBtn" class="soft-btn" type="button">Today</button>
-              <button id="addBtn" class="primary-btn" type="button">+ Event</button>
+              <button id="settingsBtn" class="ghost-btn" type="button">Settings</button>
             </div>
           </header>
           <div id="status" class="status-row" role="status" aria-live="polite">Loading calendar...</div>
@@ -674,7 +843,10 @@
         </div>
         <aside class="agenda-panel" aria-label="Agenda">
           <section class="agenda-section">
-            <h2 class="agenda-title">Today Events</h2>
+            <div class="agenda-section-head">
+              <h2 id="selectedEventsTitle" class="agenda-title">Today Events</h2>
+              <button id="selectedAddBtn" class="agenda-add-btn" type="button" aria-label="Add event">+</button>
+            </div>
             <div id="todayEvents" class="agenda-list"></div>
           </section>
           <div class="agenda-divider" aria-hidden="true"></div>
@@ -687,7 +859,7 @@
     </main>
 
     <div id="modalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-      <form id="eventForm" class="modal">
+      <div id="eventForm" class="modal" role="form">
         <div class="modal-head">
           <h2 id="modalTitle" class="modal-title">New Event</h2>
           <button id="closeModalBtn" class="close-btn" type="button" aria-label="Close">x</button>
@@ -726,21 +898,73 @@
           <button id="deleteBtn" class="danger-btn" type="button">Delete</button>
           <div class="action-right">
             <button id="cancelBtn" class="ghost-btn" type="button">Cancel</button>
-            <button id="saveBtn" class="primary-btn" type="submit">Save</button>
+            <button id="saveBtn" class="primary-btn" type="button">Save</button>
           </div>
         </div>
-      </form>
+      </div>
+    </div>
+
+    <div id="settingsBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal">
+        <div class="modal-head">
+          <h2 id="settingsTitle" class="modal-title">Theme Settings</h2>
+          <button id="settingsCloseBtn" class="close-btn" type="button" aria-label="Close">x</button>
+        </div>
+        <div class="settings-form">
+          <label>
+            Theme color
+            <input id="themePrimaryInput" type="color" value="#9c64ff" />
+          </label>
+          <label>
+            Theme color (deep)
+            <input id="themePrimaryStrongInput" type="color" value="#7a46e8" />
+          </label>
+          <label>
+            + button color
+            <input id="addButtonColorInput" type="color" value="#9c64ff" />
+          </label>
+          <label>
+            Today cell start
+            <input id="todayFillStartInput" type="color" value="#9d64ff" />
+          </label>
+          <label>
+            Today cell end
+            <input id="todayFillEndInput" type="color" value="#7b4ae6" />
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button id="settingsResetBtn" class="ghost-btn" type="button">Reset</button>
+          <div class="action-right">
+            <button id="settingsCancelBtn" class="ghost-btn" type="button">Cancel</button>
+            <button id="settingsSaveBtn" class="primary-btn" type="button">Save</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
     <script>
       const COLOR_FALLBACKS = ['#8b5cf6', '#4f8df7', '#f28b24', '#25a979', '#d95d5d'];
+      const THEME_STORAGE_PATH = 'settings/theme.json';
+      const DEFAULT_THEME = {
+        themePrimary: '#9c64ff',
+        themePrimaryStrong: '#7a46e8',
+        addButtonColor: '#9c64ff',
+        todayFillStart: '#9d64ff',
+        todayFillEnd: '#7b4ae6'
+      };
       const state = {
         viewedDate: new Date(),
+        selectedDate: new Date(),
         events: [],
         eventsById: new Map(),
         editingId: null,
-        loading: false
+        expandedEventId: null,
+        creating: false,
+        deleteConfirmId: null,
+        loading: false,
+        theme: null,
+        themeSaving: false
       };
 
       const els = {
@@ -752,7 +976,8 @@
         prevBtn: document.getElementById('prevBtn'),
         nextBtn: document.getElementById('nextBtn'),
         todayBtn: document.getElementById('todayBtn'),
-        addBtn: document.getElementById('addBtn'),
+        selectedEventsTitle: document.getElementById('selectedEventsTitle'),
+        selectedAddBtn: document.getElementById('selectedAddBtn'),
         modalBackdrop: document.getElementById('modalBackdrop'),
         eventForm: document.getElementById('eventForm'),
         modalTitle: document.getElementById('modalTitle'),
@@ -767,8 +992,148 @@
         endInput: document.getElementById('endInput'),
         colorInput: document.getElementById('colorInput'),
         allDayInput: document.getElementById('allDayInput'),
-        noteInput: document.getElementById('noteInput')
+        noteInput: document.getElementById('noteInput'),
+        settingsBtn: document.getElementById('settingsBtn'),
+        settingsBackdrop: document.getElementById('settingsBackdrop'),
+        settingsCloseBtn: document.getElementById('settingsCloseBtn'),
+        settingsCancelBtn: document.getElementById('settingsCancelBtn'),
+        settingsSaveBtn: document.getElementById('settingsSaveBtn'),
+        settingsResetBtn: document.getElementById('settingsResetBtn'),
+        themePrimaryInput: document.getElementById('themePrimaryInput'),
+        themePrimaryStrongInput: document.getElementById('themePrimaryStrongInput'),
+        addButtonColorInput: document.getElementById('addButtonColorInput'),
+        todayFillStartInput: document.getElementById('todayFillStartInput'),
+        todayFillEndInput: document.getElementById('todayFillEndInput')
       };
+
+      function ensureHexColor(value, fallback) {
+        const v = typeof value === 'string' ? value.trim() : '';
+        return /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback;
+      }
+
+      function hexToRgba(hex, alpha) {
+        const safe = ensureHexColor(hex, '#000000');
+        const r = Number.parseInt(safe.slice(1, 3), 16);
+        const g = Number.parseInt(safe.slice(3, 5), 16);
+        const b = Number.parseInt(safe.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      }
+
+      function normalizeTheme(input) {
+        const parsed = input && typeof input === 'object' ? input : {};
+        return {
+          themePrimary: ensureHexColor(parsed.themePrimary, DEFAULT_THEME.themePrimary),
+          themePrimaryStrong: ensureHexColor(parsed.themePrimaryStrong, DEFAULT_THEME.themePrimaryStrong),
+          addButtonColor: ensureHexColor(parsed.addButtonColor, DEFAULT_THEME.addButtonColor),
+          todayFillStart: ensureHexColor(parsed.todayFillStart, DEFAULT_THEME.todayFillStart),
+          todayFillEnd: ensureHexColor(parsed.todayFillEnd, DEFAULT_THEME.todayFillEnd)
+        };
+      }
+
+      async function readTheme() {
+        try {
+          const listResult = await window.WebOS.app.data.list({ path: 'settings' });
+          const entries = Array.isArray(listResult && listResult.entries) ? listResult.entries : [];
+          const hasThemeFile = entries.some((entry) => entry && entry.type === 'file' && entry.name === 'theme.json');
+          if (!hasThemeFile) return { ...DEFAULT_THEME };
+
+          const result = await window.WebOS.app.data.read({ path: THEME_STORAGE_PATH });
+          const raw = result && typeof result.content === 'string' ? result.content : '';
+          if (!raw) return { ...DEFAULT_THEME };
+          return normalizeTheme(JSON.parse(raw));
+        } catch (err) {
+          if (err && err.code && err.code !== 'APP_DATA_NOT_FOUND') {
+            setStatus(`Theme settings reset to defaults. ${friendlyError(err)}`, true);
+          }
+          return { ...DEFAULT_THEME };
+        }
+      }
+
+      async function writeTheme(theme) {
+        await window.WebOS.app.data.write({
+          path: THEME_STORAGE_PATH,
+          content: JSON.stringify(normalizeTheme(theme), null, 2)
+        });
+      }
+
+      function applyTheme(theme) {
+        const root = document.documentElement.style;
+        root.setProperty('--theme-primary', theme.themePrimary);
+        root.setProperty('--theme-primary-strong', theme.themePrimaryStrong);
+        root.setProperty('--today-fill-start', hexToRgba(theme.todayFillStart, 0.4));
+        root.setProperty('--today-fill-end', hexToRgba(theme.todayFillEnd, 0.38));
+        root.setProperty('--today-text', '#ffffff');
+        root.setProperty('--today-number-bg', hexToRgba(theme.todayFillEnd, 0.26));
+        // Plus button can be customized independently from the global theme.
+        root.setProperty('--agenda-add-start', theme.addButtonColor);
+        root.setProperty('--agenda-add-end', theme.themePrimaryStrong);
+      }
+
+      function syncThemeInputs(theme) {
+        els.themePrimaryInput.value = theme.themePrimary;
+        els.themePrimaryStrongInput.value = theme.themePrimaryStrong;
+        els.addButtonColorInput.value = theme.addButtonColor;
+        els.todayFillStartInput.value = theme.todayFillStart;
+        els.todayFillEndInput.value = theme.todayFillEnd;
+      }
+
+      function openSettings() {
+        syncThemeInputs(state.theme || DEFAULT_THEME);
+        els.settingsBackdrop.classList.add('open');
+      }
+
+      function closeSettings() {
+        els.settingsBackdrop.classList.remove('open');
+      }
+
+      function setThemeSaving(isSaving) {
+        state.themeSaving = isSaving;
+        els.settingsSaveBtn.disabled = isSaving;
+        els.settingsResetBtn.disabled = isSaving;
+        els.settingsCancelBtn.disabled = isSaving;
+        els.settingsSaveBtn.textContent = isSaving ? 'Saving...' : 'Save';
+      }
+
+      async function saveThemeFromInputs() {
+        const theme = {
+          themePrimary: ensureHexColor(els.themePrimaryInput.value, DEFAULT_THEME.themePrimary),
+          themePrimaryStrong: ensureHexColor(els.themePrimaryStrongInput.value, DEFAULT_THEME.themePrimaryStrong),
+          addButtonColor: ensureHexColor(els.addButtonColorInput.value, DEFAULT_THEME.addButtonColor),
+          todayFillStart: ensureHexColor(els.todayFillStartInput.value, DEFAULT_THEME.todayFillStart),
+          todayFillEnd: ensureHexColor(els.todayFillEndInput.value, DEFAULT_THEME.todayFillEnd)
+        };
+        setThemeSaving(true);
+        setStatus('Saving theme...');
+        try {
+          await writeTheme(theme);
+          state.theme = normalizeTheme(theme);
+          applyTheme(state.theme);
+          closeSettings();
+          setStatus('Theme settings saved.');
+          await notify('Theme settings saved.');
+        } catch (err) {
+          setStatus(friendlyError(err), true);
+        } finally {
+          setThemeSaving(false);
+        }
+      }
+
+      async function resetTheme() {
+        setThemeSaving(true);
+        setStatus('Resetting theme...');
+        try {
+          await writeTheme({ ...DEFAULT_THEME });
+          state.theme = { ...DEFAULT_THEME };
+          applyTheme(state.theme);
+          syncThemeInputs(state.theme);
+          setStatus('Theme settings reset.');
+          await notify('Theme settings reset.');
+        } catch (err) {
+          setStatus(friendlyError(err), true);
+        } finally {
+          setThemeSaving(false);
+        }
+      }
 
       function pad(value) {
         return String(value).padStart(2, '0');
@@ -798,6 +1163,10 @@
       function startOfToday() {
         const now = new Date();
         return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      }
+
+      function cloneDay(date) {
+        return new Date(date.getFullYear(), date.getMonth(), date.getDate());
       }
 
       function sameDay(a, b) {
@@ -861,6 +1230,16 @@
         return date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', weekday: 'short' });
       }
 
+      function eventDateTimeLabel(event) {
+        return `${upcomingDateLabel(event)} · ${eventTimeLabel(event)}`;
+      }
+
+      function selectedTitle() {
+        const selected = state.selectedDate || startOfToday();
+        if (sameDay(selected, startOfToday())) return 'Today Events';
+        return `${selected.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} Events`;
+      }
+
       function setStatus(message, isError) {
         els.status.textContent = message || '';
         els.status.className = isError ? 'status-row error' : 'status-row';
@@ -868,7 +1247,7 @@
 
       function setLoading(isLoading) {
         state.loading = isLoading;
-        [els.prevBtn, els.nextBtn, els.todayBtn, els.addBtn].forEach((button) => {
+        [els.prevBtn, els.nextBtn, els.todayBtn, els.settingsBtn, els.selectedAddBtn].forEach((button) => {
           button.disabled = isLoading;
         });
         const editingEvent = state.editingId ? state.eventsById.get(state.editingId) : null;
@@ -935,36 +1314,39 @@
           if (date.getDay() === 0) classes.push('sun');
           if (date.getDay() === 6) classes.push('sat');
           if (sameDay(date, today)) classes.push('today');
+          if (sameDay(date, state.selectedDate)) classes.push('selected');
 
           cell.className = classes.join(' ');
           hit.className = 'day-hit';
           hit.type = 'button';
-          hit.setAttribute('aria-label', `Add event on ${date.toLocaleDateString('en-US')}`);
-          hit.addEventListener('click', () => openCreateModal(date));
+          hit.setAttribute('aria-label', `Select ${date.toLocaleDateString('en-US')}`);
+          hit.addEventListener('click', () => selectDate(date));
 
           number.className = 'day-number';
           number.textContent = String(date.getDate());
           dots.className = 'event-dots';
 
-          dayEvents.slice(0, 4).forEach((event) => {
+          const visibleDots = dayEvents.length > 3 ? dayEvents.slice(0, 1) : dayEvents;
+          visibleDots.forEach((event) => {
             const dot = document.createElement('button');
             const readOnly = isReadOnlyEvent(event);
             dot.className = readOnly ? 'event-dot read-only' : 'event-dot';
             dot.type = 'button';
             dot.style.setProperty('--dot', event._color);
-            dot.setAttribute('aria-label', `${readOnly ? 'View' : 'Edit'} ${event.title || 'event'}`);
-            dot.title = `${event.title || 'Event'}${readOnly ? ` - ${sourceLabel(event)} source` : ''}`;
+            dot.setAttribute('aria-label', `Select ${date.toLocaleDateString('en-US')}`);
+            dot.title = `${dayEvents.length} event${dayEvents.length === 1 ? '' : 's'}`;
             dot.addEventListener('click', (evt) => {
               evt.stopPropagation();
-              openEditModal(event);
+              selectDate(date, event.id);
             });
             dots.appendChild(dot);
           });
 
-          if (dayEvents.length > 4) {
+          if (dayEvents.length > 3) {
             const more = document.createElement('span');
             more.className = 'dot-more';
-            more.textContent = `+${dayEvents.length - 4}`;
+            more.textContent = `+${dayEvents.length}`;
+            more.title = `${dayEvents.length} events`;
             dots.appendChild(more);
           }
 
@@ -975,25 +1357,237 @@
         });
       }
 
-      function agendaButton(event, index, trailingText) {
-        const button = document.createElement('button');
-        const dot = document.createElement('span');
-        const main = document.createElement('span');
+      function nextColor(current) {
+        const normalized = String(current || '').toLowerCase();
+        const index = COLOR_FALLBACKS.findIndex((color) => color.toLowerCase() === normalized);
+        return COLOR_FALLBACKS[(index + 1 + COLOR_FALLBACKS.length) % COLOR_FALLBACKS.length];
+      }
+
+      function setInlineError(errorEl, err) {
+        if (!errorEl) return;
+        errorEl.textContent = err ? friendlyError(err) : '';
+        errorEl.classList.toggle('visible', Boolean(err));
+      }
+
+      function makeField(labelText, field) {
+        const label = document.createElement('label');
+        label.textContent = labelText;
+        label.appendChild(field);
+        return label;
+      }
+
+      function buildInlinePayload(refs, colorValue) {
+        const title = refs.title.value.trim();
+        const startAt = inputToIso(refs.start.value);
+        const endAt = inputToIso(refs.end.value);
+        if (!title) throw new Error('Title is required.');
+        if (!startAt) throw new Error('Start date is required.');
+        if (endAt && endAt < startAt) throw new Error('End date must be after start date.');
+        return {
+          title,
+          startAt,
+          endAt: endAt || null,
+          allDay: Boolean(refs.allDay.checked),
+          color: colorValue || '#8b5cf6',
+          note: refs.note.value.trim() || null
+        };
+      }
+
+      async function saveInlineEvent(existingEvent, refs, errorEl, colorValue) {
+        setInlineError(errorEl, null);
+        setLoading(true);
+        try {
+          const payload = buildInlinePayload(refs, colorValue);
+          if (existingEvent && existingEvent.id) {
+            await window.WebOS.calendar.update(existingEvent.id, payload);
+            state.expandedEventId = existingEvent.id;
+            await notify('Event updated.');
+          } else {
+            const created = await window.WebOS.calendar.create(payload);
+            const createdEvent = created && (created.data || created);
+            state.expandedEventId = createdEvent && createdEvent.id ? createdEvent.id : null;
+            await notify('Event created.');
+          }
+          state.creating = false;
+          state.editingId = null;
+          state.deleteConfirmId = null;
+          await refreshMonth();
+        } catch (err) {
+          setInlineError(errorEl, err);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      async function deleteInlineEvent(event) {
+        if (!event || !event.id || isReadOnlyEvent(event)) return;
+        if (state.deleteConfirmId !== event.id) {
+          state.deleteConfirmId = event.id;
+          renderAgenda();
+          return;
+        }
+        setLoading(true);
+        setStatus('Deleting event...');
+        try {
+          await window.WebOS.calendar.remove(event.id);
+          state.expandedEventId = null;
+          state.editingId = null;
+          state.deleteConfirmId = null;
+          await notify('Event deleted.');
+          await refreshMonth();
+        } catch (err) {
+          setStatus(friendlyError(err), true);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      async function cycleEventColor(event) {
+        if (!event || !event.id || isReadOnlyEvent(event)) return;
+        setLoading(true);
+        try {
+          const color = nextColor(event.color || normalizeColor(event, 0));
+          await window.WebOS.calendar.update(event.id, { color });
+          await refreshMonth();
+        } catch (err) {
+          setStatus(friendlyError(err), true);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function renderInlineEditor(existingEvent) {
+        const editor = document.createElement('div');
+        const error = document.createElement('div');
+        const title = document.createElement('input');
+        const start = document.createElement('input');
+        const end = document.createElement('input');
+        const note = document.createElement('textarea');
+        const allDay = document.createElement('input');
+        const allDayLabel = document.createElement('label');
+        const allDayText = document.createElement('span');
+        const twoCol = document.createElement('div');
+        const colorRow = document.createElement('div');
+        const swatch = document.createElement('button');
+        const colorText = document.createElement('span');
+        const actions = document.createElement('div');
+        const save = document.createElement('button');
+        const cancel = document.createElement('button');
+        const remove = document.createElement('button');
+        const baseDate = state.selectedDate || new Date();
+        let colorValue = existingEvent ? normalizeColor(existingEvent, 0) : '#8b5cf6';
+
+        editor.className = 'inline-editor';
+        error.className = 'inline-editor-error';
+        title.type = 'text';
+        title.maxLength = 200;
+        title.placeholder = 'Team standup';
+        title.value = existingEvent ? (existingEvent.title || '') : '';
+        start.type = 'datetime-local';
+        start.value = existingEvent ? toInputValue(existingEvent.startAt) : defaultStartFor(baseDate);
+        end.type = 'datetime-local';
+        end.value = existingEvent ? toInputValue(existingEvent.endAt) : '';
+        note.maxLength = 4000;
+        note.placeholder = 'Optional note';
+        note.value = existingEvent ? (existingEvent.note || '') : '';
+        allDay.type = 'checkbox';
+        allDay.checked = Boolean(existingEvent && existingEvent.allDay);
+        allDayLabel.className = 'checkbox-row';
+        allDayText.textContent = 'All day';
+        allDayLabel.appendChild(allDay);
+        allDayLabel.appendChild(allDayText);
+
+        twoCol.className = 'two-col';
+        twoCol.appendChild(makeField('Start', start));
+        twoCol.appendChild(makeField('End', end));
+
+        colorRow.className = 'color-edit-row';
+        swatch.className = 'color-swatch';
+        swatch.type = 'button';
+        swatch.style.setProperty('--dot', colorValue);
+        colorText.textContent = 'Color';
+        swatch.addEventListener('click', () => {
+          colorValue = nextColor(colorValue);
+          swatch.style.setProperty('--dot', colorValue);
+        });
+        colorRow.appendChild(swatch);
+        colorRow.appendChild(colorText);
+
+        actions.className = 'inline-actions';
+        save.className = 'primary-btn';
+        save.type = 'button';
+        save.textContent = existingEvent ? 'Save Changes' : 'Create Event';
+        cancel.className = 'ghost-btn';
+        cancel.type = 'button';
+        cancel.textContent = 'Cancel';
+        remove.className = 'danger-btn';
+        remove.type = 'button';
+        remove.textContent = state.deleteConfirmId === existingEvent?.id ? 'Confirm Delete' : 'Delete';
+
+        save.addEventListener('click', () => saveInlineEvent(existingEvent, { title, start, end, note, allDay }, error, colorValue));
+        cancel.addEventListener('click', () => {
+          state.creating = false;
+          state.editingId = null;
+          state.deleteConfirmId = null;
+          renderAgenda();
+        });
+        remove.addEventListener('click', () => deleteInlineEvent(existingEvent));
+
+        editor.appendChild(error);
+        editor.appendChild(makeField('Title', title));
+        editor.appendChild(twoCol);
+        editor.appendChild(colorRow);
+        editor.appendChild(allDayLabel);
+        editor.appendChild(makeField('Note', note));
+        actions.appendChild(save);
+        actions.appendChild(cancel);
+        if (existingEvent && !isReadOnlyEvent(existingEvent)) {
+          actions.appendChild(remove);
+        }
+        editor.appendChild(actions);
+        requestAnimationFrame(() => title.focus());
+        return editor;
+      }
+
+      function agendaCard(event, index, trailingText, options = {}) {
+        const card = document.createElement('div');
+        const row = document.createElement('div');
+        const dot = document.createElement('button');
+        const main = document.createElement('button');
         const name = document.createElement('span');
         const time = document.createElement('span');
         const readOnly = isReadOnlyEvent(event);
+        const expanded = state.expandedEventId === event.id || state.editingId === event.id;
+        const editing = state.editingId === event.id;
 
-        button.className = 'agenda-item';
-        button.type = 'button';
-        button.title = readOnly ? `${sourceLabel(event)} source event` : 'Local editable event';
-        button.addEventListener('click', () => openEditModal(event));
+        card.className = expanded ? 'agenda-card expanded' : 'agenda-card';
+        row.className = 'agenda-row';
         dot.className = 'agenda-dot';
+        dot.type = 'button';
         dot.style.setProperty('--dot', normalizeColor(event, index));
+        dot.title = readOnly ? `${sourceLabel(event)} source event` : 'Change event color';
+        dot.classList.toggle('read-only', readOnly);
+        dot.addEventListener('click', (evt) => {
+          evt.stopPropagation();
+          cycleEventColor(event);
+        });
         main.className = 'agenda-main';
+        main.type = 'button';
         name.className = 'agenda-name';
         name.textContent = event.title || 'Untitled event';
         time.className = 'agenda-time';
         time.textContent = trailingText;
+        main.addEventListener('click', () => {
+          if (options.selectDateFirst) {
+            selectDate(eventDate(event), event.id);
+            return;
+          }
+          state.expandedEventId = state.expandedEventId === event.id ? null : event.id;
+          state.creating = false;
+          state.editingId = null;
+          state.deleteConfirmId = null;
+          renderAgenda();
+        });
 
         main.appendChild(name);
         if (readOnly) {
@@ -1003,30 +1597,72 @@
           main.appendChild(badge);
         }
 
-        button.appendChild(dot);
-        button.appendChild(main);
-        button.appendChild(time);
-        return button;
+        row.appendChild(dot);
+        row.appendChild(main);
+        row.appendChild(time);
+        card.appendChild(row);
+
+        if (editing) {
+          card.appendChild(renderInlineEditor(event));
+        } else if (expanded) {
+          const details = document.createElement('div');
+          const note = document.createElement('div');
+          const actions = document.createElement('div');
+          details.className = 'agenda-details';
+          note.className = 'agenda-note';
+          note.textContent = event.note || 'No note.';
+          actions.className = 'detail-actions';
+          details.appendChild(note);
+          if (!readOnly) {
+            const edit = document.createElement('button');
+            edit.className = 'ghost-btn';
+            edit.type = 'button';
+            edit.textContent = 'Edit';
+            edit.addEventListener('click', () => {
+              state.editingId = event.id;
+              state.deleteConfirmId = null;
+              renderAgenda();
+            });
+            actions.appendChild(edit);
+          }
+          details.appendChild(actions);
+          card.appendChild(details);
+        }
+
+        return card;
       }
 
       function renderAgenda() {
         const today = startOfToday();
-        const todayKey = dateKey(today);
+        const selected = state.selectedDate || today;
+        const selectedKey = dateKey(selected);
         const sorted = [...state.events].sort((a, b) => eventDate(a) - eventDate(b));
-        const todayItems = sorted.filter((event) => dateKey(eventDate(event)) === todayKey);
-        const upcomingItems = sorted.filter((event) => eventDate(event) >= today && dateKey(eventDate(event)) !== todayKey).slice(0, 5);
+        const selectedItems = sorted.filter((event) => dateKey(eventDate(event)) === selectedKey);
+        const upcomingItems = sorted.filter((event) => eventDate(event) >= today && dateKey(eventDate(event)) !== selectedKey).slice(0, 5);
 
+        els.selectedEventsTitle.textContent = selectedTitle();
         els.todayEvents.innerHTML = '';
         els.upcomingEvents.innerHTML = '';
 
-        if (todayItems.length) {
-          todayItems.forEach((event, index) => els.todayEvents.appendChild(agendaButton(event, index, eventTimeLabel(event))));
+        if (state.creating) {
+          const draft = document.createElement('div');
+          draft.className = 'agenda-card expanded';
+          draft.appendChild(renderInlineEditor(null));
+          els.todayEvents.appendChild(draft);
+        }
+
+        if (selectedItems.length) {
+          selectedItems.forEach((event, index) => els.todayEvents.appendChild(agendaCard(event, index, eventDateTimeLabel(event))));
         } else {
-          els.todayEvents.innerHTML = '<div class="empty-state">No events scheduled for today.</div>';
+          if (!state.creating) {
+            els.todayEvents.innerHTML = '<div class="empty-state">No events scheduled for this day.</div>';
+          }
         }
 
         if (upcomingItems.length) {
-          upcomingItems.forEach((event, index) => els.upcomingEvents.appendChild(agendaButton(event, index, upcomingDateLabel(event))));
+          upcomingItems.forEach((event, index) => {
+            els.upcomingEvents.appendChild(agendaCard(event, index, eventDateTimeLabel(event), { selectDateFirst: true }));
+          });
         } else {
           els.upcomingEvents.innerHTML = '<div class="empty-state">No upcoming events in this month.</div>';
         }
@@ -1060,8 +1696,12 @@
       }
 
       function resetForm() {
-        els.eventForm.reset();
+        els.titleInput.value = '';
+        els.startInput.value = '';
+        els.endInput.value = '';
         els.colorInput.value = '#8b5cf6';
+        els.allDayInput.checked = false;
+        els.noteInput.value = '';
         state.editingId = null;
         setFormReadOnly(false);
         setModalSource(null);
@@ -1127,7 +1767,9 @@
       }
 
       async function saveEvent(event) {
-        event.preventDefault();
+        if (event && typeof event.preventDefault === 'function') {
+          event.preventDefault();
+        }
         const editingEvent = state.editingId ? state.eventsById.get(state.editingId) : null;
         if (isReadOnlyEvent(editingEvent)) {
           setStatus('Read-only source events cannot be edited from this addon.', true);
@@ -1174,8 +1816,38 @@
         }
       }
 
+      function clearInlineState() {
+        state.creating = false;
+        state.editingId = null;
+        state.deleteConfirmId = null;
+      }
+
+      function selectDate(date, expandEventId = null) {
+        const selected = cloneDay(date instanceof Date ? date : new Date());
+        const needsRefresh = selected.getFullYear() !== state.viewedDate.getFullYear() || selected.getMonth() !== state.viewedDate.getMonth();
+        state.selectedDate = selected;
+        state.viewedDate = new Date(selected.getFullYear(), selected.getMonth(), 1);
+        clearInlineState();
+        state.expandedEventId = expandEventId || null;
+        render();
+        if (needsRefresh) {
+          refreshMonth();
+        }
+      }
+
+      function startCreateInline() {
+        state.creating = true;
+        state.editingId = null;
+        state.expandedEventId = null;
+        state.deleteConfirmId = null;
+        renderAgenda();
+      }
+
       function shiftMonth(delta) {
         state.viewedDate = new Date(state.viewedDate.getFullYear(), state.viewedDate.getMonth() + delta, 1);
+        state.selectedDate = cloneDay(state.viewedDate);
+        clearInlineState();
+        state.expandedEventId = null;
         refreshMonth();
       }
 
@@ -1183,11 +1855,23 @@
         els.prevBtn.addEventListener('click', () => shiftMonth(-1));
         els.nextBtn.addEventListener('click', () => shiftMonth(1));
         els.todayBtn.addEventListener('click', () => {
-          state.viewedDate = new Date();
+          const today = startOfToday();
+          state.viewedDate = new Date(today.getFullYear(), today.getMonth(), 1);
+          state.selectedDate = today;
+          clearInlineState();
+          state.expandedEventId = null;
           refreshMonth();
         });
-        els.addBtn.addEventListener('click', () => openCreateModal(new Date(state.viewedDate.getFullYear(), state.viewedDate.getMonth(), 1)));
-        els.eventForm.addEventListener('submit', saveEvent);
+        els.settingsBtn.addEventListener('click', openSettings);
+        els.settingsCloseBtn.addEventListener('click', closeSettings);
+        els.settingsCancelBtn.addEventListener('click', closeSettings);
+        els.settingsSaveBtn.addEventListener('click', saveThemeFromInputs);
+        els.settingsResetBtn.addEventListener('click', resetTheme);
+        els.settingsBackdrop.addEventListener('click', (event) => {
+          if (event.target === els.settingsBackdrop) closeSettings();
+        });
+        els.selectedAddBtn.addEventListener('click', startCreateInline);
+        els.saveBtn.addEventListener('click', saveEvent);
         els.deleteBtn.addEventListener('click', deleteEvent);
         els.closeModalBtn.addEventListener('click', closeModal);
         els.cancelBtn.addEventListener('click', closeModal);
@@ -1195,13 +1879,17 @@
           if (event.target === els.modalBackdrop) closeModal();
         });
         document.addEventListener('keydown', (event) => {
-          if (event.key === 'Escape' && els.modalBackdrop.classList.contains('open')) closeModal();
+          if (event.key !== 'Escape') return;
+          if (els.modalBackdrop.classList.contains('open')) closeModal();
+          if (els.settingsBackdrop.classList.contains('open')) closeSettings();
         });
       }
 
       async function boot() {
         try {
           await window.WebOS.ready();
+          state.theme = await readTheme();
+          applyTheme(state.theme);
           bindEvents();
           await refreshMonth();
         } catch (err) {

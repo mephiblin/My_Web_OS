@@ -13,14 +13,35 @@
     "entry": "index.html"
   },
   "permissions": [
+    "app.data.list",
+    "app.data.read",
+    "app.data.write",
     "calendar.read",
     "calendar.write",
-    "ui.notification"
+    "ui.notification",
+    "window.open"
   ],
   "window": {
     "width": 960,
     "height": 760,
     "minWidth": 640,
     "minHeight": 420
+  },
+  "contributes": {
+    "widgets": [
+      {
+        "id": "calendar-widget",
+        "label": "Calendar Widget",
+        "entry": "widget.html",
+        "defaultSize": {
+          "w": 360,
+          "h": 260
+        },
+        "minSize": {
+          "w": 260,
+          "h": 190
+        }
+      }
+    ]
   }
 }

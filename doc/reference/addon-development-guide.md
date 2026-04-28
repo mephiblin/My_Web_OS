@@ -331,6 +331,15 @@ Use `contributes` for native-feeling integration:
     ],
     "previewProviders": [
       { "label": "Markdown Preview", "extensions": ["md"] }
+    ],
+    "widgets": [
+      {
+        "id": "compact-status",
+        "label": "Compact Status",
+        "entry": "widget.html",
+        "defaultSize": { "w": 320, "h": 220 },
+        "minSize": { "w": 220, "h": 140 }
+      }
     ]
   }
 }
@@ -342,6 +351,7 @@ Current extension point status:
 - `fileCreateTemplates`: active
 - `previewProviders`: active through explicit user handoff and temporary grants
 - `thumbnailProviders`: active for provider discovery and explicit handoff
+- `widgets`: active; Package Center validates entries and Widget Store surfaces installed package widgets
 - `settingsPanels`: validated metadata, later Package Center launch step
 - `backgroundServices`: validated metadata only; no auto execution yet
 
