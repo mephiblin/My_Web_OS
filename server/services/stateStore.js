@@ -2,6 +2,8 @@ const fs = require('fs-extra');
 const inventoryPaths = require('../utils/inventoryPaths');
 
 const STATE_KEYS = new Set(['settings', 'windows', 'widgets', 'shortcuts', 'desktops', 'startMenu', 'taskbar', 'windowDefaults', 'agentChat', 'themePresets', 'contextMenu', 'backupJobs', 'calendar']);
+const CALENDAR_SOURCE_TYPES = new Set(['local', 'holiday', 'caldav', 'google']);
+const CALENDAR_SYNC_DIRECTIONS = new Set(['readOnly', 'twoWay']);
 
 const DEFAULT_SETTINGS = {
   blurIntensity: 20,
@@ -93,6 +95,29 @@ const DEFAULT_BACKUP_JOBS = {
 };
 const DEFAULT_CALENDAR = {
   events: [],
+  sources: [
+    {
+      id: 'local',
+      title: 'Local Calendar',
+      type: 'local',
+      enabled: true,
+      readOnly: false,
+      color: '#58a6ff',
+      config: {}
+    },
+    {
+      id: 'holidays-kr',
+      title: 'KR Public Holidays',
+      type: 'holiday',
+      enabled: true,
+      readOnly: true,
+      color: '#ef4444',
+      config: {
+        countryCode: 'KR',
+        provider: 'nager'
+      }
+    }
+  ],
   lastUpdatedAt: null
 };
 
@@ -600,6 +625,12 @@ function normalizeCalendarEvent(item, index) {
   const allDay = item.allDay === true;
   const color = asTrimmedString(item.color, '#58a6ff', 20);
   const note = asTrimmedString(item.note, '', 4000);
+  const source = asTrimmedString(item.source, 'local', 128);
+  const sourceType = CALENDAR_SOURCE_TYPES.has(item.sourceType) ? item.sourceType : (source === 'local' ? 'local' : 'local');
+  const provider = asTrimmedString(item.provider, '', 80) || null;
+  const externalId = asTrimmedString(item.externalId, '', 256) || null;
+  const calendarId = asTrimmedString(item.calendarId, source, 128) || source;
+  const readOnly = item.readOnly === true || sourceType !== 'local';
 
   const createdAt = asNullableTimestamp(item.createdAt) || Date.now();
   const updatedAt = asNullableTimestamp(item.updatedAt) || createdAt;
@@ -612,8 +643,56 @@ function normalizeCalendarEvent(item, index) {
     allDay,
     color,
     note: note || null,
+    source,
+    sourceType,
+    readOnly,
+    externalId,
+    provider,
+    calendarId,
     createdAt,
     updatedAt
+  };
+}
+
+function normalizeCalendarSource(item, index) {
+  if (!isObject(item)) return null;
+
+  const rawType = asTrimmedString(item.type, '', 32);
+  const type = CALENDAR_SOURCE_TYPES.has(rawType) ? rawType : '';
+  if (!type) return null;
+
+  const fallbackId = type === 'local' ? 'local' : `${type}-${index + 1}`;
+  const id = asTrimmedString(item.id, fallbackId, 128);
+  const title = asTrimmedString(item.title, type === 'holiday' ? 'Public Holidays' : 'Calendar Source', 120);
+  const color = asTrimmedString(item.color, type === 'holiday' ? '#ef4444' : '#58a6ff', 20);
+  const rawConfig = isObject(item.config) ? item.config : {};
+  const config = {};
+
+  if (type === 'holiday') {
+    config.countryCode = asTrimmedString(rawConfig.countryCode, 'KR', 2).toUpperCase();
+    config.provider = asTrimmedString(rawConfig.provider, 'nager', 40).toLowerCase();
+  } else if (type === 'caldav') {
+    config.serverUrl = asTrimmedString(rawConfig.serverUrl, '', 2048);
+    config.username = asTrimmedString(rawConfig.username, '', 256);
+    config.calendarUrl = asTrimmedString(rawConfig.calendarUrl, '', 2048);
+    config.syncEnabled = rawConfig.syncEnabled === true;
+    config.syncDirection = CALENDAR_SYNC_DIRECTIONS.has(rawConfig.syncDirection) ? rawConfig.syncDirection : 'readOnly';
+  } else if (type === 'google') {
+    config.calendarId = asTrimmedString(rawConfig.calendarId, 'primary', 256);
+    config.syncEnabled = rawConfig.syncEnabled === true;
+    config.syncDirection = CALENDAR_SYNC_DIRECTIONS.has(rawConfig.syncDirection) ? rawConfig.syncDirection : 'readOnly';
+  }
+
+  return {
+    id,
+    title,
+    type,
+    enabled: item.enabled !== false,
+    readOnly: type !== 'local' || item.readOnly === true,
+    color,
+    config,
+    lastSyncedAt: asNullableTimestamp(item.lastSyncedAt),
+    lastError: asTrimmedString(item.lastError, '', 1000) || null
   };
 }
 
@@ -626,10 +705,22 @@ function normalizeCalendar(value) {
       .map((item, index) => normalizeCalendarEvent(item, index))
       .filter(Boolean)
     : [];
+  const sourceMap = new Map();
+  for (const source of DEFAULT_CALENDAR.sources) {
+    sourceMap.set(source.id, clone(source));
+  }
+  if (Array.isArray(value.sources)) {
+    value.sources
+      .slice(0, 100)
+      .map((item, index) => normalizeCalendarSource(item, index))
+      .filter(Boolean)
+      .forEach((source) => sourceMap.set(source.id, source));
+  }
 
   const lastUpdatedAt = asNullableTimestamp(value.lastUpdatedAt);
   return {
     events,
+    sources: Array.from(sourceMap.values()),
     lastUpdatedAt
   };
 }

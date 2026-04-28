@@ -1,0 +1,26 @@
+{
+  "id": "calendar-addon",
+  "title": "Calendar Addon",
+  "description": "Package Center calendar addon using the v2 source/provider calendar API.",
+  "version": "1.1.0",
+  "appModel": "package",
+  "icon": "CalendarDays",
+  "type": "app",
+  "entry": "index.html",
+  "singleton": true,
+  "runtime": {
+    "type": "sandbox-html",
+    "entry": "index.html"
+  },
+  "permissions": [
+    "calendar.read",
+    "calendar.write",
+    "ui.notification"
+  ],
+  "window": {
+    "width": 960,
+    "height": 760,
+    "minWidth": 640,
+    "minHeight": 420
+  }
+}

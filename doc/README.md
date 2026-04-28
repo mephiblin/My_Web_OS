@@ -53,6 +53,7 @@
 ## Operations
 - `[ACTIVE]` `doc/operations/completed-backlog-log.md`
 - `[ACTIVE]` `doc/operations/local-run-guide.md`
+- `[ACTIVE]` `doc/operations/calendar-docker-porting-readiness.md`
 - `[ACTIVE]` `doc/operations/remote-access-hardening-guide.md`
 - `[ACTIVE]` `doc/operations/verification-gate-guide.md`
 - `[ACTIVE]` `doc/operations/package-troubleshooting.md`
@@ -73,6 +74,7 @@
 - `[ACTIVE]` `doc/reference/architecture-api-reference.md`
 - `[ACTIVE]` `doc/reference/addon-development-guide.md`
 - `[ACTIVE]` `doc/reference/app-development-model.md`
+- `[ACTIVE]` `doc/reference/core-system-core-app-addon-boundaries.md`
 - `[ACTIVE]` `doc/reference/package-ecosystem-guide.md`
 - `[ACTIVE]` `doc/reference/community-registry-and-presets.md`
 - `[ACTIVE]` `doc/reference/app-ownership-matrix.md`

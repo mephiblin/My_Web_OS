@@ -1,0 +1,1215 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Calendar Addon</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #101422;
+        --muted: #697086;
+        --line: rgba(118, 127, 154, 0.22);
+        --panel: rgba(255, 255, 255, 0.62);
+        --panel-strong: rgba(255, 255, 255, 0.82);
+        --shadow: 0 26px 80px rgba(42, 50, 88, 0.24), 0 8px 24px rgba(42, 50, 88, 0.14);
+        --violet: #8b5cf6;
+        --violet-dark: #6d45de;
+        --blue: #4169e1;
+        --red: #c7362f;
+        --orange: #f28b24;
+        --green: #25a979;
+        --cell-min: 82px;
+        font-family: "Aptos Display", "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        min-height: 100%;
+        color: var(--ink);
+      }
+
+      body {
+        background:
+          radial-gradient(circle at 78% 16%, rgba(255, 242, 231, 0.96) 0 18%, rgba(255, 242, 231, 0) 44%),
+          radial-gradient(circle at 16% 10%, rgba(205, 218, 255, 0.95) 0 21%, rgba(205, 218, 255, 0) 48%),
+          linear-gradient(140deg, #c9d3f2 0%, #f5f1fb 45%, #ffe9df 100%);
+        overflow-x: hidden;
+      }
+
+      body::before,
+      body::after {
+        content: "";
+        position: fixed;
+        inset: auto -8vw -18vh -8vw;
+        height: 42vh;
+        pointer-events: none;
+        background:
+          radial-gradient(ellipse at 22% 40%, rgba(85, 96, 145, 0.34) 0 30%, transparent 61%),
+          radial-gradient(ellipse at 78% 48%, rgba(126, 132, 181, 0.24) 0 34%, transparent 65%);
+        filter: blur(14px);
+        transform: skewY(-7deg);
+      }
+
+      body::after {
+        inset: -10vh 0 auto 0;
+        height: 28vh;
+        background: radial-gradient(circle at 18% 30%, rgba(255, 255, 255, 0.58), transparent 32%);
+        filter: blur(22px);
+        transform: none;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      .app-shell {
+        position: relative;
+        z-index: 1;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: clamp(14px, 4vw, 42px);
+      }
+
+      .calendar-card {
+        width: min(1168px, 100%);
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 282px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.74);
+        border-radius: 24px;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.44));
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(24px) saturate(1.18);
+      }
+
+      .main-panel {
+        padding: clamp(18px, 3vw, 30px);
+      }
+
+      .agenda-panel {
+        display: grid;
+        align-content: start;
+        gap: 30px;
+        padding: clamp(20px, 3vw, 34px) clamp(18px, 3vw, 28px);
+        border-left: 1px solid rgba(126, 132, 154, 0.16);
+        background: rgba(255, 255, 255, 0.38);
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 18px;
+        margin-bottom: 28px;
+      }
+
+      .nav-group {
+        display: inline-grid;
+        grid-template-columns: repeat(2, 54px);
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid rgba(118, 127, 154, 0.16);
+        background: rgba(255, 255, 255, 0.52);
+        box-shadow: 0 8px 18px rgba(66, 75, 112, 0.1);
+      }
+
+      .nav-btn,
+      .soft-btn,
+      .primary-btn,
+      .ghost-btn,
+      .danger-btn {
+        min-height: 46px;
+        border-radius: 12px;
+        transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+      }
+
+      .nav-btn {
+        display: grid;
+        place-items: center;
+        border-radius: 0;
+        background: rgba(255, 255, 255, 0.46);
+        color: #151927;
+        font-size: 28px;
+        line-height: 1;
+      }
+
+      .nav-btn + .nav-btn {
+        border-left: 1px solid rgba(118, 127, 154, 0.14);
+      }
+
+      .month-title {
+        margin: 0;
+        font-size: clamp(24px, 4vw, 32px);
+        font-weight: 800;
+        letter-spacing: -0.04em;
+      }
+
+      .toolbar-actions {
+        display: flex;
+        gap: 14px;
+        justify-content: end;
+      }
+
+      .soft-btn,
+      .ghost-btn {
+        padding: 0 22px;
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.62);
+        box-shadow: 0 8px 18px rgba(66, 75, 112, 0.1);
+      }
+
+      .primary-btn {
+        padding: 0 23px;
+        color: white;
+        background: linear-gradient(135deg, #9c64ff, #7a46e8);
+        box-shadow: 0 12px 22px rgba(128, 79, 231, 0.28);
+      }
+
+      .ghost-btn {
+        min-height: 40px;
+        padding: 0 16px;
+      }
+
+      .danger-btn {
+        min-height: 40px;
+        padding: 0 16px;
+        color: #9f2822;
+        background: rgba(255, 240, 238, 0.88);
+      }
+
+      .nav-btn:hover,
+      .soft-btn:hover,
+      .primary-btn:hover,
+      .ghost-btn:hover,
+      .danger-btn:hover {
+        transform: translateY(-1px);
+      }
+
+      .status-row {
+        display: grid;
+        min-height: 24px;
+        margin: -14px 0 14px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .status-row.error {
+        color: #a8221d;
+      }
+
+      .weekdays,
+      .month-grid {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+      }
+
+      .weekdays {
+        margin-bottom: 12px;
+      }
+
+      .weekday {
+        text-align: center;
+        color: #555b6f;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .weekday.sun,
+      .day-cell.sun .day-number {
+        color: var(--red);
+      }
+
+      .weekday.sat,
+      .day-cell.sat .day-number {
+        color: var(--blue);
+      }
+
+      .month-grid {
+        border: 1px solid var(--line);
+        border-radius: 2px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.2);
+      }
+
+      .day-cell {
+        position: relative;
+        min-height: var(--cell-min);
+        display: grid;
+        place-items: start center;
+        gap: 6px;
+        padding: 15px 6px 10px;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .day-cell:nth-child(7n) {
+        border-right: 0;
+      }
+
+      .day-cell:nth-last-child(-n + 7) {
+        border-bottom: 0;
+      }
+
+      .day-cell.outside {
+        color: rgba(105, 112, 134, 0.4);
+      }
+
+      .day-cell.outside .day-number {
+        color: rgba(105, 112, 134, 0.36);
+      }
+
+      .day-hit {
+        position: absolute;
+        inset: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+      }
+
+      .day-hit:focus-visible {
+        outline: 2px solid rgba(139, 92, 246, 0.72);
+        outline-offset: -2px;
+      }
+
+      .day-number {
+        position: relative;
+        z-index: 1;
+        min-width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        color: #101422;
+        font-size: clamp(18px, 2vw, 22px);
+        font-weight: 650;
+        letter-spacing: -0.03em;
+      }
+
+      .today .day-number {
+        color: white !important;
+        background: linear-gradient(135deg, #9d64ff, #7b4ae6);
+        box-shadow: 0 8px 18px rgba(121, 74, 214, 0.36);
+      }
+
+      .event-dots {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 5px;
+        max-width: 64px;
+      }
+
+      .event-dot {
+        width: 9px;
+        height: 9px;
+        min-height: 9px;
+        padding: 0;
+        border-radius: 999px;
+        background: var(--dot, var(--violet));
+        box-shadow: 0 2px 7px rgba(74, 84, 122, 0.18);
+      }
+
+      .event-dot.read-only {
+        width: 18px;
+      }
+
+      .dot-more {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 9px;
+      }
+
+      .agenda-section {
+        display: grid;
+        gap: 18px;
+      }
+
+      .agenda-title {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 0;
+        font-size: 16px;
+        font-weight: 800;
+      }
+
+      .agenda-title::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #a26cf1;
+      }
+
+      .agenda-list {
+        display: grid;
+        gap: 16px;
+      }
+
+      .agenda-divider {
+        height: 1px;
+        background: rgba(118, 127, 154, 0.2);
+      }
+
+      .agenda-item {
+        display: grid;
+        grid-template-columns: 12px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        color: var(--ink);
+        background: transparent;
+        text-align: left;
+      }
+
+      .agenda-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--dot, var(--violet));
+      }
+
+      .agenda-main {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .agenda-name {
+        overflow: hidden;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .source-badge,
+      .modal-source {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        border: 1px solid rgba(65, 105, 225, 0.2);
+        border-radius: 999px;
+        padding: 3px 8px;
+        color: #3554ad;
+        background: rgba(230, 237, 255, 0.74);
+        font-size: 10px;
+        font-weight: 900;
+        line-height: 1;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .agenda-time {
+        color: #656b7e;
+        font-weight: 600;
+      }
+
+      .empty-state {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        place-items: center;
+        padding: 18px;
+        background: rgba(35, 42, 70, 0.24);
+        backdrop-filter: blur(8px);
+      }
+
+      .modal-backdrop.open {
+        display: grid;
+      }
+
+      .modal {
+        width: min(430px, 100%);
+        display: grid;
+        gap: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.74);
+        border-radius: 22px;
+        padding: 22px;
+        background: var(--panel-strong);
+        box-shadow: 0 24px 70px rgba(42, 50, 88, 0.28);
+      }
+
+      .modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .modal-title {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: -0.02em;
+      }
+
+      .modal-source,
+      .readonly-hint {
+        display: none;
+      }
+
+      .modal-source.visible {
+        display: inline-flex;
+      }
+
+      .readonly-hint.visible {
+        display: block;
+        border: 1px solid rgba(65, 105, 225, 0.18);
+        border-radius: 14px;
+        padding: 10px 12px;
+        color: #3554ad;
+        background: rgba(230, 237, 255, 0.58);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.45;
+      }
+
+      .close-btn {
+        width: 38px;
+        height: 38px;
+        border-radius: 999px;
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.62);
+      }
+
+      .field-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      label {
+        display: grid;
+        gap: 7px;
+        color: #52596d;
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid rgba(118, 127, 154, 0.24);
+        border-radius: 13px;
+        padding: 11px 12px;
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.72);
+        outline: none;
+      }
+
+      input:disabled,
+      textarea:disabled {
+        opacity: 0.72;
+        cursor: not-allowed;
+      }
+
+      textarea {
+        min-height: 86px;
+        resize: vertical;
+      }
+
+      input:focus,
+      textarea:focus {
+        border-color: rgba(139, 92, 246, 0.65);
+        box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.14);
+      }
+
+      .two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: #52596d;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .checkbox-row input {
+        width: auto;
+      }
+
+      .modal-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: space-between;
+      }
+
+      .action-right {
+        display: flex;
+        gap: 10px;
+        margin-left: auto;
+      }
+
+      @media (max-width: 860px) {
+        :root {
+          --cell-min: 70px;
+        }
+
+        .calendar-card {
+          grid-template-columns: 1fr;
+        }
+
+        .agenda-panel {
+          border-left: 0;
+          border-top: 1px solid rgba(126, 132, 154, 0.16);
+        }
+      }
+
+      @media (max-width: 620px) {
+        .app-shell {
+          align-items: start;
+          padding: 10px;
+        }
+
+        .calendar-card {
+          border-radius: 18px;
+        }
+
+        .toolbar {
+          grid-template-columns: 1fr;
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+
+        .month-title {
+          order: -1;
+        }
+
+        .toolbar-actions {
+          justify-content: stretch;
+        }
+
+        .toolbar-actions > button {
+          flex: 1;
+        }
+
+        .nav-group {
+          width: 112px;
+        }
+
+        .weekday {
+          font-size: 12px;
+        }
+
+        .day-cell {
+          min-height: 58px;
+          padding: 9px 3px 7px;
+        }
+
+        .day-number {
+          min-width: 28px;
+          height: 28px;
+          font-size: 16px;
+        }
+
+        .two-col {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="calendar-card" aria-label="Calendar widget">
+        <div class="main-panel">
+          <header class="toolbar">
+            <div class="nav-group" aria-label="Month navigation">
+              <button id="prevBtn" class="nav-btn" type="button" aria-label="Previous month">&lt;</button>
+              <button id="nextBtn" class="nav-btn" type="button" aria-label="Next month">&gt;</button>
+            </div>
+            <h1 id="monthLabel" class="month-title">Calendar</h1>
+            <div class="toolbar-actions">
+              <button id="todayBtn" class="soft-btn" type="button">Today</button>
+              <button id="addBtn" class="primary-btn" type="button">+ Event</button>
+            </div>
+          </header>
+          <div id="status" class="status-row" role="status" aria-live="polite">Loading calendar...</div>
+          <div class="weekdays" aria-hidden="true">
+            <div class="weekday sun">Sun</div>
+            <div class="weekday">Mon</div>
+            <div class="weekday">Tue</div>
+            <div class="weekday">Wed</div>
+            <div class="weekday">Thu</div>
+            <div class="weekday">Fri</div>
+            <div class="weekday sat">Sat</div>
+          </div>
+          <div id="monthGrid" class="month-grid" aria-label="Month days"></div>
+        </div>
+        <aside class="agenda-panel" aria-label="Agenda">
+          <section class="agenda-section">
+            <h2 class="agenda-title">Today Events</h2>
+            <div id="todayEvents" class="agenda-list"></div>
+          </section>
+          <div class="agenda-divider" aria-hidden="true"></div>
+          <section class="agenda-section">
+            <h2 class="agenda-title">Upcoming Events</h2>
+            <div id="upcomingEvents" class="agenda-list"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <div id="modalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <form id="eventForm" class="modal">
+        <div class="modal-head">
+          <h2 id="modalTitle" class="modal-title">New Event</h2>
+          <button id="closeModalBtn" class="close-btn" type="button" aria-label="Close">x</button>
+        </div>
+        <div id="modalSource" class="modal-source"></div>
+        <div id="readOnlyHint" class="readonly-hint">This event comes from a read-only calendar source. You can view it here, but edits must happen in the source calendar or provider settings.</div>
+        <div class="field-grid">
+          <label>
+            Title
+            <input id="titleInput" autocomplete="off" maxlength="200" placeholder="Team standup" required />
+          </label>
+          <div class="two-col">
+            <label>
+              Start
+              <input id="startInput" type="datetime-local" required />
+            </label>
+            <label>
+              End
+              <input id="endInput" type="datetime-local" />
+            </label>
+          </div>
+          <label>
+            Color
+            <input id="colorInput" type="color" value="#8b5cf6" />
+          </label>
+          <label class="checkbox-row">
+            <input id="allDayInput" type="checkbox" />
+            <span>All day</span>
+          </label>
+          <label>
+            Note
+            <textarea id="noteInput" maxlength="4000" placeholder="Optional note"></textarea>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button id="deleteBtn" class="danger-btn" type="button">Delete</button>
+          <div class="action-right">
+            <button id="cancelBtn" class="ghost-btn" type="button">Cancel</button>
+            <button id="saveBtn" class="primary-btn" type="submit">Save</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <script src="/api/sandbox/sdk.js" crossorigin="anonymous"></script>
+    <script>
+      const COLOR_FALLBACKS = ['#8b5cf6', '#4f8df7', '#f28b24', '#25a979', '#d95d5d'];
+      const state = {
+        viewedDate: new Date(),
+        events: [],
+        eventsById: new Map(),
+        editingId: null,
+        loading: false
+      };
+
+      const els = {
+        monthLabel: document.getElementById('monthLabel'),
+        monthGrid: document.getElementById('monthGrid'),
+        todayEvents: document.getElementById('todayEvents'),
+        upcomingEvents: document.getElementById('upcomingEvents'),
+        status: document.getElementById('status'),
+        prevBtn: document.getElementById('prevBtn'),
+        nextBtn: document.getElementById('nextBtn'),
+        todayBtn: document.getElementById('todayBtn'),
+        addBtn: document.getElementById('addBtn'),
+        modalBackdrop: document.getElementById('modalBackdrop'),
+        eventForm: document.getElementById('eventForm'),
+        modalTitle: document.getElementById('modalTitle'),
+        modalSource: document.getElementById('modalSource'),
+        readOnlyHint: document.getElementById('readOnlyHint'),
+        closeModalBtn: document.getElementById('closeModalBtn'),
+        cancelBtn: document.getElementById('cancelBtn'),
+        deleteBtn: document.getElementById('deleteBtn'),
+        saveBtn: document.getElementById('saveBtn'),
+        titleInput: document.getElementById('titleInput'),
+        startInput: document.getElementById('startInput'),
+        endInput: document.getElementById('endInput'),
+        colorInput: document.getElementById('colorInput'),
+        allDayInput: document.getElementById('allDayInput'),
+        noteInput: document.getElementById('noteInput')
+      };
+
+      function pad(value) {
+        return String(value).padStart(2, '0');
+      }
+
+      function dateKey(date) {
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+      }
+
+      function parseDate(value) {
+        const date = new Date(value);
+        return Number.isFinite(date.getTime()) ? date : null;
+      }
+
+      function toInputValue(value) {
+        const date = value instanceof Date ? value : parseDate(value);
+        if (!date) return '';
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+      }
+
+      function inputToIso(value) {
+        if (!value) return null;
+        const date = new Date(value);
+        return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+      }
+
+      function startOfToday() {
+        const now = new Date();
+        return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      }
+
+      function sameDay(a, b) {
+        return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+      }
+
+      function normalizeColor(event, index) {
+        const color = event && typeof event.color === 'string' ? event.color.trim() : '';
+        return color || COLOR_FALLBACKS[index % COLOR_FALLBACKS.length];
+      }
+
+      function isReadOnlyEvent(event) {
+        if (!event) return false;
+        if (event.readOnly === true) return true;
+        if (event.sourceType && event.sourceType !== 'local') return true;
+        return Boolean(event.source && event.source !== 'local');
+      }
+
+      function sourceLabel(event) {
+        if (!event) return 'Local';
+        if (event.sourceType === 'holiday') return 'Holiday';
+        if (event.provider) return event.provider;
+        return event.sourceType || event.source || 'Local';
+      }
+
+      function providerStatusSummary(sources) {
+        if (!sources || typeof sources !== 'object') return '';
+        const values = Object.values(sources).filter(Boolean);
+        const warnings = values.filter((source) => source.status && !['fresh', 'cache', 'ok'].includes(source.status));
+        if (warnings.length) return `${warnings.length} source warning${warnings.length === 1 ? '' : 's'}.`;
+        const providerCount = values.filter((source) => source.type && source.type !== 'local').length;
+        return providerCount ? `${providerCount} provider source${providerCount === 1 ? '' : 's'} merged.` : '';
+      }
+
+      function setFormReadOnly(isReadOnly) {
+        [els.titleInput, els.startInput, els.endInput, els.colorInput, els.allDayInput, els.noteInput].forEach((input) => {
+          input.disabled = isReadOnly;
+        });
+        els.saveBtn.style.display = isReadOnly ? 'none' : '';
+        els.readOnlyHint.classList.toggle('visible', isReadOnly);
+      }
+
+      function setModalSource(event) {
+        const showSource = event && (event.source || event.sourceType || event.provider);
+        els.modalSource.textContent = showSource ? `${sourceLabel(event)} source` : '';
+        els.modalSource.classList.toggle('visible', Boolean(showSource));
+      }
+
+      function eventDate(event) {
+        return parseDate(event.startAt) || new Date(0);
+      }
+
+      function eventTimeLabel(event) {
+        if (event.allDay) return 'All day';
+        const date = eventDate(event);
+        return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      }
+
+      function upcomingDateLabel(event) {
+        const date = eventDate(event);
+        return date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', weekday: 'short' });
+      }
+
+      function setStatus(message, isError) {
+        els.status.textContent = message || '';
+        els.status.className = isError ? 'status-row error' : 'status-row';
+      }
+
+      function setLoading(isLoading) {
+        state.loading = isLoading;
+        [els.prevBtn, els.nextBtn, els.todayBtn, els.addBtn].forEach((button) => {
+          button.disabled = isLoading;
+        });
+        const editingEvent = state.editingId ? state.eventsById.get(state.editingId) : null;
+        const editingReadOnly = isReadOnlyEvent(editingEvent);
+        els.saveBtn.disabled = isLoading || editingReadOnly;
+        els.deleteBtn.disabled = isLoading || editingReadOnly;
+      }
+
+      function friendlyError(err) {
+        const code = err && err.code ? `${err.code}: ` : '';
+        return `${code}${(err && err.message) || String(err)}`;
+      }
+
+      async function notify(message) {
+        try {
+          if (window.WebOS && window.WebOS.ui && window.WebOS.ui.notification) {
+            await window.WebOS.ui.notification({ title: 'Calendar Addon', message });
+          }
+        } catch (_err) {
+          // Notifications are helpful but not required for the calendar flow.
+        }
+      }
+
+      function buildMonthCells() {
+        const year = state.viewedDate.getFullYear();
+        const month = state.viewedDate.getMonth();
+        const first = new Date(year, month, 1);
+        const start = new Date(year, month, 1 - first.getDay());
+        return Array.from({ length: 42 }, (_, index) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + index));
+      }
+
+      function groupedEvents() {
+        const grouped = new Map();
+        state.events.forEach((event, index) => {
+          const date = eventDate(event);
+          const key = dateKey(date);
+          const items = grouped.get(key) || [];
+          items.push({ ...event, _color: normalizeColor(event, index) });
+          grouped.set(key, items);
+        });
+        grouped.forEach((items) => items.sort((a, b) => eventDate(a) - eventDate(b)));
+        return grouped;
+      }
+
+      function renderMonth() {
+        const year = state.viewedDate.getFullYear();
+        const month = state.viewedDate.getMonth();
+        const today = new Date();
+        const grouped = groupedEvents();
+
+        els.monthLabel.textContent = state.viewedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+        els.monthGrid.innerHTML = '';
+
+        buildMonthCells().forEach((date) => {
+          const key = dateKey(date);
+          const dayEvents = grouped.get(key) || [];
+          const cell = document.createElement('div');
+          const hit = document.createElement('button');
+          const number = document.createElement('div');
+          const dots = document.createElement('div');
+          const classes = ['day-cell'];
+
+          if (date.getMonth() !== month) classes.push('outside');
+          if (date.getDay() === 0) classes.push('sun');
+          if (date.getDay() === 6) classes.push('sat');
+          if (sameDay(date, today)) classes.push('today');
+
+          cell.className = classes.join(' ');
+          hit.className = 'day-hit';
+          hit.type = 'button';
+          hit.setAttribute('aria-label', `Add event on ${date.toLocaleDateString('en-US')}`);
+          hit.addEventListener('click', () => openCreateModal(date));
+
+          number.className = 'day-number';
+          number.textContent = String(date.getDate());
+          dots.className = 'event-dots';
+
+          dayEvents.slice(0, 4).forEach((event) => {
+            const dot = document.createElement('button');
+            const readOnly = isReadOnlyEvent(event);
+            dot.className = readOnly ? 'event-dot read-only' : 'event-dot';
+            dot.type = 'button';
+            dot.style.setProperty('--dot', event._color);
+            dot.setAttribute('aria-label', `${readOnly ? 'View' : 'Edit'} ${event.title || 'event'}`);
+            dot.title = `${event.title || 'Event'}${readOnly ? ` - ${sourceLabel(event)} source` : ''}`;
+            dot.addEventListener('click', (evt) => {
+              evt.stopPropagation();
+              openEditModal(event);
+            });
+            dots.appendChild(dot);
+          });
+
+          if (dayEvents.length > 4) {
+            const more = document.createElement('span');
+            more.className = 'dot-more';
+            more.textContent = `+${dayEvents.length - 4}`;
+            dots.appendChild(more);
+          }
+
+          cell.appendChild(hit);
+          cell.appendChild(number);
+          cell.appendChild(dots);
+          els.monthGrid.appendChild(cell);
+        });
+      }
+
+      function agendaButton(event, index, trailingText) {
+        const button = document.createElement('button');
+        const dot = document.createElement('span');
+        const main = document.createElement('span');
+        const name = document.createElement('span');
+        const time = document.createElement('span');
+        const readOnly = isReadOnlyEvent(event);
+
+        button.className = 'agenda-item';
+        button.type = 'button';
+        button.title = readOnly ? `${sourceLabel(event)} source event` : 'Local editable event';
+        button.addEventListener('click', () => openEditModal(event));
+        dot.className = 'agenda-dot';
+        dot.style.setProperty('--dot', normalizeColor(event, index));
+        main.className = 'agenda-main';
+        name.className = 'agenda-name';
+        name.textContent = event.title || 'Untitled event';
+        time.className = 'agenda-time';
+        time.textContent = trailingText;
+
+        main.appendChild(name);
+        if (readOnly) {
+          const badge = document.createElement('span');
+          badge.className = 'source-badge';
+          badge.textContent = sourceLabel(event);
+          main.appendChild(badge);
+        }
+
+        button.appendChild(dot);
+        button.appendChild(main);
+        button.appendChild(time);
+        return button;
+      }
+
+      function renderAgenda() {
+        const today = startOfToday();
+        const todayKey = dateKey(today);
+        const sorted = [...state.events].sort((a, b) => eventDate(a) - eventDate(b));
+        const todayItems = sorted.filter((event) => dateKey(eventDate(event)) === todayKey);
+        const upcomingItems = sorted.filter((event) => eventDate(event) >= today && dateKey(eventDate(event)) !== todayKey).slice(0, 5);
+
+        els.todayEvents.innerHTML = '';
+        els.upcomingEvents.innerHTML = '';
+
+        if (todayItems.length) {
+          todayItems.forEach((event, index) => els.todayEvents.appendChild(agendaButton(event, index, eventTimeLabel(event))));
+        } else {
+          els.todayEvents.innerHTML = '<div class="empty-state">No events scheduled for today.</div>';
+        }
+
+        if (upcomingItems.length) {
+          upcomingItems.forEach((event, index) => els.upcomingEvents.appendChild(agendaButton(event, index, upcomingDateLabel(event))));
+        } else {
+          els.upcomingEvents.innerHTML = '<div class="empty-state">No upcoming events in this month.</div>';
+        }
+      }
+
+      function render() {
+        state.eventsById.clear();
+        state.events.forEach((event) => state.eventsById.set(event.id, event));
+        renderMonth();
+        renderAgenda();
+      }
+
+      async function refreshMonth() {
+        setLoading(true);
+        setStatus('Loading calendar...');
+        try {
+          const year = state.viewedDate.getFullYear();
+          const month = state.viewedDate.getMonth() + 1;
+          const result = await window.WebOS.calendar.month({ year, month });
+          state.events = Array.isArray(result && result.data) ? result.data : [];
+          render();
+          const sourceNote = providerStatusSummary(result && result.sources);
+          setStatus(`${state.events.length} event${state.events.length === 1 ? '' : 's'} loaded for this month.${sourceNote ? ` ${sourceNote}` : ''}`);
+        } catch (err) {
+          state.events = [];
+          render();
+          setStatus(friendlyError(err), true);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function resetForm() {
+        els.eventForm.reset();
+        els.colorInput.value = '#8b5cf6';
+        state.editingId = null;
+        setFormReadOnly(false);
+        setModalSource(null);
+        els.deleteBtn.style.display = '';
+      }
+
+      function openModal() {
+        els.modalBackdrop.classList.add('open');
+        requestAnimationFrame(() => els.titleInput.focus());
+      }
+
+      function closeModal() {
+        els.modalBackdrop.classList.remove('open');
+        resetForm();
+      }
+
+      function defaultStartFor(date) {
+        const base = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 9, 0);
+        return toInputValue(base);
+      }
+
+      function openCreateModal(date) {
+        resetForm();
+        const selectedDate = date instanceof Date ? date : new Date();
+        els.modalTitle.textContent = 'New Event';
+        els.startInput.value = defaultStartFor(selectedDate);
+        els.deleteBtn.style.display = 'none';
+        openModal();
+      }
+
+      function openEditModal(event) {
+        if (!event || !event.id) return;
+        const readOnly = isReadOnlyEvent(event);
+        state.editingId = event.id;
+        els.modalTitle.textContent = readOnly ? 'View Event' : 'Edit Event';
+        els.titleInput.value = event.title || '';
+        els.startInput.value = toInputValue(event.startAt);
+        els.endInput.value = toInputValue(event.endAt);
+        els.colorInput.value = normalizeColor(event, 0);
+        els.allDayInput.checked = Boolean(event.allDay);
+        els.noteInput.value = event.note || '';
+        setModalSource(event);
+        setFormReadOnly(readOnly);
+        els.deleteBtn.style.display = readOnly ? 'none' : '';
+        openModal();
+      }
+
+      function payloadFromForm() {
+        const title = els.titleInput.value.trim();
+        const startAt = inputToIso(els.startInput.value);
+        const endAt = inputToIso(els.endInput.value);
+        if (!title) throw new Error('Title is required.');
+        if (!startAt) throw new Error('Start date is required.');
+        if (endAt && endAt < startAt) throw new Error('End date must be after start date.');
+        return {
+          title,
+          startAt,
+          endAt: endAt || null,
+          allDay: Boolean(els.allDayInput.checked),
+          color: els.colorInput.value || '#8b5cf6',
+          note: els.noteInput.value.trim() || null
+        };
+      }
+
+      async function saveEvent(event) {
+        event.preventDefault();
+        const editingEvent = state.editingId ? state.eventsById.get(state.editingId) : null;
+        if (isReadOnlyEvent(editingEvent)) {
+          setStatus('Read-only source events cannot be edited from this addon.', true);
+          return;
+        }
+        setLoading(true);
+        setStatus(state.editingId ? 'Updating event...' : 'Creating event...');
+        try {
+          const payload = payloadFromForm();
+          if (state.editingId) {
+            await window.WebOS.calendar.update(state.editingId, payload);
+            await notify('Event updated.');
+          } else {
+            await window.WebOS.calendar.create(payload);
+            await notify('Event created.');
+          }
+          closeModal();
+          await refreshMonth();
+        } catch (err) {
+          setStatus(friendlyError(err), true);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      async function deleteEvent() {
+        if (!state.editingId) return;
+        const editingEvent = state.eventsById.get(state.editingId);
+        if (isReadOnlyEvent(editingEvent)) {
+          setStatus('Read-only source events cannot be deleted from this addon.', true);
+          return;
+        }
+        setLoading(true);
+        setStatus('Deleting event...');
+        try {
+          await window.WebOS.calendar.remove(state.editingId);
+          await notify('Event deleted.');
+          closeModal();
+          await refreshMonth();
+        } catch (err) {
+          setStatus(friendlyError(err), true);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function shiftMonth(delta) {
+        state.viewedDate = new Date(state.viewedDate.getFullYear(), state.viewedDate.getMonth() + delta, 1);
+        refreshMonth();
+      }
+
+      function bindEvents() {
+        els.prevBtn.addEventListener('click', () => shiftMonth(-1));
+        els.nextBtn.addEventListener('click', () => shiftMonth(1));
+        els.todayBtn.addEventListener('click', () => {
+          state.viewedDate = new Date();
+          refreshMonth();
+        });
+        els.addBtn.addEventListener('click', () => openCreateModal(new Date(state.viewedDate.getFullYear(), state.viewedDate.getMonth(), 1)));
+        els.eventForm.addEventListener('submit', saveEvent);
+        els.deleteBtn.addEventListener('click', deleteEvent);
+        els.closeModalBtn.addEventListener('click', closeModal);
+        els.cancelBtn.addEventListener('click', closeModal);
+        els.modalBackdrop.addEventListener('click', (event) => {
+          if (event.target === els.modalBackdrop) closeModal();
+        });
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && els.modalBackdrop.classList.contains('open')) closeModal();
+        });
+      }
+
+      async function boot() {
+        try {
+          await window.WebOS.ready();
+          bindEvents();
+          await refreshMonth();
+        } catch (err) {
+          setStatus(friendlyError(err), true);
+        }
+      }
+
+      boot();
+    </script>
+  </body>
+</html>

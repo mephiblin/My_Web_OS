@@ -12,6 +12,8 @@ const languagePackService = require('../services/languagePackService');
 const { APP_API_POLICY, checkCompatibility } = require('../services/appApiPolicy');
 const storageService = require('../services/storageService');
 const stateStore = require('../services/stateStore');
+const calendarHolidayService = require('../services/calendarHolidayService');
+const calendarGoogleService = require('../services/calendarGoogleService');
 const serverConfig = require('../config/serverConfig');
 const {
   resolveSafePath,
@@ -23,7 +25,6 @@ const inventoryPaths = require('../utils/inventoryPaths');
 const mediaLibraryPaths = require('../utils/mediaLibraryPaths');
 
 const router = express.Router();
-router.use(auth);
 
 const OVERVIEW_CACHE_TTL_MS = 1500;
 const OVERVIEW_STALE_TTL_MS = 10000;
@@ -200,6 +201,63 @@ function sendCalendarError(res, err) {
   });
 }
 
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sendGoogleCalendarCallbackPage(res, result) {
+  const success = result?.success === true;
+  const title = escapeHtml(success ? 'Google Calendar connected' : 'Google Calendar connection failed');
+  const message = escapeHtml(success
+    ? 'You can close this window and return to My Web OS.'
+    : result?.message || 'Google Calendar OAuth failed.');
+  return res
+    .status(success ? 200 : (result?.status || 400))
+    .type('html')
+    .send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>${title}</title>
+    <style>
+      body { font-family: system-ui, sans-serif; min-height: 100vh; display: grid; place-items: center; margin: 0; background: #0f172a; color: #e2e8f0; }
+      main { max-width: 520px; padding: 28px; border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 20px; background: rgba(15, 23, 42, 0.86); }
+      h1 { margin: 0 0 10px; font-size: 22px; }
+      p { margin: 0; color: #94a3b8; line-height: 1.6; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${title}</h1>
+      <p>${message}</p>
+    </main>
+  </body>
+</html>`);
+}
+
+router.get('/calendar/google/auth/callback', async (req, res) => {
+  try {
+    const result = await calendarGoogleService.handleOAuthCallback({
+      code: req.query?.code,
+      state: req.query?.state
+    });
+    return sendGoogleCalendarCallbackPage(res, { success: true, data: result });
+  } catch (err) {
+    return sendGoogleCalendarCallbackPage(res, {
+      success: false,
+      status: err.status || 400,
+      message: err.message || 'Google Calendar OAuth failed.'
+    });
+  }
+});
+
+router.use(auth);
+
 function isIsoDateTime(value) {
   if (typeof value !== 'string' || !value.trim()) return false;
   const timestamp = Date.parse(value);
@@ -314,6 +372,253 @@ function eventOverlapsRange(item, fromTs, toTs) {
   const endTs = endTsRaw == null ? startTs : endTsRaw;
 
   return rangesOverlap(startTs, endTs, fromTs, toTs);
+}
+
+function normalizeCalendarEventForResponse(item, fallbackSource = 'local') {
+  const source = toTrimmedOptionalString(item?.source, 128) || fallbackSource;
+  const sourceType = toTrimmedOptionalString(item?.sourceType, 32) || (source === 'local' ? 'local' : fallbackSource);
+  return {
+    ...item,
+    source,
+    sourceType,
+    readOnly: item?.readOnly === true || sourceType !== 'local',
+    externalId: item?.externalId || null,
+    provider: item?.provider || null,
+    calendarId: item?.calendarId || source
+  };
+}
+
+function parseCalendarSourceFilter(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const selected = value.split(',').map((item) => item.trim()).filter(Boolean);
+  return selected.length ? new Set(selected) : null;
+}
+
+function sourceIsSelected(source, selectedSources) {
+  if (!source || source.enabled === false) return false;
+  if (!selectedSources) return true;
+  return selectedSources.has(source.id) || selectedSources.has(source.type);
+}
+
+function getCalendarSources(state) {
+  return Array.isArray(state?.sources) ? state.sources : [];
+}
+
+function getRequestedHolidayYears(fromTs, toTs) {
+  const now = new Date();
+  if (!Number.isFinite(fromTs) || !Number.isFinite(toTs)) {
+    return [now.getUTCFullYear()];
+  }
+  const fromYear = new Date(fromTs).getUTCFullYear();
+  const toYear = new Date(toTs).getUTCFullYear();
+  const years = [];
+  for (let year = fromYear; year <= toYear && years.length < 10; year += 1) {
+    years.push(year);
+  }
+  return years;
+}
+
+async function collectProviderCalendarEvents({ state, fromTs, toTs, selectedSources }) {
+  const sources = getCalendarSources(state);
+  const providerEvents = [];
+  const providerStatuses = [];
+
+  for (const source of sources) {
+    if (!sourceIsSelected(source, selectedSources)) continue;
+    if (source.type === 'holiday') {
+      const years = getRequestedHolidayYears(fromTs, toTs);
+      for (const year of years) {
+        try {
+          const result = await calendarHolidayService.getHolidayEvents({
+            year,
+            countryCode: source.config?.countryCode || 'KR',
+            provider: source.config?.provider || 'nager',
+            sourceId: source.id,
+            color: source.color
+          });
+          providerEvents.push(...result.data);
+          providerStatuses.push({
+            sourceId: source.id,
+            type: source.type,
+            provider: result.provider,
+            countryCode: result.countryCode,
+            year,
+            cacheState: result.cacheState,
+            lastFetchedAt: result.lastFetchedAt
+          });
+        } catch (err) {
+          providerStatuses.push({
+            sourceId: source.id,
+            type: source.type,
+            year,
+            error: {
+              code: err.code || 'CALENDAR_PROVIDER_FAILED',
+              message: err.message || 'Calendar provider failed.'
+            }
+          });
+        }
+      }
+    } else if (source.type === 'caldav' || source.type === 'google') {
+      if (source.type === 'google') {
+        const status = await calendarGoogleService.getSourceStatus(source.id);
+        providerStatuses.push({
+          sourceId: source.id,
+          type: source.type,
+          syncEnabled: source.config?.syncEnabled === true,
+          status: status.connected ? 'cached' : 'not-connected',
+          lastSyncedAt: status.lastSyncedAt,
+          lastError: status.lastError,
+          backoffUntil: status.backoffUntil
+        });
+      } else {
+        providerStatuses.push({
+          sourceId: source.id,
+          type: source.type,
+          syncEnabled: source.config?.syncEnabled === true,
+          status: 'not-implemented'
+        });
+      }
+    }
+  }
+
+  return {
+    events: providerEvents.filter((item) => eventOverlapsRange(item, fromTs, toTs)),
+    providerStatuses
+  };
+}
+
+async function collectCalendarEventsForRange({ state, fromTs, toTs, selectedSources }) {
+  const sources = getCalendarSources(state);
+  const sourceLookup = new Map(sources.map((source) => [source.id, source]));
+  const storedEvents = Array.isArray(state?.events) ? state.events : [];
+  const selectedStoredEvents = storedEvents
+    .map((item) => normalizeCalendarEventForResponse(item, 'local'))
+    .filter((item) => {
+      const source = sourceLookup.get(item.source) || { id: item.source, type: item.sourceType, enabled: true };
+      return sourceIsSelected(source, selectedSources);
+    })
+    .filter((item) => eventOverlapsRange(item, fromTs, toTs));
+  const providerResult = await collectProviderCalendarEvents({ state, fromTs, toTs, selectedSources });
+  const data = [...selectedStoredEvents, ...providerResult.events]
+    .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt) || String(a.title || '').localeCompare(String(b.title || '')));
+  return {
+    data,
+    providerStatuses: providerResult.providerStatuses
+  };
+}
+
+function normalizeCalendarSourceInput(body = {}, existing = null) {
+  const type = toTrimmedOptionalString(body.type ?? existing?.type, 32);
+  if (!['local', 'holiday', 'caldav', 'google'].includes(type)) {
+    throw createCalendarError(400, 'CALENDAR_SOURCE_TYPE_INVALID', 'source type must be local, holiday, caldav, or google.');
+  }
+  const id = toTrimmedOptionalString(body.id ?? existing?.id, 128) || `${type}-${crypto.randomUUID()}`;
+  const title = toTrimmedOptionalString(body.title ?? existing?.title, 120) || (type === 'holiday' ? 'Public Holidays' : 'Calendar Source');
+  const color = toTrimmedOptionalString(body.color ?? existing?.color, 20) || (type === 'holiday' ? '#ef4444' : '#58a6ff');
+  const rawConfig = body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? body.config : existing?.config || {};
+  const config = {};
+
+  if (type === 'holiday') {
+    config.countryCode = calendarHolidayService.normalizeCountryCode(rawConfig.countryCode || 'KR');
+    config.provider = calendarHolidayService.normalizeProvider(rawConfig.provider || 'nager');
+  } else if (type === 'caldav') {
+    config.serverUrl = toTrimmedOptionalString(rawConfig.serverUrl, 2048);
+    config.username = toTrimmedOptionalString(rawConfig.username, 256);
+    config.calendarUrl = toTrimmedOptionalString(rawConfig.calendarUrl, 2048);
+    config.syncEnabled = rawConfig.syncEnabled === true;
+    config.syncDirection = rawConfig.syncDirection === 'twoWay' ? 'twoWay' : 'readOnly';
+  } else if (type === 'google') {
+    config.calendarId = toTrimmedOptionalString(rawConfig.calendarId, 256) || 'primary';
+    config.syncEnabled = rawConfig.syncEnabled === true;
+    config.syncDirection = rawConfig.syncDirection === 'twoWay' ? 'twoWay' : 'readOnly';
+  }
+
+  return {
+    id,
+    title,
+    type,
+    enabled: body.enabled !== undefined ? body.enabled !== false : existing?.enabled !== false,
+    readOnly: type !== 'local' || body.readOnly === true || existing?.readOnly === true,
+    color,
+    config,
+    lastSyncedAt: existing?.lastSyncedAt || null,
+    lastError: existing?.lastError || null
+  };
+}
+
+async function ensureGoogleSource(state, sourceId = 'google-primary') {
+  const sources = getCalendarSources(state);
+  const existing = sources.find((source) => source.id === sourceId);
+  if (existing) return { source: existing, state };
+  const now = Date.now();
+  const source = normalizeCalendarSourceInput({
+    id: sourceId,
+    title: 'Google Calendar',
+    type: 'google',
+    enabled: true,
+    readOnly: true,
+    color: '#4285f4',
+    config: {
+      calendarId: 'primary',
+      syncEnabled: true,
+      syncDirection: 'readOnly'
+    }
+  });
+  const nextState = await stateStore.writeState('calendar', {
+    ...state,
+    sources: [...sources, source],
+    lastUpdatedAt: now
+  });
+  return { source, state: nextState };
+}
+
+function mergeGoogleSyncEvents(existingEvents, syncResult) {
+  const sourceId = syncResult.sourceId;
+  const current = Array.isArray(existingEvents) ? existingEvents : [];
+  if (syncResult.fullSync) {
+    return [
+      ...current.filter((event) => event.source !== sourceId),
+      ...syncResult.data
+    ];
+  }
+  const removed = new Set(syncResult.removedExternalIds || []);
+  const incoming = new Map((syncResult.data || []).map((event) => [event.externalId, event]));
+  const next = [];
+  for (const event of current) {
+    if (event.source !== sourceId) {
+      next.push(event);
+      continue;
+    }
+    if (removed.has(event.externalId)) continue;
+    if (incoming.has(event.externalId)) {
+      next.push(incoming.get(event.externalId));
+      incoming.delete(event.externalId);
+    } else {
+      next.push(event);
+    }
+  }
+  next.push(...incoming.values());
+  return next;
+}
+
+async function syncGoogleCalendarSource(source, state) {
+  const result = await calendarGoogleService.syncSource(source);
+  const now = Date.now();
+  const sources = getCalendarSources(state);
+  const nextSources = sources.map((item) => (item.id === source.id
+    ? {
+      ...item,
+      lastSyncedAt: result.lastSyncedAt,
+      lastError: null
+    }
+    : item));
+  const nextState = await stateStore.writeState('calendar', {
+    ...state,
+    events: mergeGoogleSyncEvents(state?.events, result),
+    sources: nextSources,
+    lastUpdatedAt: now
+  });
+  return { result, state: nextState };
 }
 
 function createBackupError(status, code, message, details = null) {
@@ -1008,6 +1313,230 @@ router.get('/language-packs/:code', async (req, res) => {
 });
 
 /**
+ * GET /api/system/calendar/sources
+ * List configured calendar sources.
+ */
+router.get('/calendar/sources', async (_req, res) => {
+  try {
+    const state = await stateStore.readState('calendar');
+    return res.json({
+      success: true,
+      data: getCalendarSources(state),
+      total: getCalendarSources(state).length,
+      lastUpdatedAt: state?.lastUpdatedAt || null
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+/**
+ * POST /api/system/calendar/sources
+ * Create one calendar source without accepting secret fields.
+ */
+router.post('/calendar/sources', async (req, res) => {
+  try {
+    const state = await stateStore.readState('calendar');
+    const sources = getCalendarSources(state);
+    const nextSource = normalizeCalendarSourceInput(req.body || {});
+    if (sources.some((source) => source.id === nextSource.id)) {
+      throw createCalendarError(409, 'CALENDAR_SOURCE_EXISTS', 'calendar source already exists.', { id: nextSource.id });
+    }
+    const now = Date.now();
+    const nextState = await stateStore.writeState('calendar', {
+      ...state,
+      sources: [...sources, nextSource],
+      lastUpdatedAt: now
+    });
+    return res.status(201).json({
+      success: true,
+      data: nextSource,
+      lastUpdatedAt: nextState?.lastUpdatedAt || now
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+/**
+ * PUT /api/system/calendar/sources/:id
+ * Update one calendar source without accepting secret fields.
+ */
+router.put('/calendar/sources/:id', async (req, res) => {
+  try {
+    const sourceId = toTrimmedOptionalString(req.params?.id, 128);
+    const state = await stateStore.readState('calendar');
+    const sources = getCalendarSources(state);
+    const existing = sources.find((source) => source.id === sourceId);
+    if (!existing) {
+      throw createCalendarError(404, 'CALENDAR_SOURCE_NOT_FOUND', 'calendar source not found.', { id: sourceId });
+    }
+    if (existing.id === 'local' && req.body?.type && req.body.type !== 'local') {
+      throw createCalendarError(400, 'CALENDAR_SOURCE_LOCAL_LOCKED', 'local source type cannot be changed.');
+    }
+    const nextSource = {
+      ...normalizeCalendarSourceInput({ ...req.body, id: existing.id, type: existing.type }, existing),
+      id: existing.id,
+      type: existing.type
+    };
+    const now = Date.now();
+    const nextState = await stateStore.writeState('calendar', {
+      ...state,
+      sources: sources.map((source) => (source.id === sourceId ? nextSource : source)),
+      lastUpdatedAt: now
+    });
+    return res.json({
+      success: true,
+      data: nextSource,
+      lastUpdatedAt: nextState?.lastUpdatedAt || now
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+/**
+ * DELETE /api/system/calendar/sources/:id
+ * Remove one non-local calendar source.
+ */
+router.delete('/calendar/sources/:id', async (req, res) => {
+  try {
+    const sourceId = toTrimmedOptionalString(req.params?.id, 128);
+    if (sourceId === 'local') {
+      throw createCalendarError(400, 'CALENDAR_SOURCE_LOCAL_LOCKED', 'local source cannot be removed.');
+    }
+    const state = await stateStore.readState('calendar');
+    const sources = getCalendarSources(state);
+    const nextSources = sources.filter((source) => source.id !== sourceId);
+    if (nextSources.length === sources.length) {
+      throw createCalendarError(404, 'CALENDAR_SOURCE_NOT_FOUND', 'calendar source not found.', { id: sourceId });
+    }
+    const now = Date.now();
+    const nextState = await stateStore.writeState('calendar', {
+      ...state,
+      sources: nextSources,
+      lastUpdatedAt: now
+    });
+    return res.json({
+      success: true,
+      data: { removedId: sourceId },
+      lastUpdatedAt: nextState?.lastUpdatedAt || now
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+router.post('/calendar/sources/:id/sync', async (req, res) => {
+  try {
+    const sourceId = toTrimmedOptionalString(req.params?.id, 128);
+    const state = await stateStore.readState('calendar');
+    const source = getCalendarSources(state).find((item) => item.id === sourceId);
+    if (!source) {
+      throw createCalendarError(404, 'CALENDAR_SOURCE_NOT_FOUND', 'calendar source not found.', { id: sourceId });
+    }
+    if (source.type === 'holiday') {
+      const year = Number.parseInt(String(req.body?.year || new Date().getUTCFullYear()), 10);
+      const result = await calendarHolidayService.getHolidayEvents({
+        year,
+        countryCode: source.config?.countryCode || 'KR',
+        provider: source.config?.provider || 'nager',
+        sourceId: source.id,
+        color: source.color
+      });
+      return res.json(result);
+    }
+    if (source.type === 'google') {
+      const { result } = await syncGoogleCalendarSource(source, state);
+      return res.json({
+        success: true,
+        sourceId,
+        type: source.type,
+        total: result.total,
+        fullSync: result.fullSync,
+        lastSyncedAt: result.lastSyncedAt
+      });
+    }
+    throw createCalendarError(501, 'CALENDAR_SYNC_PROVIDER_NOT_IMPLEMENTED', 'Calendar sync provider is registered but not implemented yet.', {
+      sourceId,
+      type: source.type
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+router.get('/calendar/google/config', async (req, res) => {
+  try {
+    const sourceId = toTrimmedOptionalString(req.query?.sourceId, 128) || 'google-primary';
+    const status = await calendarGoogleService.getSourceStatus(sourceId);
+    return res.json({ success: true, data: status });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+router.put('/calendar/google/config', async (req, res) => {
+  try {
+    const data = await calendarGoogleService.updateOAuthClient(req.body || {});
+    return res.json({ success: true, data });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+router.get('/calendar/google/auth/start', async (req, res) => {
+  try {
+    const sourceId = toTrimmedOptionalString(req.query?.sourceId, 128) || 'google-primary';
+    const result = await calendarGoogleService.buildAuthStart(sourceId);
+    if (String(req.query?.format || '').toLowerCase() === 'json') {
+      return res.json({ success: true, data: result });
+    }
+    return res.redirect(result.url);
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+router.post('/calendar/google/disconnect', async (req, res) => {
+  try {
+    const sourceId = toTrimmedOptionalString(req.body?.sourceId, 128) || 'google-primary';
+    const state = await stateStore.readState('calendar');
+    const sources = getCalendarSources(state);
+    const now = Date.now();
+    const nextState = await stateStore.writeState('calendar', {
+      ...state,
+      events: (Array.isArray(state?.events) ? state.events : []).filter((event) => event.source !== sourceId),
+      sources: sources.map((source) => (source.id === sourceId ? { ...source, enabled: false, lastError: null } : source)),
+      lastUpdatedAt: now
+    });
+    const data = await calendarGoogleService.disconnect(sourceId);
+    return res.json({ success: true, data, lastUpdatedAt: nextState?.lastUpdatedAt || now });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+router.post('/calendar/google/sync', async (req, res) => {
+  try {
+    const sourceId = toTrimmedOptionalString(req.body?.sourceId, 128) || 'google-primary';
+    const state = await stateStore.readState('calendar');
+    const { source, state: sourceState } = await ensureGoogleSource(state, sourceId);
+    const { result } = await syncGoogleCalendarSource(source, sourceState);
+    return res.json({
+      success: true,
+      sourceId,
+      type: 'google',
+      total: result.total,
+      fullSync: result.fullSync,
+      lastSyncedAt: result.lastSyncedAt
+    });
+  } catch (err) {
+    return sendCalendarError(res, err);
+  }
+});
+
+/**
  * GET /api/system/calendar/events
  * Read calendar events with optional time range filtering.
  */
@@ -1030,18 +1559,21 @@ router.get('/calendar/events', async (req, res) => {
     }
 
     const state = await stateStore.readState('calendar');
-    const allEvents = Array.isArray(state?.events) ? state.events : [];
     const rangeFromTs = fromTs == null ? Number.MIN_SAFE_INTEGER : fromTs;
     const rangeToTs = toTs == null ? Number.MAX_SAFE_INTEGER : toTs;
-    const filtered = allEvents.filter((item) => eventOverlapsRange(item, rangeFromTs, rangeToTs));
-    const data = filtered
-      .slice()
-      .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt));
+    const selectedSources = parseCalendarSourceFilter(req.query?.sources);
+    const result = await collectCalendarEventsForRange({
+      state,
+      fromTs: rangeFromTs,
+      toTs: rangeToTs,
+      selectedSources
+    });
 
     return res.json({
       success: true,
-      data,
-      total: data.length,
+      data: result.data,
+      total: result.data.length,
+      sources: result.providerStatuses,
       lastUpdatedAt: state?.lastUpdatedAt || null
     });
   } catch (err) {
@@ -1070,21 +1602,25 @@ router.get('/calendar/month', async (req, res) => {
     const toTs = Date.UTC(year, month, 0, 23, 59, 59, 999);
 
     const state = await stateStore.readState('calendar');
-    const allEvents = Array.isArray(state?.events) ? state.events : [];
-    const data = allEvents
-      .filter((item) => eventOverlapsRange(item, fromTs, toTs))
-      .sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt));
+    const selectedSources = parseCalendarSourceFilter(req.query?.sources);
+    const result = await collectCalendarEventsForRange({
+      state,
+      fromTs,
+      toTs,
+      selectedSources
+    });
 
     return res.json({
       success: true,
-      data,
-      total: data.length,
+      data: result.data,
+      total: result.data.length,
       range: {
         from: new Date(fromTs).toISOString(),
         to: new Date(toTs).toISOString(),
         year,
         month
       },
+      sources: result.providerStatuses,
       lastUpdatedAt: state?.lastUpdatedAt || null
     });
   } catch (err) {
@@ -1106,6 +1642,12 @@ router.post('/calendar/events', async (req, res) => {
     const nextEvent = {
       id: crypto.randomUUID(),
       ...input,
+      source: 'local',
+      sourceType: 'local',
+      readOnly: false,
+      externalId: null,
+      provider: null,
+      calendarId: 'local',
       createdAt: now,
       updatedAt: now
     };
@@ -1151,6 +1693,9 @@ router.put('/calendar/events/:id', async (req, res) => {
     if (!existing) {
       throw createCalendarError(404, 'CALENDAR_EVENT_NOT_FOUND', 'calendar event not found.', { id: eventId });
     }
+    if (existing.readOnly === true || (existing.source && existing.source !== 'local')) {
+      throw createCalendarError(409, 'CALENDAR_EVENT_READ_ONLY', 'read-only calendar events cannot be updated.', { id: eventId });
+    }
 
     const candidate = {
       ...existing,
@@ -1174,6 +1719,12 @@ router.put('/calendar/events/:id', async (req, res) => {
       ...candidate,
       startAt: new Date(startTs).toISOString(),
       endAt: endTs != null ? new Date(endTs).toISOString() : null,
+      source: 'local',
+      sourceType: 'local',
+      readOnly: false,
+      externalId: null,
+      provider: null,
+      calendarId: 'local',
       updatedAt: now
     };
 
@@ -1214,6 +1765,10 @@ router.delete('/calendar/events/:id', async (req, res) => {
 
     const state = await stateStore.readState('calendar');
     const events = Array.isArray(state?.events) ? state.events : [];
+    const existing = events.find((item) => String(item?.id || '') === eventId);
+    if (existing && (existing.readOnly === true || (existing.source && existing.source !== 'local'))) {
+      throw createCalendarError(409, 'CALENDAR_EVENT_READ_ONLY', 'read-only calendar events cannot be deleted.', { id: eventId });
+    }
     const nextEvents = events.filter((item) => String(item?.id || '') !== eventId);
     if (nextEvents.length === events.length) {
       throw createCalendarError(404, 'CALENDAR_EVENT_NOT_FOUND', 'calendar event not found.', { id: eventId });

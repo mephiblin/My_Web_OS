@@ -52,6 +52,12 @@ docker compose up -d --build
   - `./media` -> `/workspace/media`
 - 기본 allowed roots는 compose 환경변수(`ALLOWED_ROOTS`)로 `/workspace/data`, `/workspace/media`를 사용.
 
+Calendar provider 메모:
+- 기본 공휴일 source는 `holidays-kr`이며 Nager.Date에서 `KR` 공휴일을 HTTPS로 받아온다.
+- backend 컨테이너는 `date.nager.at:443` outbound 접근이 가능해야 한다.
+- 공휴일 캐시는 `webos_storage` 볼륨 안의 `server/storage/inventory/system/calendar-holidays.json`에 저장된다.
+- 도커 포팅/폐쇄망/프록시 준비는 `doc/operations/calendar-docker-porting-readiness.md`를 기준으로 한다.
+
 컨테이너 로그:
 ```bash
 docker compose logs -f backend

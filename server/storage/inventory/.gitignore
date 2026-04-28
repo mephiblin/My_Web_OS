@@ -18,3 +18,5 @@ system/*
 !apps/editor/**
 !apps/model-viewer/
 !apps/model-viewer/**
+!apps/calendar-addon/
+!apps/calendar-addon/**

@@ -6,6 +6,8 @@ This is the practical framework for building My Web OS addons.
 For the expanded multi-file reference pack, see `doc/Addon_Dev_Ref/README.md`.
 For broader package lifecycle policy, see `doc/reference/package-ecosystem-guide.md`.
 For the core/app split, see `doc/reference/app-development-model.md`.
+For the authoritative boundary between addons and core-owned features, see
+`doc/reference/core-system-core-app-addon-boundaries.md`.
 
 ## 1. Default Addon Shape
 

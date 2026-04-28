@@ -150,6 +150,7 @@ await window.WebOS.appData.write({ path: 'note.txt', content: 'hello' });
 
 Core Calendar 시스템 앱과 동기화되는 공용 일정 API다.
 정식 v1 계약(필드/SDK/오류/권한)은 `CALENDAR_STANDARD_V1.md`를 기준으로 한다.
+source/provider 확장은 `CALENDAR_STANDARD_V2.md`를 기준으로 한다.
 
 Permissions:
 

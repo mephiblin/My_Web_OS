@@ -5,7 +5,15 @@
     fetchCalendarMonth,
     createCalendarEvent,
     updateCalendarEvent,
-    deleteCalendarEvent
+    deleteCalendarEvent,
+    fetchCalendarSources,
+    createCalendarSource,
+    updateCalendarSource,
+    fetchGoogleCalendarConfig,
+    updateGoogleCalendarConfig,
+    fetchGoogleCalendarAuthStart,
+    syncGoogleCalendar,
+    disconnectGoogleCalendar
   } from './api.js';
 
   const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -112,6 +120,20 @@
   let loading = $state(false);
   let saving = $state(false);
   let errorMessage = $state('');
+  let googleMessage = $state('');
+  let googleError = $state('');
+  let googleLoading = $state(false);
+  let googleSourceExists = $state(false);
+  let googleSourceEnabled = $state(false);
+  let googleConnected = $state(false);
+  let googleConfigured = $state(false);
+  let googleLastSyncedAt = $state('');
+  let googleLastError = $state(null);
+  let googleBackoffUntil = $state('');
+  let googleClientIdMasked = $state('');
+  let googleClientId = $state('');
+  let googleClientSecret = $state('');
+  let googleRedirectUri = $state('');
 
   let draftTitle = $state('');
   let draftAllDay = $state(false);
@@ -181,6 +203,136 @@
     }
   }
 
+  function defaultGoogleRedirectUri() {
+    if (typeof window === 'undefined') return '';
+    return `${window.location.origin}/api/system/calendar/google/auth/callback`;
+  }
+
+  async function loadGooglePanel() {
+    googleLoading = true;
+    googleError = '';
+    try {
+      const [configPayload, sourcesPayload] = await Promise.all([
+        fetchGoogleCalendarConfig('google-primary'),
+        fetchCalendarSources()
+      ]);
+      const config = configPayload?.data || {};
+      const sources = Array.isArray(sourcesPayload?.data) ? sourcesPayload.data : [];
+      const googleSource = sources.find((source) => source.id === 'google-primary');
+      googleSourceExists = Boolean(googleSource);
+      googleSourceEnabled = googleSource?.enabled === true;
+      googleConnected = config.connected === true;
+      googleConfigured = config.configured === true;
+      googleLastSyncedAt = config.lastSyncedAt || googleSource?.lastSyncedAt || '';
+      googleLastError = config.lastError || googleSource?.lastError || null;
+      googleBackoffUntil = config.backoffUntil || '';
+      googleRedirectUri = config.redirectUri || googleRedirectUri || defaultGoogleRedirectUri();
+      googleClientIdMasked = config.clientIdMasked || '';
+    } catch (err) {
+      googleError = err?.message || 'Failed to load Google Calendar settings.';
+    } finally {
+      googleLoading = false;
+    }
+  }
+
+  async function ensureGoogleSource(enabled = true) {
+    if (googleSourceExists) {
+      await updateCalendarSource('google-primary', {
+        enabled,
+        config: {
+          calendarId: 'primary',
+          syncEnabled: true,
+          syncDirection: 'readOnly'
+        }
+      });
+      return;
+    }
+    await createCalendarSource({
+      id: 'google-primary',
+      title: 'Google Calendar',
+      type: 'google',
+      enabled,
+      readOnly: true,
+      color: '#4285f4',
+      config: {
+        calendarId: 'primary',
+        syncEnabled: true,
+        syncDirection: 'readOnly'
+      }
+    });
+  }
+
+  async function saveGoogleSettings() {
+    googleLoading = true;
+    googleMessage = '';
+    googleError = '';
+    try {
+      await updateGoogleCalendarConfig({
+        clientId: googleClientId,
+        clientSecret: googleClientSecret,
+        redirectUri: googleRedirectUri || defaultGoogleRedirectUri()
+      });
+      await ensureGoogleSource(true);
+      googleClientSecret = '';
+      googleMessage = 'Google OAuth client settings saved.';
+      await loadGooglePanel();
+    } catch (err) {
+      googleError = err?.message || 'Failed to save Google Calendar settings.';
+    } finally {
+      googleLoading = false;
+    }
+  }
+
+  async function connectGoogleCalendar() {
+    googleLoading = true;
+    googleMessage = '';
+    googleError = '';
+    try {
+      await ensureGoogleSource(true);
+      const payload = await fetchGoogleCalendarAuthStart('google-primary');
+      const url = payload?.data?.url;
+      if (!url) throw new Error('Google authorization URL was not returned.');
+      window.location.href = url;
+    } catch (err) {
+      googleError = err?.message || 'Failed to start Google Calendar OAuth.';
+      googleLoading = false;
+    }
+  }
+
+  async function handleGoogleSync() {
+    googleLoading = true;
+    googleMessage = '';
+    googleError = '';
+    try {
+      const result = await syncGoogleCalendar('google-primary');
+      googleMessage = `Google Calendar synced${Number.isFinite(result?.total) ? ` (${result.total} events)` : ''}.`;
+      await loadGooglePanel();
+      await loadMonth();
+    } catch (err) {
+      googleError = err?.message || 'Failed to sync Google Calendar.';
+    } finally {
+      googleLoading = false;
+    }
+  }
+
+  async function handleGoogleDisconnect() {
+    googleLoading = true;
+    googleMessage = '';
+    googleError = '';
+    try {
+      await disconnectGoogleCalendar('google-primary');
+      googleConnected = false;
+      googleSourceEnabled = false;
+      googleMessage = 'Google Calendar disconnected.';
+      await loadGooglePanel();
+      await loadMonth();
+    } catch (err) {
+      googleError = err?.message || 'Failed to disconnect Google Calendar.';
+    } finally {
+      googleLoading = false;
+    }
+  }
+
   function goPrevMonth() {
     if (viewMonth === 1) {
       viewMonth = 12;
@@ -237,6 +389,7 @@
   }
 
   function startEdit(item) {
+    if (item?.readOnly) return;
     editingId = String(item?.id || '');
     editTitle = String(item?.title || '');
     editAllDay = item?.allDay === true;
@@ -287,6 +440,7 @@
 
   async function removeEvent(item) {
     const eventId = String(item?.id || '');
+    if (item?.readOnly) return;
     if (!eventId) return;
     saving = true;
     errorMessage = '';
@@ -303,6 +457,7 @@
 
   onMount(() => {
     loadMonth();
+    loadGooglePanel();
   });
 </script>
 
@@ -385,6 +540,50 @@
         </button>
       </section>
 
+      <section class="google-panel">
+        <div class="panel-title-row">
+          <div>
+            <h3>Google Calendar</h3>
+            <p>Read-only sync for the primary calendar.</p>
+          </div>
+          <span class:connected={googleConnected}>{googleConnected ? 'Connected' : 'Not connected'}</span>
+        </div>
+        {#if googleMessage}
+          <div class="mini-status success">{googleMessage}</div>
+        {/if}
+        {#if googleError}
+          <div class="mini-status error">{googleError}</div>
+        {/if}
+        <label>
+          <span>OAuth Client ID {googleClientIdMasked ? `(saved: ${googleClientIdMasked})` : ''}</span>
+          <input bind:value={googleClientId} placeholder="Google OAuth client ID" autocomplete="off" />
+        </label>
+        <label>
+          <span>OAuth Client Secret {googleConfigured ? '(saved)' : ''}</span>
+          <input type="password" bind:value={googleClientSecret} placeholder="Leave blank to keep saved secret" autocomplete="new-password" />
+        </label>
+        <label>
+          <span>Redirect URI</span>
+          <input bind:value={googleRedirectUri} placeholder={defaultGoogleRedirectUri()} />
+        </label>
+        <div class="google-actions">
+          <button class="ghost" disabled={googleLoading} onclick={saveGoogleSettings}>Save Settings</button>
+          <button class="primary" disabled={googleLoading || !googleConfigured} onclick={connectGoogleCalendar}>Connect</button>
+          <button class="ghost" disabled={googleLoading || !googleConnected} onclick={handleGoogleSync}>Sync</button>
+          <button class="danger" disabled={googleLoading || !googleConnected} onclick={handleGoogleDisconnect}>Disconnect</button>
+        </div>
+        <div class="google-meta">
+          <span>Source: {googleSourceExists ? (googleSourceEnabled ? 'enabled' : 'disabled') : 'not created'}</span>
+          <span>Last sync: {googleLastSyncedAt ? new Date(googleLastSyncedAt).toLocaleString() : '-'}</span>
+          {#if googleBackoffUntil}
+            <span>Retry after: {new Date(googleBackoffUntil).toLocaleString()}</span>
+          {/if}
+          {#if googleLastError}
+            <span>Error: {googleLastError.message || googleLastError.code}</span>
+          {/if}
+        </div>
+      </section>
+
       <section class="event-list">
         <h3>Events</h3>
         {#if selectedEvents.length === 0}
@@ -393,10 +592,15 @@
           {#each selectedEvents as item}
             <article class="event-item" style={`--event-color:${item.color || '#58a6ff'}`}>
               <header>
-                <strong>{item.title}</strong>
+                <div class="event-title">
+                  <strong>{item.title}</strong>
+                  {#if item.readOnly}
+                    <span class="source-badge">{item.sourceType || 'source'}</span>
+                  {/if}
+                </div>
                 <div class="actions">
-                  <button title="Edit" onclick={() => startEdit(item)}><Pencil size={13} /></button>
-                  <button title="Delete" onclick={() => removeEvent(item)}><Trash2 size={13} /></button>
+                  <button title="Edit" disabled={item.readOnly} onclick={() => startEdit(item)}><Pencil size={13} /></button>
+                  <button title="Delete" disabled={item.readOnly} onclick={() => removeEvent(item)}><Trash2 size={13} /></button>
                 </div>
               </header>
               {#if editingId === item.id}
@@ -418,7 +622,11 @@
                   </div>
                 </div>
               {:else}
-                <p class="meta">{new Date(item.startAt).toLocaleString()}</p>
+                {#if item.allDay}
+                  <p class="meta">All day</p>
+                {:else}
+                  <p class="meta">{new Date(item.startAt).toLocaleString()}</p>
+                {/if}
                 {#if item.endAt}
                   <p class="meta">to {new Date(item.endAt).toLocaleString()}</p>
                 {/if}
@@ -571,9 +779,10 @@
     display: grid;
     gap: 10px;
     padding: 10px;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto 1fr;
   }
   .composer,
+  .google-panel,
   .event-list {
     border: 1px solid var(--glass-border);
     border-radius: 12px;
@@ -591,6 +800,56 @@
     margin: 0;
     font-size: 11px;
     color: var(--text-dim);
+  }
+  .panel-title-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .panel-title-row p,
+  .google-meta {
+    margin: 4px 0 0;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .panel-title-row > span {
+    height: fit-content;
+    border: 1px solid rgba(248, 113, 113, 0.35);
+    border-radius: 999px;
+    padding: 3px 8px;
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.24);
+    font-size: 10px;
+  }
+  .panel-title-row > span.connected {
+    border-color: rgba(52, 211, 153, 0.38);
+    color: #bbf7d0;
+    background: rgba(20, 83, 45, 0.24);
+  }
+  .google-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .google-actions button {
+    flex: 1 1 auto;
+  }
+  .google-meta {
+    display: grid;
+    gap: 3px;
+  }
+  .mini-status {
+    border-radius: 8px;
+    padding: 7px 8px;
+    font-size: 11px;
+  }
+  .mini-status.success {
+    color: #bbf7d0;
+    background: rgba(20, 83, 45, 0.24);
+  }
+  .mini-status.error {
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.28);
   }
   input,
   textarea,
@@ -643,6 +902,11 @@
   button.ghost {
     background: rgba(255, 255, 255, 0.04);
   }
+  button.danger {
+    color: #fecaca;
+    background: rgba(127, 29, 29, 0.3);
+    border-color: rgba(248, 113, 113, 0.35);
+  }
   button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -669,6 +933,23 @@
   }
   .event-item strong {
     font-size: 12px;
+  }
+  .event-title {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .source-badge {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    padding: 2px 6px;
+    color: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.06);
+    font-size: 10px;
+    line-height: 1.2;
+    text-transform: uppercase;
   }
   .actions {
     display: inline-flex;

@@ -4,6 +4,8 @@ This document defines how apps should be developed for My Web OS.
 It is based on the principle that the Web OS core provides the operating surface, while apps provide focused user-facing workflows.
 For the practical addon authoring workflow, use
 `doc/reference/addon-development-guide.md`.
+For the product boundary between Core System, Core Apps, and Package Center addons, use
+`doc/reference/core-system-core-app-addon-boundaries.md`.
 
 ## Core Principle
 

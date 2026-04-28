@@ -128,6 +128,7 @@ server/storage/inventory/apps/<app-id>/
 - `MANIFEST_PERMISSIONS_AND_EXTENSION_POINTS.md`: manifest, runtime, permission 계약
 - `SDK_API_REFERENCE.md`: `window.WebOS` SDK 계약
 - `CALENDAR_STANDARD_V1.md`: 공용 일정 표준 v1(필드/SDK/오류/권한)
+- `CALENDAR_STANDARD_V2.md`: source/provider 기반 공용 일정 표준 v2
 - `CORE_INTEGRATION_MAP.md`: launcher, sandbox, service bridge, File Station 연동 지도
 - `SECURITY_LIMITS_AND_APPROVALS.md`: 보안 경계, 승인, native process 신뢰 모델
 - `PACKAGE_LIFECYCLE_AND_DISTRIBUTION.md`: Package Center 설치/업데이트/ZIP/registry/백업/롤백
