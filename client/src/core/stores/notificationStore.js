@@ -14,6 +14,13 @@ import { writable } from 'svelte/store';
 const createNotificationStore = () => {
   const { subscribe, update } = writable([]);
 
+  function createNotificationId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `notification-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
   return {
     subscribe,
     /**
@@ -22,7 +29,7 @@ const createNotificationStore = () => {
     add: (notification) => {
       update(items => [
         {
-          id: crypto.randomUUID(),
+          id: createNotificationId(),
           timestamp: new Date().toISOString(),
           read: false,
           ...notification
